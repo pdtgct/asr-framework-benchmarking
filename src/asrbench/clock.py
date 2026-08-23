@@ -13,6 +13,9 @@ import datetime
 
 def utc_timestamp() -> str:
     """Return an RFC 3339 UTC marker timestamp."""
+    # `datetime.UTC` is 3.11+; this package supports 3.10.
     return (
-        datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
+        datetime.datetime.now(datetime.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
     )

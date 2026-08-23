@@ -27,10 +27,13 @@ jobs:
         with:
           enable-cache: true
 
+      # Transport extras are installed so the adapters are type-checked. The
+      # tests themselves must still pass without them — that is what the
+      # boundary test enforces.
       - name: Create the environment
         run: |
           uv venv --python ${{ matrix.python-version }}
-          uv pip install -e ".[dev]"
+          uv pip install -e ".[dev,websocket]"
 
       - name: Lint
         run: uv run ruff check .
