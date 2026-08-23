@@ -1,0 +1,49 @@
+asrbench
+Copyright 2026 Pete Tanski
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+--------------------------------------------------------------------------------
+
+This product includes work derived from and attributable to third parties. Full
+detail, including obligations that attach to published results, is in
+THIRD_PARTY.md.
+
+1. Structural derivation - vLLM (Apache License 2.0)
+   Copyright the vLLM Team.
+   The transport-adapter interface and the outcome/metric shapes in this project
+   are modeled on vLLM's serving benchmark, specifically the request-input,
+   request-output, and request-function abstractions in
+   vllm/benchmarks/lib/endpoint_request_func.py and the metric aggregation and
+   goodput semantics in vllm/benchmarks/serve.py. The correspondence is at the
+   level of interface shape and naming, deliberately, so that the result reads as
+   native to a vLLM maintainer. No vLLM source is copied into this repository.
+   https://github.com/vllm-project/vllm
+
+2. Methodology reference - NVIDIA Riva / Speech NIM (public documentation)
+   Real-time-paced streaming with equal client and server chunk duration, three
+   iterations per stream, and the fivefold-concatenation offline throughput cell
+   follow NVIDIA's published ASR benchmark methodology so that results are
+   comparable to their published tables. Referenced from public documentation and
+   the public nvidia-riva/python-clients repository only.
+
+3. Corpora - CC BY 4.0, attribution required
+   - LibriSpeech ASR corpus. V. Panayotov, G. Chen, D. Povey, S. Khudanpur,
+     "Librispeech: An ASR corpus based on public domain audio books," ICASSP 2015.
+     https://www.openslr.org/12
+   - AMI Meeting Corpus. J. Carletta et al., "The AMI Meeting Corpus: A
+     Pre-announcement," MLMI 2005.
+     https://groups.inf.ed.ac.uk/ami/corpus/
+
+   Excerpts, decodes, and concatenations derived from these corpora are derivative
+   works and inherit the attribution requirement. Any published result produced
+   with this benchmark must credit the corpora it used.

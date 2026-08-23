@@ -1,0 +1,30 @@
+{
+  "schema": "asrbench-datasets/1",
+  "comment": [
+    "Audio is pinned by digest, never committed. `source` is either a fetchable",
+    "URL or `gen:<generator>:<name>` for an artifact this repository derives, in",
+    "which case the generator and its recipe are committed instead of the bytes.",
+    "Derived audio inherits the source corpus's CC BY 4.0 attribution; see",
+    "THIRD_PARTY.md. Corpus selection and geometry are in docs/corpus.md."
+  ],
+  "entries": [
+    {
+      "name": "librispeech-1272-135031-0000",
+      "dest": "clips/1272-135031-0000.flac",
+      "sha256": "sha256:26cbebbdd8954104c936dc38fbb8a80958f2169ada0fa6fe46a89cfa9e3d824c",
+      "source": "https://www.openslr.org/resources/12/dev-clean.tar.gz#LibriSpeech/dev-clean/1272/135031/1272-135031-0000.flac",
+      "licence": "CC-BY-4.0",
+      "attribution": "LibriSpeech ASR corpus (Panayotov et al., ICASSP 2015)",
+      "note": "10.885 s. The clip NVIDIA's published streaming figures use."
+    },
+    {
+      "name": "riva-en-US-sample",
+      "dest": "clips/en-US_sample.wav",
+      "sha256": "sha256:4979eb3ccce0f2baf5a287d7d2d444284b32560fcb0771829b4c096022265ec3",
+      "source": "https://github.com/nvidia-riva/python-clients/raw/main/data/examples/en-US_sample.wav",
+      "licence": "MIT",
+      "attribution": "nvidia-riva/python-clients",
+      "note": "16 kHz mono PCM16. Smoke-test clip; too short for a streaming claim."
+    }
+  ]
+}
