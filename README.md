@@ -16,13 +16,24 @@ server speaks the protocol, it can be measured.
 
 **Pre-1.0. Schemas are unstable and will change without a migration path.**
 
-The repository currently carries the project scaffold, the corpus policy, and
-attribution. The measurement core — workload and outcome schemas, the runner,
-transport adapters, metric reducers, and reporters — lands next, extracted from a
-working harness rather than designed in the abstract.
+The repository currently carries the project scaffold, the design, and the corpus
+policy. The measurement core — workload and outcome schemas, the runner, transport
+adapters, metric reducers, and reporters — lands next, extracted from a working
+harness rather than designed in the abstract. See [`docs/roadmap.md`](docs/roadmap.md)
+for the position and what each remaining step delivers.
 
 Version 1.0 is when the receipt schema and the adapter interface take semantic
 versioning.
+
+## Documentation
+
+| | |
+|---|---|
+| [`docs/design.md`](docs/design.md) | Architecture: what each piece owns, and which boundaries are load-bearing |
+| [`docs/metrics.md`](docs/metrics.md) | What is measured, from which clock, over which denominator |
+| [`docs/corpus.md`](docs/corpus.md) | Which audio answers which question, and how each artifact is prepared |
+| [`docs/roadmap.md`](docs/roadmap.md) | Current position and the remaining steps |
+| [`AGENTS.md`](AGENTS.md) | Working rules — canonical for both humans and agents |
 
 ## What it measures
 
