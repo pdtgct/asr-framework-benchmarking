@@ -27,9 +27,11 @@ deliberate diff rather than a copy, so the two do not silently diverge.
 | **4** | vLLM-style offered load | Request rate, burstiness, max concurrency, SLO goodput, and mixed-cadence vectors compose with TTFS and outcome accounting without weakening the homogeneous preset |
 | **5** | 1.0 | Semantic versioning on the receipt schema and the adapter interface; deployment recipes demoted to optional examples |
 
-Steps 0 and 1 are complete. Step 1 landed in the private harness, where its entire
-acceptance was that an existing regression net still passed; moving it would have
-changed two repositories at once and weakened that claim.
+Steps 0 and 1 are complete. Step 1 was *built* in the private harness, because its
+entire acceptance was that an existing regression net still passed and that net lived
+there; doing it here would have changed two repositories at once and weakened the
+claim. It has since been migrated out, leaving the harness as it was before the
+extraction.
 
 ## Current position
 
@@ -37,13 +39,13 @@ changed two repositories at once and weakened that claim.
 the stdlib-only boundary test, CI on Python 3.10 and 3.12, and the agent instruction
 files.
 
-**Step 1 is in the private harness, not yet migrated.** It produced the seam this
-framework is built on, proven by differential equivalence rather than asserted:
-pre-change and post-change implementations were run side by side against
-byte-identical scripted servers across fourteen cases, and key order, key counts,
-types, and every non-timing value came out identical.
-
-What exists there, roughly 1,157 lines including tests:
+**Step 1's seam has landed here.** It was built and proven in the private harness,
+where the acceptance bar was that an existing regression net still passed — proven by
+differential equivalence rather than asserted: pre-change and post-change
+implementations were run side by side against byte-identical scripted servers across
+fourteen cases, and key order, key counts, types, and every non-timing value came out
+identical. It has since been migrated and the private harness restored to its
+pre-seam state, so there is now exactly one copy.
 
 | Module | Role |
 |---|---|
@@ -52,23 +54,15 @@ What exists there, roughly 1,157 lines including tests:
 | `adapters/realtime_ws.py` | The realtime WebSocket adapter, the first implementation |
 | `audio.py` | Sample-rate constants, clip duration, PCM16 read and chunk |
 | `clock.py` | Timestamp helper |
-| `legacy.py` | Compatibility shim translating an outcome back to the pre-existing record. **Step-1 only — this does not ship publicly.** |
-| Three test modules | Round-trip fixtures, the import boundary, and a non-WebSocket mock adapter proving the protocol is implementable off the transport |
+
+One module was deliberately **not** migrated: a compatibility shim that translated an
+outcome back into the private harness's pre-existing record shape. It existed to keep
+one caller byte-compatible during the extraction, and shipping it would have exported
+a dialect this project does not speak.
 
 ## Step 2 — the framework package
 
-Land the measurement core here and reduce the private harness's command-line tools to
-wrappers over it.
-
-### Migration
-
-Bring across `outcome.py`, `adapter.py`, `adapters/realtime_ws.py`, `audio.py`, and
-`clock.py`, plus the round-trip and mock-adapter tests. Leave `legacy.py` behind: it
-exists to keep one private caller byte-compatible during the seam extraction, and
-shipping it would export a dialect this project does not speak.
-
-The boundary test here already anticipates the WebSocket adapter — the `websocket`
-extra is declared and scoped to `adapters/`.
+Build the measurement core on top of the migrated seam.
 
 ### Then build
 
