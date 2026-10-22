@@ -30,6 +30,10 @@ NATIVE_LATENCY_CLOCK = (
 RESPONSE_LATENCY_CLOCK = (
     "client_monotonic/latest_audio_append_to_nonempty_transcription_delta"
 )
+#: Interval from the last audio sample sent to the final result received.
+FINALIZATION_CLOCK = (
+    "client_monotonic/last_audio_sample_sent_to_final_result_received"
+)
 
 
 @dataclass(frozen=True)
@@ -106,3 +110,23 @@ class SessionOutcome:
 
     #: Protocol-specific residue, in observation order.
     protocol_extras: dict[str, Any] = field(default_factory=dict)
+
+    #: Cumulative interim hypotheses in arrival order. ``None`` means the
+    #: adapter did not record them — distinct from an empty list, which
+    #: means it recorded that no interim text was emitted. Prefix
+    #: violations cannot be computed from :attr:`interim_count` alone.
+    interim_texts: list[str] | None = None
+    #: Set when the adapter itself decided the session timed out. Reducers
+    #: also honor ``protocol_extras["timed_out"]`` so adapters that only
+    #: set that flag stay in the timed-out denominator.
+    timed_out: bool = False
+    #: Public protocol error code, when the server named one.
+    error_code: str | None = None
+    #: Adapter-supplied terminal label, such as ``lane_unavailable``.
+    #: Outcome accounting is derived from the fields above; this label is
+    #: recorded, and a count is taken when it says the lane was unavailable.
+    terminal_status: str = ""
+    #: Clock for :attr:`final_latency_s`. Empty means the adapter did not
+    #: name one; reducers then attribute :data:`FINALIZATION_CLOCK` and
+    #: say they did so.
+    final_latency_clock: str = ""

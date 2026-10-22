@@ -147,6 +147,9 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
+# Generated while docs/receipt-schema.md is rebuilt. Not a corpus.
+.asrbench-schema-clip/
+
 # Environments
 .env
 .envrc

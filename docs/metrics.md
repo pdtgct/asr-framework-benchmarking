@@ -6,6 +6,11 @@ This is the design; the definitions become emitted constants in code, and the re
 writes them, so a number and its definition cannot drift apart. Where this document
 and a receipt disagree, the receipt is right and this document is stale.
 
+Those constants live in `asrbench.definitions`. [`receipt-schema.md`](receipt-schema.md)
+quotes each one. A clock or a definition copied into prose here would drift from the
+number it describes, so this file keeps the design and the schema reference keeps the
+spelling.
+
 Four families. They are kept separate because they fail independently: a server can
 be accurate and slow, fast and unstable, or stable and unable to hold concurrency.
 Collapsing them into one score hides exactly the trade a reader needs to see.

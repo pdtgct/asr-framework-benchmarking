@@ -16,11 +16,10 @@ server speaks the protocol, it can be measured.
 
 **Pre-1.0. Schemas are unstable and will change without a migration path.**
 
-The repository currently carries the project scaffold, the design, and the corpus
-policy. The measurement core — workload and outcome schemas, the runner, transport
-adapters, metric reducers, and reporters — lands next, extracted from a working
-harness rather than designed in the abstract. See [`docs/roadmap.md`](docs/roadmap.md)
-for the position and what each remaining step delivers.
+The measurement core is in the tree: a frozen workload, one receipt per run, reducers
+that keep failures in the denominator, and reporters that read only that receipt.
+`presets/mock-streaming.json` runs with no server and no network. The next step is a
+second public transport. See [`docs/roadmap.md`](docs/roadmap.md).
 
 Version 1.0 is when the receipt schema and the adapter interface take semantic
 versioning.
@@ -33,6 +32,7 @@ versioning.
 | [`docs/metrics.md`](docs/metrics.md) | What is measured, from which clock, over which denominator |
 | [`docs/corpus.md`](docs/corpus.md) | Which audio answers which question, and how each artifact is prepared |
 | [`docs/roadmap.md`](docs/roadmap.md) | Current position and the remaining steps |
+| [`docs/receipt-schema.md`](docs/receipt-schema.md) | Generated receipt shape and the emitted definition strings |
 | [`AGENTS.md`](AGENTS.md) | Working rules — canonical for both humans and agents |
 
 ## What it measures
@@ -112,6 +112,18 @@ Requires Python 3.10 or newer.
 ```bash
 uv venv
 uv pip install -e ".[dev]"
+```
+
+## Quickstart
+
+The mock preset needs no server, no GPU, and no network. Re-running from the receipt
+reproduces the resolved configuration, and the two receipts compare.
+
+<!-- asrbench:doc-test -->
+```bash
+uv run asrbench run --preset presets/mock-streaming.json --out receipt.json
+uv run asrbench run --from-receipt receipt.json --out receipt-again.json
+uv run asrbench compare receipt.json receipt-again.json
 ```
 
 ## Contributing
