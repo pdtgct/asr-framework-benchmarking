@@ -10,6 +10,7 @@ import json
 from dataclasses import asdict
 from typing import Any, cast
 
+from asrbench.config import config_to_dict
 from asrbench.definitions import (
     DIGEST_COVERS_PCM16,
     LOOKAHEAD_IDENTITY_DEFINITION,
@@ -18,15 +19,17 @@ from asrbench.definitions import (
 )
 from asrbench.fingerprint import (
     comparison_key,
-    hardware_identity,
+    driver_for_warn,
+    hard_hardware,
     observation_fingerprint,
     software_identity,
     target_identity,
+    warn_identity,
     workload_fingerprint,
 )
 from asrbench.identity import GitState, HardwareRecord
 from asrbench.outcome import SessionOutcome
-from asrbench.reducers import reduce_trial, summarize_trials
+from asrbench.reducers import is_productive, reduce_trial, summarize_trials
 from asrbench.spec import ResolvedConfig
 
 
@@ -98,23 +101,36 @@ def build_receipt(
     observation_fp = observation_fingerprint(config)
     target = target_identity(config.target)
     software = software_identity(
-        package_version=package_version,
-        python_version=python_version,
-        git_commit=git_state.commit,
         adapter=adapter_name,
-        lookahead_identity_policy=config.run.lookahead_identity_policy,
         normalization_policy=config.run.pass_policy.normalization_policy,
         percentile_method=config.run.percentile_method,
     )
-    hardware_id = hardware_identity(
+    hardware_id = hard_hardware(
+        config.target,
+        client_gpu_name=hardware.gpu_name,
+        client_gpu_count=hardware.gpu_count,
+        client_gpu_memory_mib=hardware.gpu_memory_mib,
+    )
+    driver, driver_source = driver_for_warn(
+        config.target, hardware.driver_version
+    )
+    warn = warn_identity(
+        endpoint_url=config.target.endpoint_url,
+        tls_verify=config.target.tls_verify,
+        auth_env=config.target.auth_env,
+        lookahead_identity_policy=config.run.lookahead_identity_policy,
+        package_version=package_version,
+        python_version=python_version,
+        git_commit=git_state.commit,
+        git_dirty=git_state.dirty,
+        driver_version=driver,
+        driver_version_source=driver_source,
         system=hardware.system,
         architecture=hardware.architecture,
         cpu_model=hardware.cpu_model,
         logical_cpu_count=hardware.logical_cpu_count,
-        gpu_name=hardware.gpu_name,
-        gpu_count=hardware.gpu_count,
-        gpu_memory_mib=hardware.gpu_memory_mib,
-        driver_version=hardware.driver_version,
+        hostname=hardware.hostname,
+        probe_status=hardware.probe_status,
     )
     rendered_trials: list[dict[str, Any]] = []
     measured: list[SessionOutcome] = []
@@ -162,7 +178,7 @@ def build_receipt(
     clip = config.workload.clip
     attempted = sum(item.audio_duration_s for item in measured)
     successful = sum(
-        item.audio_duration_s for item in measured if _productive(item)
+        item.audio_duration_s for item in measured if is_productive(item)
     )
     receipt = {
         "schema_version": SCHEMA_VERSION,
@@ -171,6 +187,11 @@ def build_receipt(
         "finished_at": finished_at,
         "definitions": emitted_definitions(),
         "resolved_config": _config_dict(config),
+        "reproduction": {
+            "overrides": [
+                asdict(item) for item in config.reproduction_overrides
+            ],
+        },
         "secrets": secrets,
         "fingerprints": {
             "workload": workload_fp,
@@ -180,17 +201,27 @@ def build_receipt(
             "target": target,
             "software": software,
             "hardware": hardware_id,
+            "warn": warn,
         },
         "probe": {
             "hardware": {
+                "architecture": hardware.architecture,
                 "collected_at": hardware.collected_at,
+                "cpu_model": hardware.cpu_model,
+                "driver_version": hardware.driver_version,
+                "gpu_count": hardware.gpu_count,
+                "gpu_memory_mib": hardware.gpu_memory_mib,
+                "gpu_name": hardware.gpu_name,
                 "gpu_uuids": list(hardware.gpu_uuids),
                 "hostname": hardware.hostname,
+                "logical_cpu_count": hardware.logical_cpu_count,
                 "probe_name": hardware.probe_name,
                 "probe_status": hardware.probe_status,
+                "system": hardware.system,
             },
             "software": {
                 "git_available": git_state.available,
+                "git_commit": git_state.commit,
                 "git_dirty": git_state.dirty,
             },
         },
@@ -236,12 +267,4 @@ def build_receipt(
 
 
 def _config_dict(config: ResolvedConfig) -> dict[str, Any]:
-    from asrbench.config import config_to_dict
-
     return config_to_dict(config)
-
-
-def _productive(outcome: SessionOutcome) -> bool:
-    from asrbench.reducers import is_productive
-
-    return is_productive(outcome)

@@ -7,12 +7,11 @@ are presented in another order. Deleting the index loses nothing.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from asrbench.canonical import dumps
-from asrbench.config import ConfigError
+from asrbench.config import ConfigError, load_json_object
 
 
 def build_index(paths: list[Path]) -> str:
@@ -20,23 +19,22 @@ def build_index(paths: list[Path]) -> str:
 
     Args:
         paths: Receipt paths. Only the file name is stored, so the index
-            does not depend on the directory's absolute path.
+            does not depend on the directory's absolute path. A JSON
+            object that is not a receipt is an error, not a ``KeyError``.
 
     Returns:
         Canonical JSONL, one receipt per line, sorted by comparison key
         and file name, with a trailing newline when non-empty.
 
     Raises:
-        ConfigError: A path is not a JSON object.
+        ConfigError: A path is not a JSON object, or it has no
+            ``schema_version`` and ``comparison_key``.
     """
     rows: list[dict[str, Any]] = []
     for path in paths:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise ConfigError(f"{path}: {error}") from error
-        if not isinstance(payload, dict):
-            raise ConfigError(f"{path}: expected a JSON object")
+        payload = load_json_object(path)
+        if "schema_version" not in payload or "comparison_key" not in payload:
+            raise ConfigError(f"{path}: not an asrbench receipt")
         workload = payload["resolved_config"]["workload"]
         rows.append(
             {

@@ -77,6 +77,33 @@ def test_unknown_policy_is_rejected() -> None:
         normalize("hello", "lowercase")
 
 
+def test_insertion_and_mid_sentence_deletion_are_separate() -> None:
+    inserted = score_texts("a", "a b", NORMALIZATION_ENGINE_VS_OWN_ORACLE)
+    deleted = score_texts("a b c", "a c", NORMALIZATION_ENGINE_VS_OWN_ORACLE)
+    inserted_counts = (
+        inserted.substitutions,
+        inserted.deletions,
+        inserted.insertions,
+    )
+    assert inserted_counts == (0, 0, 1)
+    assert (deleted.substitutions, deleted.deletions, deleted.insertions) == (
+        0,
+        1,
+        0,
+    )
+    reference = ["the", "cat", "sat", "down"]
+    hypothesis = ["a", "cat", "sat"]
+    score = score_texts(
+        "the cat sat down", "a cat sat", NORMALIZATION_ENGINE_VS_OWN_ORACLE
+    )
+    assert (
+        score.substitutions,
+        score.deletions,
+        score.insertions,
+    ) == edit_counts(reference, hypothesis)
+    assert score.cer == pytest.approx(score.char_edits / score.reference_chars)
+
+
 def test_tie_break_prefers_substitution_then_deletion() -> None:
     # Equal cost paths exist; the backtrace must be stable.
     substitutions, deletions, insertions = edit_counts(["a"], ["b"])

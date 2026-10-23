@@ -97,7 +97,8 @@ def schema_markdown() -> str:
         "workload fingerprint, target identity, software identity,",
         "hardware identity.",
         "",
-        "Excluded:",
+        "Not in the hard comparison key. Warn-only fields are still",
+        "compared and reported; a mismatch does not refuse:",
         "",
     ]
     for item in COMPARISON_EXCLUSIONS:
@@ -155,6 +156,10 @@ def _shape(value: object, indent: int) -> list[str]:
 
 
 def _field(pad: str, key: str, item: object, indent: int) -> list[str]:
+    if key == "definitions" and isinstance(item, dict):
+        return [f"{pad}- `{key}`: object of emitted constants quoted above"]
+    if key == "warmup_outcomes":
+        return [f"{pad}- `{key}`: list[object] (same item shape as outcomes)"]
     if isinstance(item, dict):
         lines = [f"{pad}- `{key}`: object"]
         lines.extend(_shape(item, indent + 1))

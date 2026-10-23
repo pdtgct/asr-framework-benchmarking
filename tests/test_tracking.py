@@ -3,6 +3,9 @@
 import json
 from pathlib import Path
 
+import pytest
+
+from asrbench.config import ConfigError
 from asrbench.tracking import build_index, write_index
 
 
@@ -51,3 +54,10 @@ def test_empty_directory_indexes_to_empty_text(tmp_path: Path) -> None:
     assert build_index([]) == ""
     destination = tmp_path / "index.jsonl"
     assert write_index(tmp_path, destination) == ""
+
+
+def test_a_non_receipt_json_object_names_the_file(tmp_path: Path) -> None:
+    frontier = tmp_path / "frontier.json"
+    frontier.write_text(json.dumps({"series": []}), encoding="utf-8")
+    with pytest.raises(ConfigError, match="frontier.json"):
+        build_index([frontier])

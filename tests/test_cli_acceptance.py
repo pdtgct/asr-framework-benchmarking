@@ -137,3 +137,70 @@ def test_observation_fingerprint_mismatch_does_not_refuse(
     code, out, err = _run(["compare", str(source), str(other)])
     assert code == 0, err
     assert json.loads(out)["observation_fingerprint_match"] is False
+
+
+def test_force_without_a_hard_mismatch_does_not_record_the_reason(
+    tmp_path: Path, sealed_env: None
+) -> None:
+    del sealed_env
+    source = tmp_path / "r1.json"
+    code, _, err = _run(["run", "--preset", str(_PRESET), "--out", str(source)])
+    assert code == 0, err
+    code, out, err = _run(
+        ["compare", str(source), str(source), "--force", "--reason", "unused"]
+    )
+    assert code == 0, err
+    parsed = json.loads(out)
+    assert parsed["status"] == "comparable"
+    assert parsed["force_reason"] is None
+    code, _out, err = _run(
+        ["compare", str(source), str(source), "--force", "--reason", "   "]
+    )
+    assert code == 2
+    assert "reason" in err
+
+
+def test_a_reproduction_override_is_printed_and_not_a_secret(
+    tmp_path: Path, sealed_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del sealed_env
+    first = tmp_path / "r1.json"
+    second = tmp_path / "r2.json"
+    code, _, err = _run(["run", "--preset", str(_PRESET), "--out", str(first)])
+    assert code == 0, err
+    monkeypatch.setenv("ASRBENCH_TOKEN", "should-stay-out")
+    code, _, err = _run(
+        [
+            "run",
+            "--from-receipt",
+            str(first),
+            "--out",
+            str(second),
+            "--warmup",
+            "9",
+        ]
+    )
+    assert code == 0, err
+    assert "reproduction workload.warmup:" in err
+    assert "should-stay-out" not in err
+    right = json.loads(second.read_text(encoding="utf-8"))
+    assert right["resolved_config"]["workload"]["warmup"] == 9
+    assert right["reproduction"]["overrides"]
+    assert "should-stay-out" not in second.read_text(encoding="utf-8")
+
+
+def test_measurement_error_is_a_clean_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sealed_env: None
+) -> None:
+    del sealed_env
+    from asrbench.reducers import MeasurementError
+
+    def boom(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise MeasurementError("ttfs_s is not finite")
+
+    monkeypatch.setattr("asrbench.cli.run_benchmark", boom)
+    code, _out, err = _run(
+        ["run", "--preset", str(_PRESET), "--out", str(tmp_path / "r.json")]
+    )
+    assert code == 2
+    assert "not finite" in err

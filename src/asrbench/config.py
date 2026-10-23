@@ -2,22 +2,22 @@
 
 Order is dataclass defaults, then a preset file, then ``ASRBENCH_*``
 environment variables, then CLI flags. ``--from-receipt`` replaces the
-defaults and the preset with the receipt's resolved config, and the
-environment and flags still apply. The output path stored in a receipt is
-dropped before those overrides, so a reproduction does not overwrite the
-receipt it was read from.
+defaults and the preset with the receipt's resolved config. In that mode
+``ASRBENCH_*`` variables are refused, except the named auth variable,
+and a flag that changes a field is recorded on the new receipt.
 
-Secrets are not flags and not preset fields. The target carries a
-variable name. :func:`secret_records` records that name and whether the
-variable was non-empty. The value is never copied.
+A single-entry population is derived from the top-level lane, cadence,
+and lookahead fields after those overrides. A multi-entry population
+stays explicit. Secrets are not flags and not preset fields.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,7 @@ from asrbench.definitions import (
     NORMALIZATION_CORPUS_REFERENCE,
     NORMALIZATION_ENGINE_VS_OTHER_SERVER,
     NORMALIZATION_ENGINE_VS_OWN_ORACLE,
+    SCHEMA_VERSION,
     SUSTAINABILITY_COMPLETION_FRACTION,
     SUSTAINABILITY_STEADY_INTERVAL,
 )
@@ -40,6 +41,7 @@ from asrbench.spec import (
     ClipSpec,
     PassPolicy,
     PopulationEntry,
+    ReproductionOverride,
     ResolvedConfig,
     RunSpec,
     TargetSpec,
@@ -62,6 +64,26 @@ _SUSTAINABILITY = {
     SUSTAINABILITY_COMPLETION_FRACTION,
 }
 _LATENCY_METRICS = {LATENCY_METRIC_TTFS, LATENCY_METRIC_RESPONSE}
+_OWNED_BY_POPULATION = {
+    ("workload", "lanes"),
+    ("workload", "cadence_ms"),
+    ("workload", "lookahead_frames"),
+    ("workload", "lookahead_ms_label"),
+}
+_SECTIONS = {
+    "workload": WorkloadSpec,
+    "target": TargetSpec,
+    "run": RunSpec,
+}
+_KINDS = {
+    "int": "int",
+    "int | None": "optional_int",
+    "float": "float",
+    "float | None": "optional_float",
+    "bool": "bool",
+    "str": "str",
+    "str | None": "optional_str",
+}
 
 
 class ConfigError(ValueError):
@@ -79,218 +101,128 @@ class Binding:
     help: str
 
 
-BINDINGS: tuple[Binding, ...] = (
-    Binding(
-        "ASRBENCH_CHUNK_MS",
-        "--chunk-ms",
-        ("workload", "chunk_ms"),
-        "int",
-        "audio per transmitted piece, in milliseconds",
-    ),
-    Binding(
-        "ASRBENCH_CADENCE_MS",
-        "--cadence-ms",
-        ("workload", "cadence_ms"),
-        "optional_int",
-        "requested service cadence, in milliseconds",
-    ),
-    Binding(
-        "ASRBENCH_LOOKAHEAD_FRAMES",
-        "--lookahead-frames",
-        ("workload", "lookahead_frames"),
-        "optional_int",
-        "client-declared lookahead, in frames",
-    ),
-    Binding(
-        "ASRBENCH_LOOKAHEAD_MS_LABEL",
-        "--lookahead-ms-label",
-        ("workload", "lookahead_ms_label"),
-        "optional_float",
-        "millisecond label carried beside the frame count; not identity",
-    ),
-    Binding(
-        "ASRBENCH_LANES",
-        "--lanes",
-        ("workload", "lanes"),
-        "int",
-        "closed-loop parallel lanes",
-    ),
-    Binding(
-        "ASRBENCH_ITERATIONS",
-        "--iterations",
-        ("workload", "iterations"),
-        "int",
-        "measured iterations per lane",
-    ),
-    Binding(
-        "ASRBENCH_WARMUP",
-        "--warmup",
-        ("workload", "warmup"),
-        "int",
-        "warmup iterations per lane, excluded from denominators",
-    ),
-    Binding(
-        "ASRBENCH_TRIALS",
-        "--trials",
-        ("workload", "trials"),
-        "int",
-        "independent trials; raw trials are kept",
-    ),
-    Binding(
-        "ASRBENCH_TIMEOUT_S",
-        "--timeout-s",
-        ("workload", "timeout_s"),
-        "float",
-        "per-session timeout, in seconds",
-    ),
-    Binding(
-        "ASRBENCH_SEED",
-        "--seed",
-        ("workload", "seed"),
-        "int",
-        "seed recorded for arrival draws; closed-loop lanes do not draw",
-    ),
-    Binding(
-        "ASRBENCH_PACING",
-        "--pacing",
-        ("workload", "pacing"),
-        "bool",
-        "transmit in real time",
-    ),
-    Binding(
-        "ASRBENCH_MODE",
-        "--mode",
-        ("workload", "mode"),
-        "str",
-        "streaming or offline",
-    ),
-    Binding(
-        "ASRBENCH_LANGUAGE",
-        "--language",
-        ("workload", "language"),
-        "str",
-        "language requested from the server",
-    ),
-    Binding(
-        "ASRBENCH_PUNCTUATION",
-        "--punctuation",
-        ("workload", "punctuation"),
-        "bool",
-        "ask the server to punctuate",
-    ),
-    Binding(
-        "ASRBENCH_DIARIZATION",
-        "--diarization",
-        ("workload", "diarization"),
-        "bool",
-        "ask the server to diarize",
-    ),
-    Binding(
-        "ASRBENCH_INTERIM_RESULTS",
-        "--interim-results",
-        ("workload", "interim_results"),
-        "bool",
-        "ask the server for interim hypotheses",
-    ),
-    Binding(
-        "ASRBENCH_TRANSCRIPT_POLICY",
-        "--transcript-policy",
-        ("workload", "transcript_policy"),
-        "str",
-        "transcript output requested from the server",
-    ),
-    Binding(
-        "ASRBENCH_RATE_RPS",
-        "--rate-rps",
-        ("workload", "rate_rps"),
-        "optional_float",
-        "offered request rate; rejected until offered-load mode exists",
-    ),
-    Binding(
-        "ASRBENCH_ENDPOINT_URL",
-        "--endpoint-url",
-        ("target", "endpoint_url"),
-        "str",
-        "server endpoint",
-    ),
-    Binding(
-        "ASRBENCH_TRANSPORT",
-        "--transport",
-        ("target", "transport"),
-        "str",
-        "adapter name, such as mock",
-    ),
-    Binding(
-        "ASRBENCH_MODEL",
-        "--model",
-        ("target", "model"),
-        "str",
-        "model name offered at session configuration",
-    ),
-    Binding(
-        "ASRBENCH_AUTH_ENV",
-        "--auth-env",
-        ("target", "auth_env"),
-        "optional_str",
-        "environment variable NAME holding a secret; never the secret",
-    ),
-    Binding(
-        "ASRBENCH_TLS_VERIFY",
-        "--tls-verify",
-        ("target", "tls_verify"),
-        "bool",
-        "verify TLS certificates",
-    ),
-    Binding(
-        "ASRBENCH_VERBOSITY",
-        "--verbosity",
-        ("run", "verbosity"),
-        "int",
-        "observation verbosity; not offered work",
-    ),
-    Binding(
-        "ASRBENCH_PROFILER",
-        "--profiler",
-        ("run", "profiler"),
-        "optional_str",
-        "profiler plugin name; not offered work",
-    ),
-    Binding(
-        "ASRBENCH_PERCENTILE_METHOD",
-        "--percentile-method",
-        ("run", "percentile_method"),
-        "str",
-        "named percentile policy",
-    ),
-    Binding(
-        "ASRBENCH_LOOKAHEAD_IDENTITY_POLICY",
-        "--lookahead-identity-policy",
-        ("run", "lookahead_identity_policy"),
-        "str",
-        "client_declared or server_reported_when_present",
-    ),
-    Binding(
-        "ASRBENCH_NORMALIZATION_POLICY",
-        "--normalization-policy",
-        ("run", "pass_policy", "normalization_policy"),
-        "str",
-        "named WER normalization policy",
-    ),
-    Binding(
-        "ASRBENCH_SUSTAINABILITY_POLICY",
-        "--sustainability-policy",
-        ("run", "pass_policy", "sustainability_policy"),
-        "str",
-        "steady_interval or completion_fraction",
-    ),
-    Binding(
-        "ASRBENCH_OUTPUT",
-        "--out",
-        ("run", "output_path"),
-        "optional_str",
-        "receipt path; excluded from fingerprints",
-    ),
-)
+def _annotation(path: tuple[str, ...]) -> str:
+    if path[:2] == ("workload", "clip"):
+        model: type[Any] = ClipSpec
+        name = path[2]
+    elif path[:2] == ("run", "pass_policy"):
+        model = PassPolicy
+        name = path[2]
+    else:
+        model = _SECTIONS[path[0]]
+        name = path[1]
+    found = next(item for item in fields(model) if item.name == name)
+    return str(found.type)
+
+
+def _bindings() -> tuple[Binding, ...]:
+    specs: tuple[tuple[tuple[str, ...], str], ...] = (
+        (
+            ("workload", "chunk_ms"),
+            "audio per transmitted piece, in milliseconds",
+        ),
+        (
+            ("workload", "cadence_ms"),
+            "requested service cadence, in milliseconds",
+        ),
+        (
+            ("workload", "lookahead_frames"),
+            "client-declared lookahead, in frames",
+        ),
+        (
+            ("workload", "lookahead_ms_label"),
+            "millisecond label carried beside the frame count; not identity",
+        ),
+        (("workload", "lanes"), "closed-loop parallel lanes"),
+        (("workload", "iterations"), "measured iterations per lane"),
+        (
+            ("workload", "warmup"),
+            "warmup iterations per lane, excluded from denominators",
+        ),
+        (("workload", "trials"), "independent trials; raw trials are kept"),
+        (("workload", "timeout_s"), "per-session timeout, in seconds"),
+        (
+            ("workload", "seed"),
+            "seed recorded for arrival draws; closed-loop lanes do not draw",
+        ),
+        (("workload", "pacing"), "transmit in real time"),
+        (("workload", "mode"), "streaming or offline"),
+        (("workload", "language"), "language requested from the server"),
+        (("workload", "punctuation"), "ask the server to punctuate"),
+        (("workload", "diarization"), "ask the server to diarize"),
+        (
+            ("workload", "interim_results"),
+            "ask the server for interim hypotheses",
+        ),
+        (
+            ("workload", "transcript_policy"),
+            "transcript output requested from the server",
+        ),
+        (
+            ("workload", "rate_rps"),
+            "offered request rate; rejected until offered-load mode exists",
+        ),
+        (
+            ("workload", "clip", "path"),
+            "local path of a file clip; not part of the workload fingerprint",
+        ),
+        (("target", "endpoint_url"), "server endpoint"),
+        (("target", "transport"), "adapter name, such as mock"),
+        (("target", "model"), "model name offered at session configuration"),
+        (
+            ("target", "auth_env"),
+            "environment variable NAME holding a secret; never the secret",
+        ),
+        (("target", "tls_verify"), "verify TLS certificates"),
+        (
+            ("target", "server_version"),
+            "server image or version; hard identity when set",
+        ),
+        (
+            ("target", "server_gpu_name"),
+            "server GPU name; hard identity when any server GPU field is set",
+        ),
+        (("target", "server_gpu_count"), "server GPU count"),
+        (("target", "server_gpu_memory_mib"), "server GPU memory, MiB"),
+        (
+            ("target", "server_driver_version"),
+            "server GPU driver; warn-only, not hard identity",
+        ),
+        (("run", "verbosity"), "observation verbosity; not offered work"),
+        (("run", "profiler"), "profiler plugin name; not offered work"),
+        (("run", "percentile_method"), "named percentile policy"),
+        (
+            ("run", "lookahead_identity_policy"),
+            "client_declared or server_reported_when_present",
+        ),
+        (
+            ("run", "pass_policy", "normalization_policy"),
+            "named WER normalization policy",
+        ),
+        (
+            ("run", "pass_policy", "sustainability_policy"),
+            "steady_interval or completion_fraction",
+        ),
+        (("run", "output_path"), "receipt path; excluded from fingerprints"),
+    )
+    built: list[Binding] = []
+    for path, help_text in specs:
+        leaf = path[-1]
+        env_name = "ASRBENCH_" + leaf.upper()
+        flag = "--" + leaf.replace("_", "-")
+        if path == ("run", "output_path"):
+            env_name = "ASRBENCH_OUTPUT"
+            flag = "--out"
+        elif path == ("workload", "clip", "path"):
+            env_name = "ASRBENCH_CLIP_PATH"
+            flag = "--clip-path"
+        built.append(
+            Binding(env_name, flag, path, _KINDS[_annotation(path)], help_text)
+        )
+    return tuple(built)
+
+
+BINDINGS: tuple[Binding, ...] = _bindings()
 
 
 def load_json_object(path: Path) -> dict[str, Any]:
@@ -317,6 +249,10 @@ def load_json_object(path: Path) -> dict[str, Any]:
 def config_to_dict(config: ResolvedConfig) -> dict[str, Any]:
     """Serialize a resolved config to JSON-compatible objects.
 
+    Reproduction overrides are omitted. The receipt records them beside
+    the config so a second reproduction is not a different config merely
+    because the first one wrote the list down.
+
     Args:
         config: Frozen config.
 
@@ -324,8 +260,15 @@ def config_to_dict(config: ResolvedConfig) -> dict[str, Any]:
         A dict that :func:`json.dumps` can emit and
         :func:`config_from_mapping` can read back.
     """
-    encoded = json.dumps(asdict(config), allow_nan=False)
-    decoded: dict[str, Any] = json.loads(encoded)
+    workload = asdict(config.workload)
+    run = asdict(config.run)
+    target = {
+        item.name: getattr(config.target, item.name)
+        for item in fields(config.target)
+    }
+    target["transport_options"] = dict(config.target.transport_options)
+    encoded = {"workload": workload, "target": target, "run": run}
+    decoded: dict[str, Any] = json.loads(json.dumps(encoded, allow_nan=False))
     return decoded
 
 
@@ -375,9 +318,10 @@ def resolve(
     Args:
         preset_path: Preset JSON. Mutually exclusive with ``from_receipt``.
         from_receipt: A receipt whose ``resolved_config`` is the base.
-        env: Environment mapping. ``None`` uses ``os.environ`` only when
-            the caller passes it; this function does not read the process
-            environment itself, so tests stay sealed.
+            ``ASRBENCH_*`` variables other than the named auth variable
+            are refused. Flags still apply, and each change is recorded.
+        env: Environment mapping. This function does not read the process
+            environment itself.
         overrides: CLI values keyed by binding path. The caller omits
             flags the user did not pass.
 
@@ -389,20 +333,40 @@ def resolve(
     """
     if preset_path is not None and from_receipt is not None:
         raise ConfigError("pass a preset or --from-receipt, not both")
+    supplied = env or {}
+    touched: set[tuple[str, ...]] = set()
+    base: ResolvedConfig | None = None
     if from_receipt is not None:
         payload = load_json_object(from_receipt)
+        if payload.get("schema_version") != SCHEMA_VERSION:
+            raise ConfigError(
+                "schema_version "
+                f"{payload.get('schema_version')!r} != {SCHEMA_VERSION}"
+            )
         resolved = payload.get("resolved_config")
         if not isinstance(resolved, dict):
             raise ConfigError("receipt has no resolved_config object")
-        config = config_from_mapping(resolved)
-        config = without_output_path(config)
+        config = without_output_path(
+            config_from_mapping(resolved, complete=True)
+        )
+        _reject_receipt_env(supplied, config.target.auth_env)
+        base = config
     else:
         config = default_config()
         if preset_path is not None:
             config = apply_preset(config, load_json_object(preset_path))
-    config = _apply_env(config, env or {})
-    config = _apply_overrides(config, overrides or {})
-    return _validate(config)
+        if len(config.workload.population) == 1:
+            _check_population_agreement(config.workload)
+        config, touched = _apply_env(config, supplied)
+    config, touched = _apply_overrides(config, overrides or {}, touched)
+    config = _derive_population(config, touched)
+    config = validate(config, pin=True)
+    if base is not None:
+        pinned_base = validate(_derive_population(base, set()), pin=True)
+        config = replace(
+            config, reproduction_overrides=_diff(pinned_base, config)
+        )
+    return config
 
 
 def apply_preset(
@@ -424,29 +388,47 @@ def apply_preset(
     if "workload" in payload:
         config = replace(
             config,
-            workload=_merge_workload(
-                config.workload, _object(payload["workload"], "workload")
+            workload=_merge(
+                config.workload,
+                _object(payload["workload"], "workload"),
+                "workload",
+                complete=False,
             ),
         )
     if "target" in payload:
         config = replace(
             config,
-            target=_merge_target(
-                config.target, _object(payload["target"], "target")
+            target=_merge(
+                config.target,
+                _object(payload["target"], "target"),
+                "target",
+                complete=False,
             ),
         )
     if "run" in payload:
         config = replace(
-            config, run=_merge_run(config.run, _object(payload["run"], "run"))
+            config,
+            run=_merge(
+                config.run,
+                _object(payload["run"], "run"),
+                "run",
+                complete=False,
+            ),
         )
     return config
 
 
-def finalize(config: ResolvedConfig) -> ResolvedConfig:
-    """Validate ``config`` and pin its clip digest.
+def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
+    """Validate ``config`` and, when ``pin`` is set, pin its clip digest.
+
+    Compare and the reporters pass ``pin=False`` so a receipt from
+    another machine is not re-hashed against whatever file now sits at
+    ``clip.path``. A run pins, and a declared digest that does not match
+    the payload is an error.
 
     Args:
         config: A config merged from defaults and a preset or receipt.
+        pin: When true, read the clip payload and fill or check the digest.
 
     Returns:
         The validated config.
@@ -454,25 +436,132 @@ def finalize(config: ResolvedConfig) -> ResolvedConfig:
     Raises:
         ConfigError: The config contradicts itself or its digest pin.
     """
-    return _validate(config)
+    workload = config.workload
+    if workload.mode not in _MODES:
+        raise ConfigError("mode must be streaming or offline")
+    _require_positive("chunk_ms", workload.chunk_ms, minimum=1)
+    _require_positive("lanes", workload.lanes, minimum=1)
+    _require_positive("iterations", workload.iterations, minimum=1)
+    _require_positive("warmup", workload.warmup, minimum=0)
+    _require_positive("trials", workload.trials, minimum=1)
+    _require_finite("timeout_s", workload.timeout_s, positive=True)
+    if workload.rate_rps is not None:
+        _require_finite("rate_rps", workload.rate_rps, positive=True)
+    if workload.cadence_ms is not None and workload.cadence_ms < 1:
+        raise ConfigError("cadence_ms must be positive when set")
+    if workload.lookahead_frames is not None and workload.lookahead_frames < 0:
+        raise ConfigError("lookahead_frames must be zero or positive")
+    if workload.lookahead_ms_label is not None:
+        _require_finite("lookahead_ms_label", workload.lookahead_ms_label)
+    if not workload.language or not workload.transcript_policy:
+        raise ConfigError("language and transcript_policy must be non-empty")
+    if not workload.clip.id or not workload.clip.generator:
+        raise ConfigError("clip id and generator must be non-empty")
+    if workload.clip.duration_s is not None:
+        _require_finite("clip.duration_s", workload.clip.duration_s)
+    population = workload.population
+    if not population:
+        raise ConfigError("population is empty; resolve derives it")
+    if sum(entry.lanes for entry in population) != workload.lanes:
+        raise ConfigError("population lane counts must sum to workload.lanes")
+    for entry in population:
+        if entry.lanes < 1:
+            raise ConfigError("each population entry needs at least one lane")
+        if entry.lookahead_ms_label is not None:
+            _require_finite(
+                "population lookahead_ms_label", entry.lookahead_ms_label
+            )
+    _check_population_agreement(workload)
+    run = config.run
+    if run.percentile_method not in PERCENTILE_METHODS:
+        raise ConfigError(
+            f"unknown percentile method {run.percentile_method!r}"
+        )
+    if run.lookahead_identity_policy not in _LOOKAHEAD_POLICIES:
+        raise ConfigError(
+            "unknown lookahead identity policy "
+            f"{run.lookahead_identity_policy!r}"
+        )
+    if run.verbosity < 0:
+        raise ConfigError("verbosity must be zero or positive")
+    _validate_policy(run.pass_policy)
+    if not config.target.endpoint_url or not config.target.transport:
+        raise ConfigError("endpoint_url and transport must be non-empty")
+    if not config.target.model:
+        raise ConfigError("model must be non-empty")
+    _validate_server(config.target)
+    if pin:
+        try:
+            clip = pin_digest(workload.clip)
+        except ClipError as error:
+            raise ConfigError(str(error)) from error
+    elif not workload.clip.digest:
+        raise ConfigError("clip digest is required when audio is not re-read")
+    else:
+        clip = workload.clip
+    return replace(config, workload=replace(workload, clip=clip))
 
 
-def config_from_mapping(payload: Mapping[str, Any]) -> ResolvedConfig:
-    """Build a config from a complete ``resolved_config`` object.
-
-    Missing keys keep dataclass defaults. Unknown keys are an error, so a
-    typo cannot hide inside a receipt that is about to be re-run.
+def config_from_mapping(
+    payload: Mapping[str, Any], *, complete: bool = False
+) -> ResolvedConfig:
+    """Build a config from a ``resolved_config`` object.
 
     Args:
         payload: The ``resolved_config`` object.
+        complete: When true, every field must be present. Receipt loads
+            use this so a missing key cannot pick up a newer default.
+            Presets leave it false.
 
     Returns:
-        A config. The caller validates and pins the digest.
+        A config. The caller validates and decides whether to pin.
 
     Raises:
         ConfigError: The object is not shaped like a resolved config.
     """
-    return apply_preset(default_config(), payload)
+    _unknown(payload, {"workload", "target", "run"}, "resolved_config")
+    if complete:
+        missing = [
+            name
+            for name in ("workload", "target", "run")
+            if name not in payload
+        ]
+        if missing:
+            raise ConfigError(
+                "resolved_config missing fields: " + ", ".join(missing)
+            )
+    config = default_config()
+    if "workload" in payload:
+        config = replace(
+            config,
+            workload=_merge(
+                config.workload,
+                _object(payload["workload"], "workload"),
+                "workload",
+                complete=complete,
+            ),
+        )
+    if "target" in payload:
+        config = replace(
+            config,
+            target=_merge(
+                config.target,
+                _object(payload["target"], "target"),
+                "target",
+                complete=complete,
+            ),
+        )
+    if "run" in payload:
+        config = replace(
+            config,
+            run=_merge(
+                config.run,
+                _object(payload["run"], "run"),
+                "run",
+                complete=complete,
+            ),
+        )
+    return config
 
 
 def add_override_arguments(parser: argparse.ArgumentParser) -> None:
@@ -482,7 +571,7 @@ def add_override_arguments(parser: argparse.ArgumentParser) -> None:
         parser: The ``run`` subparser.
     """
     for binding in BINDINGS:
-        dest = _dest(binding)
+        dest = binding.flag.lstrip("-").replace("-", "_")
         if binding.kind == "bool":
             parser.add_argument(
                 binding.flag,
@@ -512,17 +601,14 @@ def overrides_from_args(args: argparse.Namespace) -> dict[tuple[str, ...], Any]:
     """
     found: dict[tuple[str, ...], Any] = {}
     for binding in BINDINGS:
-        value = getattr(args, _dest(binding))
+        dest = binding.flag.lstrip("-").replace("-", "_")
+        value = getattr(args, dest)
         if value is None:
             continue
         if binding.kind == "optional_str" and value == "":
             value = None
         found[binding.path] = value
     return found
-
-
-def _dest(binding: Binding) -> str:
-    return binding.flag.lstrip("-").replace("-", "_")
 
 
 _FLAG_TYPES: dict[str, type[Any]] = {
@@ -535,13 +621,38 @@ _FLAG_TYPES: dict[str, type[Any]] = {
 }
 
 
+def _reject_receipt_env(env: Mapping[str, str], auth_name: str | None) -> None:
+    for key in env:
+        if not key.startswith("ASRBENCH_"):
+            continue
+        if auth_name is not None and key == auth_name:
+            continue
+        raise ConfigError(
+            f"{key} is set; --from-receipt does not apply ASRBENCH_* "
+            "variables. Unset it or pass the setting as a flag."
+        )
+
+
 def _apply_env(
     config: ResolvedConfig, env: Mapping[str, str]
-) -> ResolvedConfig:
+) -> tuple[ResolvedConfig, set[tuple[str, ...]]]:
     known = {binding.env: binding for binding in BINDINGS}
+    auth_binding = known["ASRBENCH_AUTH_ENV"]
+    touched: set[tuple[str, ...]] = set()
+    if auth_binding.env in env:
+        config = _set_path(
+            config,
+            auth_binding.path,
+            _parse_env(
+                auth_binding.kind,
+                env[auth_binding.env],
+                auth_binding.env,
+            ),
+        )
+        touched.add(auth_binding.path)
     auth_name = config.target.auth_env
     for key, raw in env.items():
-        if not key.startswith("ASRBENCH_"):
+        if not key.startswith("ASRBENCH_") or key == auth_binding.env:
             continue
         if auth_name is not None and key == auth_name:
             continue
@@ -551,18 +662,22 @@ def _apply_env(
                 f"unknown environment variable {key}; "
                 "auth secrets are read only when target.auth_env names them"
             )
-        config = _set_path(
-            config, binding.path, _parse_env(binding.kind, raw, key)
-        )
-    return config
+        parsed = _parse_env(binding.kind, raw, key)
+        config = _set_path(config, binding.path, parsed)
+        touched.add(binding.path)
+    return config, touched
 
 
 def _apply_overrides(
-    config: ResolvedConfig, overrides: Mapping[tuple[str, ...], Any]
-) -> ResolvedConfig:
+    config: ResolvedConfig,
+    overrides: Mapping[tuple[str, ...], Any],
+    touched: set[tuple[str, ...]],
+) -> tuple[ResolvedConfig, set[tuple[str, ...]]]:
+    seen = set(touched)
     for path, value in overrides.items():
         config = _set_path(config, path, value)
-    return config
+        seen.add(path)
+    return config, seen
 
 
 def _parse_env(kind: str, raw: str, where: str) -> Any:
@@ -582,9 +697,12 @@ def _parse_env(kind: str, raw: str, where: str) -> Any:
             raise ConfigError(f"{where} must be an int") from error
     if kind in {"float", "optional_float"}:
         try:
-            return float(raw)
+            number = float(raw)
         except ValueError as error:
             raise ConfigError(f"{where} must be a number") from error
+        if not math.isfinite(number):
+            raise ConfigError(f"{where} must be finite")
+        return number
     if kind in {"str", "optional_str"}:
         return raw
     raise ConfigError(f"unknown binding kind {kind}")
@@ -593,152 +711,64 @@ def _parse_env(kind: str, raw: str, where: str) -> Any:
 def _set_path(
     config: ResolvedConfig, path: tuple[str, ...], value: Any
 ) -> ResolvedConfig:
-    if path[0] == "workload":
+    if path[:2] == ("workload", "clip") and len(path) == 3:
+        clip = config.workload.clip
+        coerced = _coerce(value, _annotation(path), path[2])
+        updated = replace(clip, **{path[2]: coerced})
+        return replace(config, workload=replace(config.workload, clip=updated))
+    if path[:2] == ("run", "pass_policy") and len(path) == 3:
+        policy = config.run.pass_policy
+        coerced = _coerce(value, _annotation(path), path[2])
         return replace(
-            config, workload=_set_workload(config.workload, path[1], value)
-        )
-    if path[0] == "target":
-        return replace(
-            config, target=_set_target(config.target, path[1], value)
-        )
-    if path == ("run", "pass_policy", "normalization_policy"):
-        policy = replace(
-            config.run.pass_policy,
-            normalization_policy=_as_str(value, "normalization_policy"),
-        )
-        return replace(config, run=replace(config.run, pass_policy=policy))
-    if path == ("run", "pass_policy", "sustainability_policy"):
-        policy = replace(
-            config.run.pass_policy,
-            sustainability_policy=_as_str(value, "sustainability_policy"),
-        )
-        return replace(config, run=replace(config.run, pass_policy=policy))
-    if path[0] == "run":
-        return replace(config, run=_set_run(config.run, path[1], value))
-    raise ConfigError(f"cannot set {'/'.join(path)}")
-
-
-def _merge_workload(
-    base: WorkloadSpec, payload: Mapping[str, Any]
-) -> WorkloadSpec:
-    _unknown(
-        payload,
-        {
-            "clip",
-            "reference_transcript",
-            "mode",
-            "pacing",
-            "chunk_ms",
-            "cadence_ms",
-            "lookahead_frames",
-            "lookahead_ms_label",
-            "lanes",
-            "rate_rps",
-            "iterations",
-            "warmup",
-            "trials",
-            "timeout_s",
-            "seed",
-            "language",
-            "punctuation",
-            "diarization",
-            "interim_results",
-            "transcript_policy",
-            "population",
-        },
-        "workload",
-    )
-    workload = base
-    if "clip" in payload:
-        workload = replace(
-            workload,
-            clip=_merge_clip(base.clip, _object(payload["clip"], "clip")),
-        )
-    if "population" in payload:
-        workload = replace(
-            workload, population=_population(payload["population"])
-        )
-    for name in (
-        "reference_transcript",
-        "mode",
-        "pacing",
-        "chunk_ms",
-        "cadence_ms",
-        "lookahead_frames",
-        "lookahead_ms_label",
-        "lanes",
-        "rate_rps",
-        "iterations",
-        "warmup",
-        "trials",
-        "timeout_s",
-        "seed",
-        "language",
-        "punctuation",
-        "diarization",
-        "interim_results",
-        "transcript_policy",
-    ):
-        if name in payload:
-            workload = _set_workload(workload, name, payload[name])
-    return workload
-
-
-def _merge_clip(base: ClipSpec, payload: Mapping[str, Any]) -> ClipSpec:
-    _unknown(
-        payload,
-        {
-            "id",
-            "generator",
-            "duration_s",
-            "sample_rate",
-            "digest",
-            "path",
-            "licence",
-            "attribution",
-            "note",
-        },
-        "clip",
-    )
-    clip = base
-    if "id" in payload:
-        clip = replace(clip, id=_as_str(payload["id"], "clip.id"))
-    if "generator" in payload:
-        clip = replace(
-            clip, generator=_as_str(payload["generator"], "clip.generator")
-        )
-    if "duration_s" in payload:
-        clip = replace(
-            clip,
-            duration_s=_as_optional_float(
-                payload["duration_s"], "clip.duration_s"
+            config,
+            run=replace(
+                config.run,
+                pass_policy=replace(policy, **{path[2]: coerced}),
             ),
         )
-    if "sample_rate" in payload:
-        clip = replace(
-            clip,
-            sample_rate=_as_int(payload["sample_rate"], "clip.sample_rate"),
-        )
-    if "digest" in payload:
-        clip = replace(
-            clip, digest=_as_optional_str(payload["digest"], "clip.digest")
-        )
-    if "path" in payload:
-        clip = replace(
-            clip, path=_as_optional_str(payload["path"], "clip.path")
-        )
-    if "licence" in payload:
-        clip = replace(
-            clip, licence=_as_str(payload["licence"], "clip.licence")
-        )
-    if "attribution" in payload:
-        clip = replace(
-            clip,
-            attribution=_as_str(payload["attribution"], "clip.attribution"),
-        )
-    if "note" in payload:
-        clip = replace(clip, note=_as_str(payload["note"], "clip.note"))
-    return clip
+    if len(path) != 2 or path[0] not in _SECTIONS:
+        raise ConfigError(f"cannot set {'/'.join(path)}")
+    section = getattr(config, path[0])
+    known = {item.name for item in fields(section)}
+    if path[1] not in known:
+        raise ConfigError(f"cannot set {'/'.join(path)}")
+    coerced = _coerce(value, _annotation(path), path[1])
+    return replace(config, **{path[0]: replace(section, **{path[1]: coerced})})
+
+
+def _merge(
+    instance: Any,
+    payload: Mapping[str, Any],
+    where: str,
+    *,
+    complete: bool,
+) -> Any:
+    known = {item.name: item for item in fields(instance)}
+    _unknown(payload, set(known), where)
+    if complete:
+        missing = sorted(set(known) - set(payload))
+        if missing:
+            raise ConfigError(f"{where} missing fields: {', '.join(missing)}")
+    updates: dict[str, Any] = {}
+    for name, value in payload.items():
+        if name in {"clip", "pass_policy"}:
+            updates[name] = _merge(
+                getattr(instance, name),
+                _object(value, name),
+                name,
+                complete=complete,
+            )
+        elif name == "population":
+            updates[name] = _population(value)
+        elif name == "transport_options":
+            updates[name] = _options(value)
+        else:
+            updates[name] = _coerce(
+                value, str(known[name].type), f"{where}.{name}"
+            )
+    if not updates:
+        return instance
+    return replace(instance, **updates)
 
 
 def _population(value: object) -> tuple[PopulationEntry, ...]:
@@ -774,272 +804,40 @@ def _population(value: object) -> tuple[PopulationEntry, ...]:
     return tuple(entries)
 
 
-def _merge_target(base: TargetSpec, payload: Mapping[str, Any]) -> TargetSpec:
-    _unknown(
-        payload,
-        {
-            "endpoint_url",
-            "transport",
-            "model",
-            "auth_env",
-            "tls_verify",
-            "transport_options",
-        },
-        "target",
-    )
-    target = base
-    for name in (
-        "endpoint_url",
-        "transport",
-        "model",
-        "auth_env",
-        "tls_verify",
-    ):
-        if name in payload:
-            target = _set_target(target, name, payload[name])
-    if "transport_options" in payload:
-        options = payload["transport_options"]
-        if not isinstance(options, dict):
-            raise ConfigError("transport_options must be an object")
-        for key in options:
-            if not isinstance(key, str):
-                raise ConfigError("transport_options keys must be strings")
-        target = replace(target, transport_options=dict(options))
-    return target
+def _options(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ConfigError("transport_options must be an object")
+    for key in value:
+        if not isinstance(key, str):
+            raise ConfigError("transport_options keys must be strings")
+    return dict(value)
 
 
-def _merge_run(base: RunSpec, payload: Mapping[str, Any]) -> RunSpec:
-    _unknown(
-        payload,
-        {
-            "output_path",
-            "verbosity",
-            "profiler",
-            "percentile_method",
-            "lookahead_identity_policy",
-            "pass_policy",
-        },
-        "run",
-    )
-    run = base
-    for name in (
-        "output_path",
-        "verbosity",
-        "profiler",
-        "percentile_method",
-        "lookahead_identity_policy",
-    ):
-        if name in payload:
-            run = _set_run(run, name, payload[name])
-    if "pass_policy" in payload:
-        run = replace(
-            run,
-            pass_policy=_merge_pass(
-                base.pass_policy, _object(payload["pass_policy"], "pass_policy")
-            ),
-        )
-    return run
-
-
-def _merge_pass(base: PassPolicy, payload: Mapping[str, Any]) -> PassPolicy:
-    _unknown(
-        payload,
-        {
-            "admission_fraction_min",
-            "first_partial_presence_min",
-            "latency_metric",
-            "latency_percentile",
-            "latency_slo_s",
-            "sustainability_policy",
-            "sustainability_min",
-            "accuracy_tolerance",
-            "normalization_policy",
-        },
-        "pass_policy",
-    )
-    policy = base
-    if "admission_fraction_min" in payload:
-        policy = replace(
-            policy,
-            admission_fraction_min=_as_float(
-                payload["admission_fraction_min"], "admission_fraction_min"
-            ),
-        )
-    if "first_partial_presence_min" in payload:
-        policy = replace(
-            policy,
-            first_partial_presence_min=_as_float(
-                payload["first_partial_presence_min"],
-                "first_partial_presence_min",
-            ),
-        )
-    if "latency_percentile" in payload:
-        policy = replace(
-            policy,
-            latency_percentile=_as_float(
-                payload["latency_percentile"], "latency_percentile"
-            ),
-        )
-    if "latency_slo_s" in payload:
-        policy = replace(
-            policy,
-            latency_slo_s=_as_float(payload["latency_slo_s"], "latency_slo_s"),
-        )
-    if "sustainability_min" in payload:
-        policy = replace(
-            policy,
-            sustainability_min=_as_float(
-                payload["sustainability_min"], "sustainability_min"
-            ),
-        )
-    if "accuracy_tolerance" in payload:
-        policy = replace(
-            policy,
-            accuracy_tolerance=_as_float(
-                payload["accuracy_tolerance"], "accuracy_tolerance"
-            ),
-        )
-    if "latency_metric" in payload:
-        policy = replace(
-            policy,
-            latency_metric=_as_str(payload["latency_metric"], "latency_metric"),
-        )
-    if "sustainability_policy" in payload:
-        policy = replace(
-            policy,
-            sustainability_policy=_as_str(
-                payload["sustainability_policy"], "sustainability_policy"
-            ),
-        )
-    if "normalization_policy" in payload:
-        policy = replace(
-            policy,
-            normalization_policy=_as_str(
-                payload["normalization_policy"], "normalization_policy"
-            ),
-        )
-    return policy
-
-
-def _set_workload(
-    workload: WorkloadSpec, name: str, value: Any
-) -> WorkloadSpec:
-    if name == "reference_transcript":
-        return replace(
-            workload,
-            reference_transcript=_as_optional_str(value, name),
-        )
-    if name == "mode":
-        return replace(workload, mode=_as_str(value, name))
-    if name == "language":
-        return replace(workload, language=_as_str(value, name))
-    if name == "transcript_policy":
-        return replace(workload, transcript_policy=_as_str(value, name))
-    if name == "pacing":
-        return replace(workload, pacing=_as_bool(value, name))
-    if name == "punctuation":
-        return replace(workload, punctuation=_as_bool(value, name))
-    if name == "diarization":
-        return replace(workload, diarization=_as_bool(value, name))
-    if name == "interim_results":
-        return replace(workload, interim_results=_as_bool(value, name))
-    if name == "chunk_ms":
-        return replace(workload, chunk_ms=_as_int(value, name))
-    if name == "lanes":
-        return replace(workload, lanes=_as_int(value, name))
-    if name == "iterations":
-        return replace(workload, iterations=_as_int(value, name))
-    if name == "warmup":
-        return replace(workload, warmup=_as_int(value, name))
-    if name == "trials":
-        return replace(workload, trials=_as_int(value, name))
-    if name == "seed":
-        return replace(workload, seed=_as_int(value, name))
-    if name == "cadence_ms":
-        return replace(workload, cadence_ms=_as_optional_int(value, name))
-    if name == "lookahead_frames":
-        return replace(workload, lookahead_frames=_as_optional_int(value, name))
-    if name == "lookahead_ms_label":
-        return replace(
-            workload, lookahead_ms_label=_as_optional_float(value, name)
-        )
-    if name == "timeout_s":
-        return replace(workload, timeout_s=_as_float(value, name))
-    if name == "rate_rps":
-        return replace(workload, rate_rps=_as_optional_float(value, name))
-    raise ConfigError(f"unknown workload field {name}")
-
-
-def _set_target(target: TargetSpec, name: str, value: Any) -> TargetSpec:
-    if name == "endpoint_url":
-        return replace(target, endpoint_url=_as_str(value, name))
-    if name == "transport":
-        return replace(target, transport=_as_str(value, name))
-    if name == "model":
-        return replace(target, model=_as_str(value, name))
-    if name == "auth_env":
-        return replace(target, auth_env=_as_optional_str(value, name))
-    if name == "tls_verify":
-        return replace(target, tls_verify=_as_bool(value, name))
-    raise ConfigError(f"unknown target field {name}")
-
-
-def _set_run(run: RunSpec, name: str, value: Any) -> RunSpec:
-    if name == "output_path":
-        return replace(run, output_path=_as_optional_str(value, name))
-    if name == "verbosity":
-        return replace(run, verbosity=_as_int(value, name))
-    if name == "profiler":
-        return replace(run, profiler=_as_optional_str(value, name))
-    if name == "percentile_method":
-        return replace(run, percentile_method=_as_str(value, name))
-    if name == "lookahead_identity_policy":
-        return replace(run, lookahead_identity_policy=_as_str(value, name))
-    raise ConfigError(f"unknown run field {name}")
-
-
-def _validate(config: ResolvedConfig) -> ResolvedConfig:
+def _derive_population(
+    config: ResolvedConfig, touched: set[tuple[str, ...]]
+) -> ResolvedConfig:
     workload = config.workload
-    if workload.mode not in _MODES:
-        raise ConfigError("mode must be streaming or offline")
-    if workload.chunk_ms < 1:
-        raise ConfigError("chunk_ms must be positive")
-    if workload.lanes < 1:
-        raise ConfigError("lanes must be positive")
-    if workload.iterations < 1:
-        raise ConfigError("iterations must be positive")
-    if workload.warmup < 0:
-        raise ConfigError("warmup must be zero or positive")
-    if workload.trials < 1:
-        raise ConfigError("trials must be positive")
-    if workload.timeout_s <= 0:
-        raise ConfigError("timeout_s must be positive")
-    if workload.rate_rps is not None and workload.rate_rps <= 0:
-        raise ConfigError("rate_rps must be positive when set")
-    if workload.cadence_ms is not None and workload.cadence_ms < 1:
-        raise ConfigError("cadence_ms must be positive when set")
-    if workload.lookahead_frames is not None and workload.lookahead_frames < 0:
-        raise ConfigError("lookahead_frames must be zero or positive")
-    if not workload.language or not workload.transcript_policy:
-        raise ConfigError("language and transcript_policy must be non-empty")
-    if not workload.clip.id or not workload.clip.generator:
-        raise ConfigError("clip id and generator must be non-empty")
+    if len(workload.population) > 1:
+        if touched & _OWNED_BY_POPULATION:
+            raise ConfigError(
+                "a multi-entry population is explicit; edit its entries "
+                "instead of --lanes, --cadence-ms, --lookahead-frames, "
+                "or --lookahead-ms-label"
+            )
+        return config
+    entry = PopulationEntry(
+        lanes=workload.lanes,
+        cadence_ms=workload.cadence_ms,
+        lookahead_frames=workload.lookahead_frames,
+        lookahead_ms_label=workload.lookahead_ms_label,
+    )
+    return replace(config, workload=replace(workload, population=(entry,)))
+
+
+def _check_population_agreement(workload: WorkloadSpec) -> None:
     population = workload.population
     if not population:
-        population = (
-            PopulationEntry(
-                lanes=workload.lanes,
-                cadence_ms=workload.cadence_ms,
-                lookahead_frames=workload.lookahead_frames,
-                lookahead_ms_label=workload.lookahead_ms_label,
-            ),
-        )
-        workload = replace(workload, population=population)
-    if sum(entry.lanes for entry in population) != workload.lanes:
-        raise ConfigError("population lane counts must sum to workload.lanes")
-    for entry in population:
-        if entry.lanes < 1:
-            raise ConfigError("each population entry needs at least one lane")
+        return
     _agree(
         workload.lookahead_frames,
         {entry.lookahead_frames for entry in population},
@@ -1055,19 +853,9 @@ def _validate(config: ResolvedConfig) -> ResolvedConfig:
         {entry.lookahead_ms_label for entry in population},
         "lookahead_ms_label",
     )
-    run = config.run
-    if run.percentile_method not in PERCENTILE_METHODS:
-        raise ConfigError(
-            f"unknown percentile method {run.percentile_method!r}"
-        )
-    if run.lookahead_identity_policy not in _LOOKAHEAD_POLICIES:
-        raise ConfigError(
-            "unknown lookahead identity policy "
-            f"{run.lookahead_identity_policy!r}"
-        )
-    if run.verbosity < 0:
-        raise ConfigError("verbosity must be zero or positive")
-    policy = run.pass_policy
+
+
+def _validate_policy(policy: PassPolicy) -> None:
     if policy.normalization_policy not in _NORMALIZATIONS:
         raise ConfigError(
             f"unknown normalization policy {policy.normalization_policy!r}"
@@ -1084,21 +872,61 @@ def _validate(config: ResolvedConfig) -> ResolvedConfig:
         "sustainability_min",
     ):
         value = getattr(policy, name)
+        _require_finite(name, value)
         if value < 0 or value > 1:
             raise ConfigError(f"{name} must be in [0, 1]")
+    _require_finite("latency_percentile", policy.latency_percentile)
     if policy.latency_percentile < 0 or policy.latency_percentile > 100:
         raise ConfigError("latency_percentile must be in [0, 100]")
+    _require_finite("latency_slo_s", policy.latency_slo_s)
+    _require_finite("accuracy_tolerance", policy.accuracy_tolerance)
     if policy.latency_slo_s < 0 or policy.accuracy_tolerance < 0:
         raise ConfigError("latency SLO and accuracy tolerance must be >= 0")
-    if not config.target.endpoint_url or not config.target.transport:
-        raise ConfigError("endpoint_url and transport must be non-empty")
-    if not config.target.model:
-        raise ConfigError("model must be non-empty")
-    try:
-        clip = pin_digest(workload.clip)
-    except ClipError as error:
-        raise ConfigError(str(error)) from error
-    return replace(config, workload=replace(workload, clip=clip))
+
+
+def _validate_server(target: TargetSpec) -> None:
+    if target.server_gpu_count is not None and target.server_gpu_count < 0:
+        raise ConfigError("server_gpu_count must be zero or positive")
+    if (
+        target.server_gpu_memory_mib is not None
+        and target.server_gpu_memory_mib < 0
+    ):
+        raise ConfigError("server_gpu_memory_mib must be zero or positive")
+
+
+def _diff(
+    before: ResolvedConfig, after: ResolvedConfig
+) -> tuple[ReproductionOverride, ...]:
+    left = _leaves(config_to_dict(before))
+    right = _leaves(config_to_dict(after))
+    found: list[ReproductionOverride] = []
+    for key in sorted(set(left) | set(right)):
+        if key == "run.output_path":
+            continue
+        if left.get(key) != right.get(key):
+            found.append(
+                ReproductionOverride(
+                    key,
+                    json.dumps(left.get(key), sort_keys=True),
+                    json.dumps(right.get(key), sort_keys=True),
+                )
+            )
+    return tuple(found)
+
+
+def _leaves(value: Any, prefix: str = "") -> dict[str, Any]:
+    if isinstance(value, dict):
+        found: dict[str, Any] = {}
+        for key in sorted(value):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            found.update(_leaves(value[key], path))
+        return found
+    if isinstance(value, list):
+        found = {}
+        for index, item in enumerate(value):
+            found.update(_leaves(item, f"{prefix}[{index}]"))
+        return found
+    return {prefix: value}
 
 
 def _agree(top: Any, seen: set[Any], name: str) -> None:
@@ -1123,6 +951,24 @@ def _object(value: object, where: str) -> Mapping[str, Any]:
     return value
 
 
+def _coerce(value: object, annotation: str, where: str) -> Any:
+    if annotation == "int":
+        return _as_int(value, where)
+    if annotation == "int | None":
+        return _as_optional_int(value, where)
+    if annotation == "float":
+        return _as_float(value, where)
+    if annotation == "float | None":
+        return _as_optional_float(value, where)
+    if annotation == "bool":
+        return _as_bool(value, where)
+    if annotation == "str":
+        return _as_str(value, where)
+    if annotation == "str | None":
+        return _as_optional_str(value, where)
+    raise ConfigError(f"{where} has unsupported type {annotation}")
+
+
 def _as_int(value: object, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{where} must be an int")
@@ -1138,7 +984,10 @@ def _as_optional_int(value: object, where: str) -> int | None:
 def _as_float(value: object, where: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{where} must be a number")
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        raise ConfigError(f"{where} must be finite")
+    return number
 
 
 def _as_optional_float(value: object, where: str) -> float | None:
@@ -1165,3 +1014,17 @@ def _as_bool(value: object, where: str) -> bool:
     if not isinstance(value, bool):
         raise ConfigError(f"{where} must be a bool")
     return value
+
+
+def _require_positive(name: str, value: int, *, minimum: int) -> None:
+    if isinstance(value, bool) or value < minimum:
+        raise ConfigError(f"{name} must be >= {minimum}")
+
+
+def _require_finite(name: str, value: float, *, positive: bool = False) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{name} must be a number")
+    if not math.isfinite(float(value)):
+        raise ConfigError(f"{name} must be finite")
+    if positive and value <= 0:
+        raise ConfigError(f"{name} must be positive")

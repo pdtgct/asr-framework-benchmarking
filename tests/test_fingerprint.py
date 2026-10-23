@@ -21,23 +21,15 @@ _PRESET = Path("presets/mock-streaming.json")
 
 def _key(config: ResolvedConfig) -> str:
     software = software_identity(
-        package_version="0.0.1",
-        python_version="3.12.0",
-        git_commit="unknown",
         adapter="mock",
-        lookahead_identity_policy=config.run.lookahead_identity_policy,
         normalization_policy=config.run.pass_policy.normalization_policy,
         percentile_method=config.run.percentile_method,
     )
     hardware = hardware_identity(
-        system="Linux",
-        architecture="x86_64",
-        cpu_model="cpu",
-        logical_cpu_count=2,
         gpu_name=None,
         gpu_count=None,
         gpu_memory_mib=None,
-        driver_version=None,
+        gpu_identity_source="client_probe",
     )
     return comparison_key(
         workload_fp=workload_fingerprint(config),
@@ -122,10 +114,12 @@ def test_lookahead_policy_does_not_change_offered_work() -> None:
         }
     )
     assert workload_fingerprint(base) == workload_fingerprint(other)
-    assert _key(base) != _key(other)
+    assert observation_fingerprint(base) != observation_fingerprint(other)
+    assert _key(base) == _key(other)
     material = workload_material(base.workload)
     assert "path" not in material
     assert "licence" not in material
+    assert "lookahead_frames_source" not in material
 
 
 def test_preset_path_and_licence_are_not_offered_work() -> None:
@@ -138,5 +132,6 @@ def test_preset_path_and_licence_are_not_offered_work() -> None:
         "attribution",
         "note",
         "lookahead_ms_label",
+        "lookahead_frames_source",
     ):
         assert absent not in material

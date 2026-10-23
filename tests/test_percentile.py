@@ -53,3 +53,19 @@ def test_bad_queries_are_errors() -> None:
         percentile([1.0], 100.1)
     with pytest.raises(PercentileError):
         percentile([1.0], 50, method="excel")
+    with pytest.raises(PercentileError):
+        percentile([1.0], float("nan"))
+    with pytest.raises(PercentileError):
+        percentile([float("nan")], 50)
+    with pytest.raises(PercentileError):
+        percentile([float("inf")], 50)
+
+
+def test_numpy_linear_matches_statistics_quantiles() -> None:
+    import random
+    import statistics
+
+    samples = [random.Random(0).random() for _ in range(40)]
+    cuts = statistics.quantiles(samples, n=100, method="inclusive")
+    for q in range(1, 100):
+        assert percentile(samples, q) == pytest.approx(cuts[q - 1])

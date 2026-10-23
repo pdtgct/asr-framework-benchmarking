@@ -9,6 +9,7 @@ never filled with a zero.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from asrbench.definitions import (
@@ -48,6 +49,7 @@ from asrbench.definitions import (
     REVISION_RATE_DEFINITION,
     RTFX_VALIDITY_NOT_APPLICABLE,
     RTFX_VALIDITY_PACING_DISABLED,
+    RTFX_VALIDITY_SIMULATED,
     RTFX_VALIDITY_UNQUALIFIED,
     SDI_DEFINITION,
     STEADY_INTERVAL_DEFINITION,
@@ -74,57 +76,26 @@ _NORM_TEXT = {
 }
 
 
+class MeasurementError(ValueError):
+    """An outcome carried a non-finite latency into a reduction."""
+
+
 def is_timed_out(outcome: SessionOutcome) -> bool:
-    """Return whether the session timed out.
-
-    Adapters may set :attr:`~asrbench.outcome.SessionOutcome.timed_out` or
-    only ``protocol_extras["timed_out"]``. Either one counts, so an
-    adapter that predates the field stays in the denominator.
-
-    Args:
-        outcome: One session.
-
-    Returns:
-        True when either signal is set.
-    """
-    if outcome.timed_out:
-        return True
-    return bool(outcome.protocol_extras.get("timed_out"))
+    """Return whether ``timed_out`` is set. Protocol residue is not read."""
+    return outcome.timed_out
 
 
 def is_errored(outcome: SessionOutcome) -> bool:
-    """Return whether the session errored and did not time out.
-
-    A timeout wins when both signals are present, so the two counts do
-    not double-count one session. The realtime adapter records an
-    exception string next to ``timed_out``; that session is a timeout.
-
-    Args:
-        outcome: One session.
-
-    Returns:
-        True for a protocol error, an error code, or an exception that
-        is not a timeout.
-    """
-    if is_timed_out(outcome):
+    """Return whether the session errored and did not time out."""
+    if outcome.timed_out:
         return False
-    if outcome.protocol_errors or outcome.error_code:
-        return True
-    return outcome.protocol_extras.get("exception") is not None
+    return bool(
+        outcome.protocol_errors or outcome.error_code or outcome.error_detail
+    )
 
 
 def is_completed(outcome: SessionOutcome) -> bool:
-    """Return whether a final transcript arrived without error or timeout.
-
-    An empty transcript is complete. It is not productive.
-
-    Args:
-        outcome: One session.
-
-    Returns:
-        True when ``transcript`` is not ``None`` and the session is
-        neither timed out nor errored.
-    """
+    """Return whether a transcript arrived without error or timeout."""
     return (
         outcome.transcript is not None
         and not is_timed_out(outcome)
@@ -133,14 +104,7 @@ def is_completed(outcome: SessionOutcome) -> bool:
 
 
 def is_productive(outcome: SessionOutcome) -> bool:
-    """Return whether the session produced a non-empty transcript.
-
-    Args:
-        outcome: One session.
-
-    Returns:
-        True for a completed session whose transcript is non-empty.
-    """
+    """Return whether the session completed with a non-empty transcript."""
     return is_completed(outcome) and bool(outcome.transcript)
 
 
@@ -186,7 +150,11 @@ def reduce_trial(
     Returns:
         A JSON-ish reduction. Unavailable metrics are present and null,
         not omitted and not zero.
+
+    Raises:
+        MeasurementError: A latency sample is not finite.
     """
+    _check_finite(outcomes)
     counts = _counts(outcomes, warmup_excluded)
     ttfs = _latency(
         outcomes,
@@ -213,6 +181,7 @@ def reduce_trial(
         outcomes, reference, pass_policy.normalization_policy, percentile_method
     )
     attempted, successful = _audio(outcomes)
+    simulated = _clocks_are_simulated(outcomes)
     streaming = _rtfx(
         name="streaming_rtfx",
         definition=STREAMING_RTFX_DEFINITION,
@@ -224,6 +193,7 @@ def reduce_trial(
         wall_span_s=wall_span_s,
         span_pooling=span_pooling,
         offline=False,
+        simulated=simulated,
     )
     offline = _rtfx(
         name="offline_rtfx",
@@ -236,6 +206,7 @@ def reduce_trial(
         wall_span_s=wall_span_s,
         span_pooling=span_pooling,
         offline=True,
+        simulated=simulated,
     )
     stability = {
         "prefix_violations": _prefix(outcomes),
@@ -258,6 +229,7 @@ def reduce_trial(
         reference=reference,
         pass_policy=pass_policy,
         percentile_method=percentile_method,
+        utterances=wer["utterances"],
     )
     return {
         "counts": counts,
@@ -411,6 +383,37 @@ def _audio(outcomes: list[SessionOutcome]) -> tuple[float, float]:
     return attempted, successful
 
 
+def _check_finite(outcomes: list[SessionOutcome]) -> None:
+    for outcome in outcomes:
+        for name, value in (
+            ("ttfs_s", outcome.ttfs_s),
+            ("final_latency_s", outcome.final_latency_s),
+        ):
+            if value is not None and not math.isfinite(value):
+                raise MeasurementError(f"{outcome.label} {name} is not finite")
+        for sample in outcome.response_latencies_s:
+            if not math.isfinite(sample):
+                raise MeasurementError(
+                    f"{outcome.label} response latency is not finite"
+                )
+
+
+def _clocks_are_simulated(outcomes: list[SessionOutcome]) -> bool:
+    clocks = [
+        outcome.latency_clock for outcome in outcomes if outcome.latency_clock
+    ]
+    return bool(clocks) and all(clock.startswith("mock/") for clock in clocks)
+
+
+def _common_prefix(left: list[str], right: list[str]) -> int:
+    count = 0
+    for first, second in zip(left, right, strict=False):
+        if first != second:
+            break
+        count += 1
+    return count
+
+
 def _distribution(
     *,
     name: str,
@@ -460,6 +463,68 @@ def _distribution(
     }
 
 
+def _clocked_distribution(
+    *,
+    name: str,
+    native_clock: str,
+    definition: str,
+    method: str,
+    entries: list[tuple[float, str, bool]],
+    n_with_measure: int,
+    n_total: int,
+) -> dict[str, Any]:
+    clocks = {clock for _, clock, _ in entries}
+    if len(clocks) > 1:
+        return _distribution(
+            name=name,
+            clock=None,
+            clock_attribution="mixed",
+            clock_matches_native=False,
+            definition=definition,
+            unit="s",
+            method=method,
+            availability="mixed_clocks",
+            samples=[],
+            n_with_measure=n_with_measure,
+            n_total=n_total,
+            n_samples=len(entries),
+        )
+    if not entries:
+        return _distribution(
+            name=name,
+            clock=native_clock,
+            clock_attribution="none",
+            clock_matches_native=False,
+            definition=definition,
+            unit="s",
+            method=method,
+            availability="no_samples",
+            samples=[],
+            n_with_measure=0,
+            n_total=n_total,
+            n_samples=0,
+        )
+    clock = next(iter(clocks))
+    if all(explicit for _, _, explicit in entries):
+        attribution = "outcome"
+    else:
+        attribution = "native_default"
+    return _distribution(
+        name=name,
+        clock=clock,
+        clock_attribution=attribution,
+        clock_matches_native=clock == native_clock,
+        definition=definition,
+        unit="s",
+        method=method,
+        availability="measured",
+        samples=[value for value, _, _ in entries],
+        n_with_measure=n_with_measure,
+        n_total=n_total,
+        n_samples=len(entries),
+    )
+
+
 def _latency(
     outcomes: list[SessionOutcome],
     *,
@@ -477,58 +542,15 @@ def _latency(
         if value is None:
             continue
         explicit = str(clock_of(outcome) or "")
-        clock = explicit or native_clock
-        entries.append((float(value), clock, bool(explicit)))
-    clocks = {clock for _, clock, _ in entries}
-    if len(clocks) > 1:
-        return _distribution(
-            name=name,
-            clock=None,
-            clock_attribution="mixed",
-            clock_matches_native=False,
-            definition=definition,
-            unit="s",
-            method=method,
-            availability="mixed_clocks",
-            samples=[],
-            n_with_measure=len(entries),
-            n_total=population,
-            n_samples=len(entries),
-        )
-    if not entries:
-        return _distribution(
-            name=name,
-            clock=native_clock,
-            clock_attribution="none",
-            clock_matches_native=False,
-            definition=definition,
-            unit="s",
-            method=method,
-            availability="no_samples",
-            samples=[],
-            n_with_measure=0,
-            n_total=population,
-            n_samples=0,
-        )
-    clock = next(iter(clocks))
-    attribution = (
-        "outcome"
-        if all(explicit for _, _, explicit in entries)
-        else "native_default"
-    )
-    return _distribution(
+        entries.append((float(value), explicit or native_clock, bool(explicit)))
+    return _clocked_distribution(
         name=name,
-        clock=clock,
-        clock_attribution=attribution,
-        clock_matches_native=clock == native_clock,
+        native_clock=native_clock,
         definition=definition,
-        unit="s",
         method=method,
-        availability="measured",
-        samples=[value for value, _, _ in entries],
+        entries=entries,
         n_with_measure=len(entries),
         n_total=population,
-        n_samples=len(entries),
     )
 
 
@@ -545,57 +567,14 @@ def _response_latency(
         clock = explicit or RESPONSE_LATENCY_CLOCK
         for sample in outcome.response_latencies_s:
             entries.append((float(sample), clock, bool(explicit)))
-    clocks = {clock for _, clock, _ in entries}
-    if len(clocks) > 1:
-        return _distribution(
-            name="response_latency_s",
-            clock=None,
-            clock_attribution="mixed",
-            clock_matches_native=False,
-            definition=RESPONSE_LATENCY_DEFINITION,
-            unit="s",
-            method=method,
-            availability="mixed_clocks",
-            samples=[],
-            n_with_measure=sessions,
-            n_total=len(outcomes),
-            n_samples=len(entries),
-        )
-    if not entries:
-        return _distribution(
-            name="response_latency_s",
-            clock=RESPONSE_LATENCY_CLOCK,
-            clock_attribution="none",
-            clock_matches_native=False,
-            definition=RESPONSE_LATENCY_DEFINITION,
-            unit="s",
-            method=method,
-            availability="no_samples",
-            samples=[],
-            n_with_measure=0,
-            n_total=len(outcomes),
-            n_samples=0,
-        )
-    clock = next(iter(clocks))
-    attribution = (
-        "outcome"
-        if all(explicit for _, _, explicit in entries)
-        else "native_default"
-    )
-    samples = [value for value, _, _ in entries]
-    return _distribution(
+    return _clocked_distribution(
         name="response_latency_s",
-        clock=clock,
-        clock_attribution=attribution,
-        clock_matches_native=clock == RESPONSE_LATENCY_CLOCK,
+        native_clock=RESPONSE_LATENCY_CLOCK,
         definition=RESPONSE_LATENCY_DEFINITION,
-        unit="s",
         method=method,
-        availability="measured",
-        samples=samples,
+        entries=entries,
         n_with_measure=sessions,
         n_total=len(outcomes),
-        n_samples=len(samples),
     )
 
 
@@ -608,6 +587,7 @@ def _wer(
     utterances: list[dict[str, Any]] = []
     substitutions = deletions = insertions = 0
     reference_tokens = hypothesis_tokens = reference_chars = char_edits = 0
+    missing = chars_missing = n_failed = 0
     samples: list[float] = []
     if reference is None:
         for outcome in outcomes:
@@ -620,10 +600,31 @@ def _wer(
         micro_cer = None
     else:
         for outcome in outcomes:
-            hypothesis = (
-                outcome.transcript if outcome.transcript is not None else ""
-            )
-            scored = score_texts(reference, hypothesis, policy)
+            if outcome.transcript is None:
+                blank = score_texts(reference, "", policy)
+                n_failed += 1
+                missing += blank.reference_tokens
+                chars_missing += blank.reference_chars
+                reference_tokens += blank.reference_tokens
+                reference_chars += blank.reference_chars
+                utterances.append(
+                    {
+                        "label": outcome.label,
+                        "scored": False,
+                        "reason": "missing_transcript",
+                        "wer": None,
+                        "cer": None,
+                        "substitutions": 0,
+                        "deletions": 0,
+                        "insertions": 0,
+                        "reference_tokens": blank.reference_tokens,
+                        "deletions_from_missing_transcript": (
+                            blank.reference_tokens
+                        ),
+                    }
+                )
+                continue
+            scored = score_texts(reference, outcome.transcript, policy)
             substitutions += scored.substitutions
             deletions += scored.deletions
             insertions += scored.insertions
@@ -645,12 +646,13 @@ def _wer(
                     "deletions": scored.deletions,
                     "insertions": scored.insertions,
                     "reference_tokens": scored.reference_tokens,
+                    "deletions_from_missing_transcript": 0,
                 }
             )
         micro_wer = _rate(
-            substitutions + deletions + insertions, reference_tokens
+            substitutions + deletions + insertions + missing, reference_tokens
         )
-        micro_cer = _rate(char_edits, reference_chars)
+        micro_cer = _rate(char_edits + chars_missing, reference_chars)
         if micro_wer is None and not outcomes:
             availability = "no_samples"
             reason = "no_measured_sessions"
@@ -679,6 +681,9 @@ def _wer(
         "sdi_definition": SDI_DEFINITION,
         "substitutions": substitutions,
         "deletions": deletions,
+        "deletions_from_missing_transcript": missing,
+        "n_failed": n_failed,
+        "chars_from_missing_transcript": chars_missing,
         "insertions": insertions,
         "reference_tokens": reference_tokens,
         "hypothesis_tokens": hypothesis_tokens,
@@ -758,48 +763,32 @@ def _rtfx(
     wall_span_s: float,
     span_pooling: str,
     offline: bool,
+    simulated: bool,
 ) -> dict[str, Any]:
-    if not applicable:
-        return {
-            "name": name,
-            "availability": "unavailable",
-            "reason": inapplicable_reason,
-            "value": None,
-            "successful_audio_s": successful,
-            "attempted_audio_s": attempted,
-            "cell_wall_span_s": wall_span_s,
-            "span_pooling": span_pooling,
-            "clock": STREAMING_RTFX_CLOCK,
-            "definition": definition,
-            "pacing": pacing,
-            "validity": RTFX_VALIDITY_NOT_APPLICABLE,
-        }
-    if wall_span_s <= 0:
-        return {
-            "name": name,
-            "availability": "unavailable",
-            "reason": "cell_wall_span_not_positive",
-            "value": None,
-            "successful_audio_s": successful,
-            "attempted_audio_s": attempted,
-            "cell_wall_span_s": wall_span_s,
-            "span_pooling": span_pooling,
-            "clock": STREAMING_RTFX_CLOCK,
-            "definition": definition,
-            "pacing": pacing,
-            "validity": RTFX_VALIDITY_UNQUALIFIED,
-        }
-    if offline:
-        validity = "offline_cell"
-    elif not pacing:
-        validity = RTFX_VALIDITY_PACING_DISABLED
-    else:
+    availability = "unavailable"
+    reason: str | None = inapplicable_reason
+    value = None
+    validity = RTFX_VALIDITY_NOT_APPLICABLE
+    if applicable and wall_span_s <= 0:
+        reason = "cell_wall_span_not_positive"
         validity = RTFX_VALIDITY_UNQUALIFIED
+    elif applicable:
+        availability = "measured"
+        reason = None
+        value = successful / wall_span_s
+        if simulated:
+            validity = RTFX_VALIDITY_SIMULATED
+        elif offline:
+            validity = "offline_cell"
+        elif not pacing:
+            validity = RTFX_VALIDITY_PACING_DISABLED
+        else:
+            validity = RTFX_VALIDITY_UNQUALIFIED
     return {
         "name": name,
-        "availability": "measured",
-        "reason": None,
-        "value": successful / wall_span_s,
+        "availability": availability,
+        "reason": reason,
+        "value": value,
         "successful_audio_s": successful,
         "attempted_audio_s": attempted,
         "cell_wall_span_s": wall_span_s,
@@ -871,27 +860,26 @@ def _revision(outcomes: list[SessionOutcome]) -> dict[str, Any]:
         if outcome.interim_texts is None:
             continue
         sequences = [text.split() for text in outcome.interim_texts]
-        final_tokens = (
-            outcome.transcript.split()
-            if outcome.transcript is not None
-            else None
-        )
+        if outcome.transcript is None:
+            final_tokens = None
+        else:
+            final_tokens = outcome.transcript.split()
         if final_tokens is None and sequences:
             final_missing = True
+        previous: list[str] | None = None
         for index, sequence in enumerate(sequences):
-            emitted += len(sequence)
+            if previous is None:
+                emitted += len(sequence)
+            else:
+                emitted += len(sequence) - _common_prefix(previous, sequence)
+            previous = sequence
             if index + 1 < len(sequences):
                 nxt = sequences[index + 1]
             elif final_tokens is None:
                 continue
             else:
                 nxt = final_tokens
-            common = 0
-            for left, right in zip(sequence, nxt, strict=False):
-                if left != right:
-                    break
-                common += 1
-            revised += len(sequence) - common
+            revised += len(sequence) - _common_prefix(sequence, nxt)
     rate = revised / emitted if emitted else None
     return {
         "availability": "partial" if final_missing else "measured",
@@ -1176,6 +1164,7 @@ def _goodput(
     reference: str | None,
     pass_policy: PassPolicy,
     percentile_method: str,
+    utterances: list[dict[str, Any]],
 ) -> dict[str, Any]:
     base = {
         "name": "goodput",
@@ -1191,6 +1180,7 @@ def _goodput(
             "streams_meeting_slo": None,
             "per_second": None,
         }
+    by_label = {str(row["label"]): row for row in utterances}
     meeting = sum(
         1
         for outcome in outcomes
@@ -1199,6 +1189,7 @@ def _goodput(
             reference=reference,
             pass_policy=pass_policy,
             percentile_method=percentile_method,
+            scored=by_label.get(outcome.label),
         )
     )
     if wall_span_s <= 0:
@@ -1224,6 +1215,7 @@ def _session_meets(
     reference: str | None,
     pass_policy: PassPolicy,
     percentile_method: str,
+    scored: dict[str, Any] | None,
 ) -> bool:
     if not outcome.configured or not has_first_partial(outcome):
         return False
@@ -1243,13 +1235,10 @@ def _session_meets(
         if value is None or value > pass_policy.latency_slo_s:
             return False
     if reference is not None:
-        hypothesis = (
-            outcome.transcript if outcome.transcript is not None else ""
-        )
-        scored = score_texts(
-            reference, hypothesis, pass_policy.normalization_policy
-        )
-        if scored.wer is None or scored.wer > pass_policy.accuracy_tolerance:
+        rate = None if scored is None else scored.get("wer")
+        if not isinstance(rate, (int, float)) or isinstance(rate, bool):
+            return False
+        if rate > pass_policy.accuracy_tolerance:
             return False
     return True
 

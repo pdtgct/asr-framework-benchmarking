@@ -122,7 +122,7 @@ class NvidiaSmiProbe:
             runner: A ``subprocess.run``-shaped callable. The default runs
                 nvidia-smi.
         """
-        self._runner = runner if runner is not None else _default_run
+        self._runner = runner if runner is not None else subprocess.run
 
     def query(self) -> tuple[GpuRow, ...] | None:
         """Return GPU rows, or ``None`` when the probe cannot be used.
@@ -169,21 +169,26 @@ class FixedProbe:
         return self._rows
 
 
-def _default_run(
-    argv: list[str],
-    *,
-    check: bool,
-    capture_output: bool,
-    text: bool,
-    timeout: float,
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv,
-        check=check,
-        capture_output=capture_output,
-        text=text,
-        timeout=timeout,
-    )
+def package_repo() -> Path | None:
+    """Return the git checkout that contains this package.
+
+    Walking from this file avoids ``cwd``. A caller who runs asrbench
+    from another repository must not have that repository's HEAD
+    recorded as this package's commit.
+
+    Returns:
+        The directory with ``pyproject.toml`` naming ``asrbench`` and a
+        ``.git`` entry, or ``None`` when this install is not a checkout.
+    """
+    start = Path(__file__).resolve().parent
+    for candidate in (start, *start.parents):
+        marker = candidate / "pyproject.toml"
+        if not marker.is_file() or not (candidate / ".git").exists():
+            continue
+        text = marker.read_text(encoding="utf-8", errors="replace")
+        if 'name = "asrbench"' in text:
+            return candidate
+    return None
 
 
 def read_cpu_model() -> str | None:
@@ -302,37 +307,37 @@ def git_commit(
     cwd: Path | None = None,
     runner: GitRunner | None = None,
 ) -> GitState:
-    """Return the git commit of ``cwd``, or ``unknown``.
+    """Return the git commit of asrbench's own repository, or ``unknown``.
 
-    This is the only git-commit helper in the package.
+    This is the only git-commit helper in the package. When ``cwd`` is
+    omitted the helper uses :func:`package_repo`, never the process
+    working directory. A missing checkout is ``unknown`` rather than
+    some other project's HEAD.
 
     Args:
-        cwd: Repository directory. ``None`` lets git use its default.
+        cwd: Repository directory. ``None`` selects this package's
+            checkout.
         runner: Replacement for ``subprocess.run``. Tests pass one so the
-            helper can be exercised without a repository.
+            helper can be exercised without a repository. ``cwd`` is
+            still the package repo unless the caller passes one.
 
     Returns:
         Commit, dirty bit, and whether git answered. Failures become
         ``commit='unknown'`` and ``available=False``.
     """
+    repo = cwd if cwd is not None else package_repo()
+    if repo is None and runner is None:
+        return GitState(commit="unknown", dirty=False, available=False)
 
     def invoke(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        if runner is not None:
-            return runner(
-                argv,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-                cwd=str(cwd) if cwd is not None else None,
-            )
-        return subprocess.run(
+        chosen = runner if runner is not None else subprocess.run
+        return chosen(
             argv,
             check=False,
             capture_output=True,
             text=True,
             timeout=2.0,
-            cwd=cwd,
+            cwd=str(repo) if repo is not None else None,
         )
 
     try:

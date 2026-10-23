@@ -23,6 +23,7 @@ from asrbench.config import (
     overrides_from_args,
     resolve,
 )
+from asrbench.reducers import MeasurementError
 from asrbench.reporters import (
     NotHomogeneousError,
     console_report,
@@ -93,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         ClipError,
         NotHomogeneousError,
         CanonicalError,
+        MeasurementError,
     ) as error:
         print(f"asrbench: {error}", file=sys.stderr)
         return 2
@@ -127,6 +129,11 @@ def _run(args: argparse.Namespace) -> int:
     )
     if config.run.output_path is None:
         raise ConfigError("--out is required")
+    for item in config.reproduction_overrides:
+        print(
+            f"reproduction {item.path}: {item.receipt} -> {item.resolved}",
+            file=sys.stderr,
+        )
     receipt = asyncio.run(run_benchmark(config, env=env))
     destination = Path(config.run.output_path)
     _write_json(destination, receipt)

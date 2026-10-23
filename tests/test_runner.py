@@ -1,7 +1,10 @@
 """Mock lanes, warmup exclusion, timeouts, and the transport seam."""
 
 import asyncio
+import json
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -87,7 +90,7 @@ def test_mock_run_excludes_warmup_and_uses_simulated_clocks(
     assert rtfx["successful_audio_s"] == pytest.approx(6.4)
     assert rtfx["cell_wall_span_s"] == pytest.approx(2.0)
     assert rtfx["value"] == pytest.approx(3.2)
-    assert rtfx["validity"] == "pacing_fidelity_unavailable"
+    assert rtfx["validity"] == "simulated"
     assert receipt["summary"]["conjunction_passed"] is True
     assert receipt["lookahead"]["server_reported_frames"] is None
     assert receipt["lookahead"]["frames_source"] == "client_declared"
@@ -152,6 +155,7 @@ def test_a_stuck_lane_is_a_timeout_in_the_denominator(tmp_path: Path) -> None:
         env={},
         overrides={
             ("workload", "timeout_s"): 0.05,
+            ("workload", "pacing"): False,
             ("workload", "lanes"): 1,
             ("workload", "iterations"): 1,
             ("workload", "trials"): 1,
@@ -224,8 +228,10 @@ def test_a_raising_lane_is_an_errored_outcome(tmp_path: Path) -> None:
     counts = receipt["summary"]["pooled"]["counts"]
     assert counts["errored"] == 1
     assert counts["attempted"] == 1
-    text = receipt["trials"][0]["outcomes"][0]["protocol_extras"]["exception"]
+    text = receipt["trials"][0]["outcomes"][0]["error_detail"]
     assert "RuntimeError" in text
+    extras = receipt["trials"][0]["outcomes"][0]["protocol_extras"]
+    assert "exception" not in extras
 
 
 def test_rate_rps_is_refused_rather_than_run_as_lanes() -> None:
@@ -245,3 +251,232 @@ def test_realtime_ws_is_not_opened_by_the_runner() -> None:
     config = resolve(env={}, overrides={("target", "transport"): "realtime-ws"})
     with pytest.raises(ConfigError, match="caller-owned"):
         load_adapter(config.target)
+
+
+def _drive(
+    config: ResolvedConfig,
+    tmp_path: Path,
+    run_id: str,
+    adapter: object | None = None,
+) -> dict[str, Any]:
+    from typing import cast
+
+    from asrbench.adapter import TransportAdapter
+    from asrbench.identity import HardwareRecord
+
+    hardware = _hardware()
+    assert isinstance(hardware, HardwareRecord)
+    receipt: dict[str, Any] = asyncio.run(
+        run_benchmark(
+            config,
+            adapter=cast(TransportAdapter | None, adapter),
+            clock=AdvancingClock(1.0),
+            hardware=hardware,
+            git_state=GitState(commit="unknown", dirty=False, available=False),
+            package_version="0.0.1",
+            python_version="3.12.0",
+            run_id=run_id,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            materialize_dir=tmp_path,
+            env={},
+        )
+    )
+    return receipt
+
+
+def _success(request: SessionRequest) -> SessionOutcome:
+    return SessionOutcome(
+        label=request.label,
+        mode=request.mode,
+        clip_name=request.clip_path.name,
+        chunk_ms=request.chunk_ms,
+        audio_duration_s=1.6,
+        configured=True,
+        connected=True,
+        transcript="hello",
+        ttfs_s=0.2,
+        final_latency_s=0.05,
+        latency_clock="client_monotonic/test",
+        interim_texts=["hello"],
+        terminal_status="completed",
+    )
+
+
+def test_each_lane_runs_at_its_population_cadence(tmp_path: Path) -> None:
+    payload = json.loads(_PRESET.read_text(encoding="utf-8"))
+    workload = payload["workload"]
+    workload["lanes"] = 3
+    workload["iterations"] = 1
+    workload["warmup"] = 0
+    workload["trials"] = 1
+    workload["cadence_ms"] = None
+    workload["lookahead_frames"] = None
+    workload["lookahead_ms_label"] = None
+    workload["population"] = [
+        {
+            "lanes": 1,
+            "cadence_ms": 160,
+            "lookahead_frames": 2,
+            "lookahead_ms_label": 160,
+        },
+        {
+            "lanes": 2,
+            "cadence_ms": 320,
+            "lookahead_frames": 4,
+            "lookahead_ms_label": 320,
+        },
+    ]
+    preset = tmp_path / "mixed.json"
+    preset.write_text(json.dumps(payload), encoding="utf-8")
+    config = resolve(
+        preset_path=preset,
+        env={},
+        overrides={("run", "output_path"): "receipt.json"},
+    )
+    seen: list[tuple[int | None, int | None]] = []
+
+    class Recording:
+        name = "recording"
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del progress_callback
+            seen.append((request.cadence_ms, request.lookahead_frames))
+            if admission_barrier is not None:
+                await admission_barrier.wait(request.label)
+            return _success(request)
+
+    receipt = _drive(config, tmp_path, "mixed", Recording())
+    assert seen == [(160, 2), (320, 4), (320, 4)]
+    resolved = receipt["resolved_config"]
+    assert isinstance(resolved, dict)
+    assert resolved["workload"]["cadence_ms"] is None
+    assert resolved["workload"]["lookahead_frames"] is None
+
+
+def test_adapter_timeout_does_not_replace_a_returned_outcome(
+    tmp_path: Path,
+) -> None:
+    class SlowButDone:
+        name = "slow-but-done"
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del admission_barrier, progress_callback
+            await asyncio.sleep(0.2)
+            outcome = _success(request)
+            outcome.ttfs_s = 0.2
+            return outcome
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "timeout_s"): 0.05,
+            ("workload", "pacing"): True,
+            ("workload", "lanes"): 1,
+            ("workload", "iterations"): 1,
+            ("workload", "trials"): 1,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    receipt = _drive(config, tmp_path, "partial", SlowButDone())
+    outcome = receipt["trials"][0]["outcomes"][0]
+    assert isinstance(outcome, dict)
+    assert outcome["ttfs_s"] == 0.2
+    assert outcome["timed_out"] is False
+
+
+def test_a_lane_that_raises_before_the_barrier_does_not_stall_peers(
+    tmp_path: Path,
+) -> None:
+    class Uneven:
+        name = "uneven"
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del progress_callback
+            if "lane0" in request.label:
+                raise RuntimeError("before wait")
+            if admission_barrier is not None:
+                await admission_barrier.wait(request.label)
+            return _success(request)
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "lanes"): 3,
+            ("workload", "iterations"): 1,
+            ("workload", "trials"): 1,
+            ("workload", "pacing"): False,
+            ("workload", "timeout_s"): 2.0,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    receipt = _drive(config, tmp_path, "barrier", Uneven())
+    counts = receipt["summary"]["pooled"]["counts"]
+    assert isinstance(counts, dict)
+    assert counts["attempted"] == 3
+    assert counts["errored"] == 1
+    assert counts["timed_out"] == 0
+    assert counts["completed"] == 2
+
+
+def test_later_iterations_are_not_lockstep_waves(tmp_path: Path) -> None:
+    events: list[tuple[str, str, float]] = []
+
+    class ClosedLoop:
+        name = "closed-loop"
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del progress_callback
+            if admission_barrier is not None:
+                await admission_barrier.wait(request.label)
+            events.append((request.label, "start", time.monotonic()))
+            if "lane0" in request.label:
+                await asyncio.sleep(0.15)
+            events.append((request.label, "end", time.monotonic()))
+            return _success(request)
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "lanes"): 2,
+            ("workload", "iterations"): 2,
+            ("workload", "trials"): 1,
+            ("workload", "pacing"): False,
+            ("workload", "timeout_s"): 2.0,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    _drive(config, tmp_path, "closed", ClosedLoop())
+    start = next(
+        item
+        for item in events
+        if item[0] == "t0-lane1-i1" and item[1] == "start"
+    )
+    end = next(
+        item for item in events if item[0] == "t0-lane0-i0" and item[1] == "end"
+    )
+    assert start[2] < end[2]

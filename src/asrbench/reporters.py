@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from asrbench.config import config_from_mapping, finalize
+from asrbench.config import ConfigError, config_from_mapping, validate
 from asrbench.definitions import (
     FRONTIER_DEFINITION,
     SUSTAINED_STREAMS_DEFINITION,
@@ -64,6 +64,8 @@ def console_report(receipt: dict[str, Any]) -> str:
             f"wer policy={wer['policy']} micro={wer['micro_wer']} "
             f"S={wer['substitutions']} D={wer['deletions']} "
             f"I={wer['insertions']} "
+            f"missing={wer['deletions_from_missing_transcript']} "
+            f"n_failed={wer['n_failed']} "
             f"n_with_measure={wer['n_with_measure']} n_total={wer['n_total']}"
         ),
         (
@@ -131,6 +133,10 @@ def vllm_report(receipt: dict[str, Any]) -> dict[str, Any]:
 def vendor_tsv(receipt: dict[str, Any]) -> str:
     """Project one homogeneous receipt into a vendor-comparable TSV row.
 
+    Pooled columns describe every measured session. ``across_mean``
+    columns are the mean of the per-trial scalars, which is what a
+    three-trial vendor sheet averages.
+
     Args:
         receipt: A receipt object.
 
@@ -141,96 +147,74 @@ def vendor_tsv(receipt: dict[str, Any]) -> str:
         NotHomogeneousError: The population mixes cadence or lookahead.
     """
     _require_homogeneous(receipt)
-    workload = receipt["resolved_config"]["workload"]
     pooled = receipt["summary"]["pooled"]
-    ttfs = pooled["ttfs_s"]
-    response = pooled["response_latency_s"]
-    final = pooled["finalization_s"]
-    wer = pooled["wer"]
-    rtfx = pooled["streaming_rtfx"]
+    across = receipt["summary"]["across_trials"]
+    workload = receipt["resolved_config"]["workload"]
     counts = pooled["counts"]
-    admission = (
-        counts["admitted"] / counts["attempted"]
-        if counts["attempted"]
-        else None
+    if counts["attempted"]:
+        admission: float | None = counts["admitted"] / counts["attempted"]
+    else:
+        admission = None
+    columns: tuple[tuple[str, object], ...] = (
+        ("model", receipt["identity"]["target"]["model"]),
+        ("lookahead_frames", workload["lookahead_frames"]),
+        ("lookahead_ms_label", workload["lookahead_ms_label"]),
+        ("lanes", workload["lanes"]),
+        ("chunk_ms", workload["chunk_ms"]),
+        ("cadence_ms", workload["cadence_ms"]),
+        ("ttfs_p50_s", pooled["ttfs_s"]["p50"]),
+        ("ttfs_p99_s", pooled["ttfs_s"]["p99"]),
+        ("ttfs_p50_across_mean_s", across["ttfs_p50_s"]["mean"]),
+        ("ttfs_p99_across_mean_s", across["ttfs_p99_s"]["mean"]),
+        ("ttfs_n_with_measure", pooled["ttfs_s"]["n_with_measure"]),
+        ("ttfs_n_total", pooled["ttfs_s"]["n_total"]),
+        ("ttfs_clock", pooled["ttfs_s"]["clock"]),
+        ("response_latency_p50_s", pooled["response_latency_s"]["p50"]),
+        ("response_latency_p99_s", pooled["response_latency_s"]["p99"]),
+        (
+            "response_latency_p50_across_mean_s",
+            across["response_latency_p50_s"]["mean"],
+        ),
+        (
+            "response_latency_n_samples",
+            pooled["response_latency_s"]["n_samples"],
+        ),
+        (
+            "response_latency_n_with_measure",
+            pooled["response_latency_s"]["n_with_measure"],
+        ),
+        ("response_latency_n_total", pooled["response_latency_s"]["n_total"]),
+        ("response_latency_clock", pooled["response_latency_s"]["clock"]),
+        ("finalization_p50_s", pooled["finalization_s"]["p50"]),
+        ("wer", pooled["wer"]["micro_wer"]),
+        ("wer_across_mean", across["micro_wer"]["mean"]),
+        ("wer_policy", pooled["wer"]["policy"]),
+        ("wer_n_with_measure", pooled["wer"]["n_with_measure"]),
+        ("wer_n_total", pooled["wer"]["n_total"]),
+        ("substitutions", pooled["wer"]["substitutions"]),
+        ("deletions", pooled["wer"]["deletions"]),
+        (
+            "deletions_from_missing_transcript",
+            pooled["wer"]["deletions_from_missing_transcript"],
+        ),
+        ("n_failed", pooled["wer"]["n_failed"]),
+        ("insertions", pooled["wer"]["insertions"]),
+        ("streaming_rtfx", pooled["streaming_rtfx"]["value"]),
+        ("streaming_rtfx_across_mean", across["streaming_rtfx"]["mean"]),
+        ("streaming_rtfx_validity", pooled["streaming_rtfx"]["validity"]),
+        ("attempted_audio_s", pooled["streaming_rtfx"]["attempted_audio_s"]),
+        ("successful_audio_s", pooled["streaming_rtfx"]["successful_audio_s"]),
+        ("admission_fraction", admission),
+        ("conjunction_passed", receipt["summary"]["conjunction_passed"]),
+        ("failed_clauses", ",".join(receipt["summary"]["failed_clauses"])),
     )
-    header = [
-        "model",
-        "lookahead_frames",
-        "lookahead_ms_label",
-        "lanes",
-        "chunk_ms",
-        "cadence_ms",
-        "ttfs_p50_s",
-        "ttfs_p99_s",
-        "ttfs_n_with_measure",
-        "ttfs_n_total",
-        "ttfs_clock",
-        "response_latency_p50_s",
-        "response_latency_p99_s",
-        "response_latency_n_samples",
-        "response_latency_n_with_measure",
-        "response_latency_n_total",
-        "response_latency_clock",
-        "finalization_p50_s",
-        "wer",
-        "wer_policy",
-        "wer_n_with_measure",
-        "wer_n_total",
-        "substitutions",
-        "deletions",
-        "insertions",
-        "streaming_rtfx",
-        "streaming_rtfx_validity",
-        "attempted_audio_s",
-        "successful_audio_s",
-        "admission_fraction",
-        "conjunction_passed",
-        "failed_clauses",
-    ]
-    row = [
-        receipt["identity"]["target"]["model"],
-        workload["lookahead_frames"],
-        workload["lookahead_ms_label"],
-        workload["lanes"],
-        workload["chunk_ms"],
-        workload["cadence_ms"],
-        ttfs["p50"],
-        ttfs["p99"],
-        ttfs["n_with_measure"],
-        ttfs["n_total"],
-        ttfs["clock"],
-        response["p50"],
-        response["p99"],
-        response["n_samples"],
-        response["n_with_measure"],
-        response["n_total"],
-        response["clock"],
-        final["p50"],
-        wer["micro_wer"],
-        wer["policy"],
-        wer["n_with_measure"],
-        wer["n_total"],
-        wer["substitutions"],
-        wer["deletions"],
-        wer["insertions"],
-        rtfx["value"],
-        rtfx["validity"],
-        rtfx["attempted_audio_s"],
-        rtfx["successful_audio_s"],
-        admission,
-        receipt["summary"]["conjunction_passed"],
-        ",".join(receipt["summary"]["failed_clauses"]),
-    ]
-    comment = f"# ttfs_clock {ttfs['clock']} definition quoted on the receipt"
-    return (
-        comment
-        + "\n"
-        + "\t".join(header)
-        + "\n"
-        + "\t".join(_cell(value) for value in row)
-        + "\n"
+    comment = (
+        "# ttfs_clock "
+        f"{pooled['ttfs_s']['clock']} definition quoted on the receipt"
     )
+    header = "\t".join(name for name, _value in columns)
+    row = "\t".join(_cell(value) for _name, value in columns)
+    return comment + "\n" + header + "\n" + row + "\n"
 
 
 def frontier_report(
@@ -239,8 +223,9 @@ def frontier_report(
 ) -> dict[str, Any]:
     """Project receipts onto latency/accuracy frontiers.
 
-    Receipts that differ in anything except lookahead frame count land in
-    different series. Within a series, a point is dominated when another
+    Receipts that differ in anything except lookahead frame count and
+    cadence land in different series. Within a series, a point is
+    dominated when another
     point is at least as accurate and at least as fast, and strictly
     better on one of those. That is a finding, not a pass condition.
 
@@ -261,6 +246,7 @@ def frontier_report(
             "source": source,
             "lookahead_frames": receipt["lookahead"]["frames"],
             "lookahead_ms_label": receipt["lookahead"]["millisecond_label"],
+            "cadence_ms": receipt["resolved_config"]["workload"]["cadence_ms"],
             "wer": pooled["wer"]["micro_wer"],
             "wer_policy": pooled["wer"]["policy"],
             "latency_s": pooled["ttfs_s"]["p50"],
@@ -307,7 +293,8 @@ def frontier_text(report: dict[str, Any]) -> str:
     for series in report["series"]:
         lines.append(f"series {series['group_key']}")
         lines.append(
-            "lookahead_frames\tlabel_ms\twer\tlatency_s\tedge\tfindings\tsource"
+            "lookahead_frames\tcadence_ms\tlabel_ms\twer\t"
+            "latency_s\tedge\tfindings\tsource"
         )
         for point in series["points"]:
             edge = "edge" if point["on_pareto_edge"] else "off"
@@ -316,6 +303,7 @@ def frontier_text(report: dict[str, Any]) -> str:
                 "\t".join(
                     [
                         _cell(point["lookahead_frames"]),
+                        _cell(point.get("cadence_ms")),
                         _cell(point["lookahead_ms_label"]),
                         _cell(point["wer"]),
                         _cell(point["latency_s"]),
@@ -391,18 +379,22 @@ def sustained_streams_report(
 def _identity(
     receipt: dict[str, Any],
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    config = finalize(config_from_mapping(receipt["resolved_config"]))
-    software = receipt["identity"]["software"]
-    hardware = receipt["identity"]["hardware"]
-    return config, software, hardware
+    payload = receipt.get("resolved_config")
+    if not isinstance(payload, dict):
+        raise ConfigError("receipt has no resolved_config object")
+    config = validate(config_from_mapping(payload, complete=True), pin=False)
+    return (
+        config,
+        receipt["identity"]["software"],
+        receipt["identity"]["hardware"],
+    )
 
 
 def _mark_frontier(points: list[dict[str, Any]]) -> None:
-    counts: dict[Any, int] = {}
+    counts: dict[tuple[Any, Any], int] = {}
     for point in points:
-        counts[point["lookahead_frames"]] = (
-            counts.get(point["lookahead_frames"], 0) + 1
-        )
+        key = (point["lookahead_frames"], point.get("cadence_ms"))
+        counts[key] = counts.get(key, 0) + 1
     eligible = [
         point
         for point in points
@@ -410,7 +402,8 @@ def _mark_frontier(points: list[dict[str, Any]]) -> None:
     ]
     for point in points:
         findings: list[str] = []
-        if counts[point["lookahead_frames"]] > 1:
+        point_key = (point["lookahead_frames"], point.get("cadence_ms"))
+        if counts[point_key] > 1:
             findings.append("duplicate_lookahead")
         if point not in eligible:
             point["on_pareto_edge"] = False

@@ -99,16 +99,19 @@ trackers are optional plugins, never core dependencies.
 generation, and documentation code blocks that execute against the mock adapter — a
 quickstart that no longer runs should be a test failure, not a bug report.
 
-### Two shape decisions to carry in
+### Shape decisions now in the measurement core
 
-Both were settled after step 1 and are not yet reflected in any code:
+These were settled after step 1 and are implemented in the comparison key and
+the frontier reporter:
 
-1. **The lookahead frame count belongs inside the comparison key**, not merely
+1. **The lookahead frame count is inside the comparison key**, not merely
    reported beside it. Two receipts at different lookaheads measure different
    operating points of the model, so pooling them is as wrong as pooling across
-   hardware.
-2. **The frontier is the dashboard's primary panel** — accuracy against measured
-   latency, one point per lookahead, Pareto edge marked — rather than a
+   hardware. The cadence that sets that lookahead is in the key as well. The
+   frontier removes both when it groups a sweep. `chunk_ms` stays: it is
+   transmit size.
+2. **The frontier is the primary panel** — accuracy against measured latency,
+   one point per lookahead and cadence, Pareto edge marked — rather than a
    cadence-by-concurrency matrix. The matrix was designed on the assumption that
    cadence varies load at a fixed result; it varies the result too.
 

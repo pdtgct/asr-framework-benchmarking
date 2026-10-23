@@ -63,6 +63,7 @@ def _point(
     latency: float | None,
     *,
     gpu_name: str | None = None,
+    cadence_ms: int | None = None,
 ) -> dict[str, Any]:
     receipt = copy.deepcopy(base)
     receipt["lookahead"]["frames"] = frames
@@ -73,6 +74,10 @@ def _point(
     for entry in workload["population"]:
         entry["lookahead_frames"] = frames
         entry["lookahead_ms_label"] = float(frames * 80)
+    if cadence_ms is not None:
+        workload["cadence_ms"] = cadence_ms
+        for entry in workload["population"]:
+            entry["cadence_ms"] = cadence_ms
     receipt["summary"]["pooled"]["wer"]["micro_wer"] = wer
     receipt["summary"]["pooled"]["ttfs_s"]["p50"] = latency
     if gpu_name is not None:
@@ -92,7 +97,23 @@ def test_console_and_vllm_are_deterministic_projections(tmp_path: Path) -> None:
     text = vendor_tsv(receipt)
     assert text.startswith("# ttfs_clock ")
     assert "\tttfs_p50_s\t" in text
+    assert "\tttfs_p50_across_mean_s\t" in text
+    assert "\twer_across_mean\t" in text
+    assert "\tdeletions_from_missing_transcript\t" in text
     assert text.count("\n") == 3
+
+
+def test_chunk_ms_splits_a_frontier_and_cadence_does_not(
+    tmp_path: Path,
+) -> None:
+    base = _receipt(tmp_path)
+    other_chunk = copy.deepcopy(base)
+    other_chunk["resolved_config"]["workload"]["chunk_ms"] = 80
+    other_cadence = _point(base, 12, 0.2, 0.5, cadence_ms=80)
+    split = frontier_report([base, other_chunk], ["base", "chunk"])
+    assert len(split["series"]) == 2
+    joined = frontier_report([base, other_cadence], ["base", "cadence"])
+    assert len(joined["series"]) == 1
 
 
 def test_vendor_tsv_refuses_a_mixed_population(tmp_path: Path) -> None:
@@ -117,6 +138,7 @@ def test_frontier_marks_the_pareto_edge_and_keeps_gpus_apart(
         _point(base, 32, 0.15, 0.9),
         _point(base, 2, None, 0.1),
         _point(base, 8, 0.1, 0.4, gpu_name="H100"),
+        _point(base, 64, 0.5, 2.0, cadence_ms=160),
     ]
     report = frontier_report(
         points, [f"p{index}" for index in range(len(points))]
@@ -134,6 +156,7 @@ def test_frontier_marks_the_pareto_edge_and_keeps_gpus_apart(
     assert "dominated" in by_frames[32]["findings"]
     assert by_frames[2]["on_pareto_edge"] is False
     assert "missing_measure" in by_frames[2]["findings"]
+    assert by_frames[64]["cadence_ms"] == 160
     assert 2 not in by_frames[4]["dominated_by"]
     other = report["series"][1]["points"][0]
     assert other["lookahead_frames"] == 8

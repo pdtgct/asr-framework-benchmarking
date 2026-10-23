@@ -65,6 +65,21 @@ class SessionRequest:
     #: Transmit in real time (one ``chunk_ms`` of audio per ``chunk_ms``)
     #: rather than as fast as the transport accepts.
     pace: bool
+    #: Language requested from the server. ``None`` means unspecified.
+    language: str | None = None
+    #: Ask the server to punctuate.
+    punctuation: bool = False
+    #: Ask the server to diarize.
+    diarization: bool = False
+    #: Ask the server for interim hypotheses.
+    interim_results: bool = True
+    #: Transcript shape requested from the server.
+    transcript_policy: str = "final-and-interims"
+    #: Client-declared lookahead for this session, in frames.
+    lookahead_frames: int | None = None
+    #: Workload mode, ``streaming`` or ``offline``. Distinct from
+    #: :attr:`mode`, which is the realtime lifecycle probe.
+    workload_mode: str = "streaming"
 
 
 @dataclass
@@ -117,8 +132,8 @@ class SessionOutcome:
     #: violations cannot be computed from :attr:`interim_count` alone.
     interim_texts: list[str] | None = None
     #: Set when the adapter itself decided the session timed out. Reducers
-    #: also honor ``protocol_extras["timed_out"]`` so adapters that only
-    #: set that flag stay in the timed-out denominator.
+    #: read this field. A protocol that also stores the flag under
+    #: ``protocol_extras`` must copy it here; the extra is residue.
     timed_out: bool = False
     #: Public protocol error code, when the server named one.
     error_code: str | None = None
@@ -126,6 +141,9 @@ class SessionOutcome:
     #: Outcome accounting is derived from the fields above; this label is
     #: recorded, and a count is taken when it says the lane was unavailable.
     terminal_status: str = ""
+    #: Exception or timeout text. Reducers read this field. Protocol
+    #: residue may still echo it under ``protocol_extras``.
+    error_detail: str | None = None
     #: Clock for :attr:`final_latency_s`. Empty means the adapter did not
     #: name one; reducers then attribute :data:`FINALIZATION_CLOCK` and
     #: say they did so.

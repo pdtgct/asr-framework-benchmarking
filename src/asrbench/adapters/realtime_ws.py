@@ -45,6 +45,21 @@ from asrbench.outcome import (
     SessionRequest,
 )
 
+
+def _mirror_failure(outcome: SessionOutcome) -> None:
+    """Copy timeout and exception residue onto the typed outcome fields.
+
+    Reducers read ``timed_out`` and ``error_detail``. The extras stay as
+    protocol residue.
+    """
+    extras = outcome.protocol_extras
+    if extras.get("timed_out") is True:
+        outcome.timed_out = True
+    detail = extras.get("exception")
+    if isinstance(detail, str):
+        outcome.error_detail = detail
+
+
 #: Modes that are expected to yield a final transcript.
 TRANSCRIBING_MODES = frozenset({"full", "late-start"})
 
@@ -257,6 +272,7 @@ class RealtimeWebSocketAdapter:
                 if not updated.is_set():
                     reader.cancel()
                     await asyncio.gather(reader, return_exceptions=True)
+                    _mirror_failure(outcome)
                     return outcome
                 if admission_barrier is not None:
                     _progress(progress_callback, label, "barrier.waiting")
@@ -322,4 +338,5 @@ class RealtimeWebSocketAdapter:
                 error_type=type(error).__name__,
             )
 
+        _mirror_failure(outcome)
         return outcome

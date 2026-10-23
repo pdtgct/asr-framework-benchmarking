@@ -305,9 +305,9 @@ def score_texts(reference: str, hypothesis: str, policy: str) -> EditScore:
 
     Args:
         reference: Reference text. Empty is a real reference.
-        hypothesis: Hypothesis text. Empty counts as an empty hypothesis,
-            which is how a session with no transcript stays in the
-            denominator.
+        hypothesis: Hypothesis text. An empty string is a real empty
+            hypothesis and is aligned. A missing transcript is not
+            passed here.
         policy: Named normalization policy.
 
     Returns:

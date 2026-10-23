@@ -6,11 +6,10 @@ the same work and report a WER delta that is the reference, not the
 server. It excludes the lookahead millisecond label, clip path, licence
 text, and every run-observation field.
 
-The comparison key is the four-component hash from the design. Software
-identity carries the normalization policy, the percentile method, and the
-lookahead-identity policy so those are not pooled silently. They are not
-part of the workload fingerprint: toggling them does not change the work
-offered to the server.
+The comparison key hashes four hard components. Warn-only fields are
+stored beside the key and do not refuse. ``transport_options`` stay hard
+because they change what the adapter sends. Git commit is warn-only and
+is read from this package's repository, not the caller's directory.
 """
 
 from __future__ import annotations
@@ -18,6 +17,12 @@ from __future__ import annotations
 from typing import Any
 
 from asrbench.canonical import fingerprint, join_components, sha256_text
+from asrbench.definitions import (
+    GPU_IDENTITY_CLIENT_PROBE,
+    GPU_IDENTITY_SERVER_DECLARED,
+    MEASUREMENT_SEMANTICS_VERSION,
+    SCHEMA_VERSION,
+)
 from asrbench.spec import (
     PopulationEntry,
     ResolvedConfig,
@@ -26,8 +31,9 @@ from asrbench.spec import (
     WorkloadSpec,
 )
 
-#: Fields the comparison key does not cover. The schema reference quotes
-#: this tuple. Tests lock the behavior; this list is what a reader sees.
+#: Fields the hard comparison key does not cover. The schema reference
+#: quotes this tuple. Warn-only fields are listed here as well: they are
+#: compared and reported, and a mismatch does not refuse.
 COMPARISON_EXCLUSIONS: tuple[str, ...] = (
     "run_id",
     "started_at",
@@ -40,10 +46,23 @@ COMPARISON_EXCLUSIONS: tuple[str, ...] = (
     "workload.clip.licence",
     "workload.clip.attribution",
     "workload.clip.note",
-    "probe.hardware.hostname",
+    "identity.warn.driver_version",
+    "identity.warn.python_version",
+    "identity.warn.git_commit",
+    "identity.warn.git_dirty",
+    "identity.warn.endpoint_url",
+    "identity.warn.tls_verify",
+    "identity.warn.auth_env",
+    "identity.warn.package_version",
+    "identity.warn.lookahead_identity_policy",
+    "identity.warn.cpu_model",
+    "identity.warn.logical_cpu_count",
+    "identity.warn.system",
+    "identity.warn.architecture",
+    "identity.warn.hostname",
+    "identity.warn.probe_status",
     "probe.hardware.gpu_uuids",
     "probe.hardware.collected_at",
-    "probe.software.git_dirty",
     "secrets.set",
     "raw outcomes and trial aggregates",
 )
@@ -81,37 +100,44 @@ def _population_material(
 def workload_material(
     workload: WorkloadSpec,
     *,
-    blank_lookahead: bool = False,
+    blank_operating_point: bool = False,
     blank_lanes: bool = False,
+    blank_rate: bool = False,
 ) -> dict[str, Any]:
     """Return the structure the workload fingerprint hashes.
 
-    The lookahead-identity policy is not in this structure. It lives on
-    software identity, so switching policies does not pretend the offered
-    work changed, and compare still refuses to pool the two policies.
+    The lookahead-identity policy is not in this structure. It is
+    warn-only, so switching the unused policy does not refuse.
 
     Args:
         workload: Offered work.
-        blank_lookahead: When true, frame counts are nulled. The frontier
-            groups on that fingerprint so two lookaheads of one setup
-            share a series.
+        blank_operating_point: When true, frame counts and cadences are
+            nulled. The frontier groups on that fingerprint so one
+            lookahead sweep, including the cadence that sets lookahead,
+            shares a series. ``chunk_ms`` stays: it is the client's
+            transmit size, not the encoder lookahead.
         blank_lanes: When true, lane counts are nulled. The sustained-
             streams projection groups on that fingerprint.
+        blank_rate: When true, ``rate_rps`` is nulled so a later
+            offered-load sweep can share a capacity series.
 
     Returns:
         A JSON-ish dict. Millisecond labels and paths are absent.
     """
-    frames = None if blank_lookahead else workload.lookahead_frames
+    frames = None if blank_operating_point else workload.lookahead_frames
+    cadence = None if blank_operating_point else workload.cadence_ms
     lanes = None if blank_lanes else workload.lanes
+    rate = None if blank_rate else workload.rate_rps
     population: list[dict[str, Any]] = []
     for entry in _population_material(workload.population):
-        if blank_lookahead:
+        if blank_operating_point:
             entry["lookahead_frames"] = None
+            entry["cadence_ms"] = None
         if blank_lanes:
             entry["lanes"] = None
         population.append(entry)
     return {
-        "cadence_ms": workload.cadence_ms,
+        "cadence_ms": cadence,
         "chunk_ms": workload.chunk_ms,
         "clip_digest": workload.clip.digest,
         "clip_duration_s": workload.clip.duration_s,
@@ -124,12 +150,11 @@ def workload_material(
         "lanes": lanes,
         "language": workload.language,
         "lookahead_frames": frames,
-        "lookahead_frames_source": "client_declared",
         "mode": workload.mode,
         "pacing": workload.pacing,
         "population": population,
         "punctuation": workload.punctuation,
-        "rate_rps": workload.rate_rps,
+        "rate_rps": rate,
         "reference_sha256": reference_sha256(workload.reference_transcript),
         "seed": workload.seed,
         "timeout_s": workload.timeout_s,
@@ -196,11 +221,28 @@ def observation_fingerprint(config: ResolvedConfig) -> str:
     return fingerprint(observation_material(config.run))
 
 
-def target_identity(target: TargetSpec) -> dict[str, Any]:
-    """Return the target half of the comparison key.
+def server_gpu_declared(target: TargetSpec) -> bool:
+    """Return whether the target spec names a server GPU.
 
-    The auth variable's name is included. Whether it was set, and the
-    value, are not.
+    Args:
+        target: The target spec.
+
+    Returns:
+        True when any server GPU field is set. Those fields are then
+        the hard GPU identity. A count of zero is a declaration.
+    """
+    return (
+        target.server_gpu_name is not None
+        or target.server_gpu_count is not None
+        or target.server_gpu_memory_mib is not None
+    )
+
+
+def target_identity(target: TargetSpec) -> dict[str, Any]:
+    """Return the hard target identity.
+
+    Endpoint URL, TLS, and the auth variable name are warn-only.
+    ``transport_options`` stay here because they change adapter behavior.
 
     Args:
         target: The target spec.
@@ -209,93 +251,186 @@ def target_identity(target: TargetSpec) -> dict[str, Any]:
         A JSON-ish dict.
     """
     return {
-        "auth_env": target.auth_env,
-        "endpoint_url": target.endpoint_url,
         "model": target.model,
-        "tls_verify": target.tls_verify,
+        "server_version": target.server_version,
         "transport": target.transport,
-        "transport_options": target.transport_options,
+        "transport_options": dict(target.transport_options),
     }
 
 
 def software_identity(
     *,
-    package_version: str,
-    python_version: str,
-    git_commit: str,
     adapter: str,
-    lookahead_identity_policy: str,
     normalization_policy: str,
     percentile_method: str,
+    schema_version: str = SCHEMA_VERSION,
 ) -> dict[str, Any]:
-    """Return the software half of the comparison key.
+    """Return the hard software identity.
 
-    Git dirty state is not included: an uncommitted edit does not by
-    itself change the commit the key names, and the probe records the
-    dirty bit separately. The normalization policy and the percentile
-    method are included so a WER or a percentile from a different named
-    policy is not compared as the same software result.
+    Git commit, the Python version, the package version, and the
+    lookahead-identity policy are warn-only. ``schema_version`` and
+    :data:`~asrbench.definitions.MEASUREMENT_SEMANTICS_VERSION` are what
+    a comparison refuses on when the measurement itself changed.
 
     Args:
-        package_version: ``asrbench`` version string.
-        python_version: Interpreter ``major.minor.micro``.
-        git_commit: Hex commit, or ``unknown``.
         adapter: Adapter ``name``.
-        lookahead_identity_policy: Named lookahead policy.
         normalization_policy: Named WER policy.
         percentile_method: Named percentile policy.
+        schema_version: Receipt schema string. Receipt build uses the
+            package constant. Compare uses the string the receipt stored.
 
     Returns:
         A JSON-ish dict.
     """
     return {
         "adapter": adapter,
-        "git_commit": git_commit,
-        "lookahead_identity_policy": lookahead_identity_policy,
+        "measurement_semantics_version": MEASUREMENT_SEMANTICS_VERSION,
         "normalization_policy": normalization_policy,
         "package": "asrbench",
-        "package_version": package_version,
         "percentile_method": percentile_method,
-        "python_version": python_version,
+        "schema_version": schema_version,
     }
 
 
 def hardware_identity(
     *,
+    gpu_name: str | None,
+    gpu_count: int | None,
+    gpu_memory_mib: int | None,
+    gpu_identity_source: str,
+) -> dict[str, Any]:
+    """Return the hard hardware identity.
+
+    Args:
+        gpu_name: Server GPU name, or the client probe's name.
+        gpu_count: How many GPUs that source reported.
+        gpu_memory_mib: Minimum total memory in MiB, or ``None``.
+        gpu_identity_source: ``server_declared`` or ``client_probe``.
+
+    Returns:
+        A JSON-ish dict. Driver version and client CPU are not here.
+    """
+    return {
+        "gpu_count": gpu_count,
+        "gpu_identity_source": gpu_identity_source,
+        "gpu_memory_mib": gpu_memory_mib,
+        "gpu_name": gpu_name,
+    }
+
+
+def hard_hardware(
+    target: TargetSpec,
+    *,
+    client_gpu_name: str | None,
+    client_gpu_count: int | None,
+    client_gpu_memory_mib: int | None,
+) -> dict[str, Any]:
+    """Choose server-declared GPU identity, or the labelled client probe.
+
+    Args:
+        target: Target spec. Server GPU fields win when any is set.
+        client_gpu_name: Client probe GPU name.
+        client_gpu_count: Client probe GPU count.
+        client_gpu_memory_mib: Client probe minimum memory.
+
+    Returns:
+        The hard hardware identity.
+    """
+    if server_gpu_declared(target):
+        return hardware_identity(
+            gpu_name=target.server_gpu_name,
+            gpu_count=target.server_gpu_count,
+            gpu_memory_mib=target.server_gpu_memory_mib,
+            gpu_identity_source=GPU_IDENTITY_SERVER_DECLARED,
+        )
+    return hardware_identity(
+        gpu_name=client_gpu_name,
+        gpu_count=client_gpu_count,
+        gpu_memory_mib=client_gpu_memory_mib,
+        gpu_identity_source=GPU_IDENTITY_CLIENT_PROBE,
+    )
+
+
+def warn_identity(
+    *,
+    endpoint_url: str,
+    tls_verify: bool,
+    auth_env: str | None,
+    lookahead_identity_policy: str,
+    package_version: str,
+    python_version: str,
+    git_commit: str,
+    git_dirty: bool,
+    driver_version: str | None,
+    driver_version_source: str,
     system: str,
     architecture: str,
     cpu_model: str | None,
     logical_cpu_count: int | None,
-    gpu_name: str | None,
-    gpu_count: int | None,
-    gpu_memory_mib: int | None,
-    driver_version: str | None,
+    hostname: str | None,
+    probe_status: str | None,
 ) -> dict[str, Any]:
-    """Return the hardware half of the comparison key.
+    """Return fields that are compared and do not refuse.
 
     Args:
-        system: ``platform.system()`` value.
-        architecture: ``platform.machine()`` value.
-        cpu_model: A model string, or ``None`` when it could not be read.
-        logical_cpu_count: Logical CPUs, or ``None``.
-        gpu_name: Common GPU model from nvidia-smi, or ``None``.
-        gpu_count: How many GPUs the probe saw, or ``None``.
-        gpu_memory_mib: Minimum total memory in MiB, or ``None``.
-        driver_version: Driver version, or ``None``.
+        endpoint_url: Server URL. A redeploy at the same URL is not
+            caught here; server version is the hard field for that.
+        tls_verify: Whether the client verified TLS.
+        auth_env: Auth variable name. The value is never included.
+        lookahead_identity_policy: Named lookahead policy.
+        package_version: ``asrbench`` version string.
+        python_version: Interpreter ``major.minor.micro``.
+        git_commit: Hex commit of this package's repository, or
+            ``unknown``.
+        git_dirty: Whether that worktree had uncommitted changes.
+        driver_version: Server driver when declared, else the client
+            probe's driver.
+        driver_version_source: Which of those two was used.
+        system: Client ``platform.system()`` value.
+        architecture: Client ``platform.machine()`` value.
+        cpu_model: Client CPU model, or ``None``.
+        logical_cpu_count: Client logical CPUs, or ``None``.
+        hostname: Client hostname. Warn-only, and still not a secret.
+        probe_status: Client GPU probe status.
 
     Returns:
-        A JSON-ish dict. Hostname and GPU UUIDs are not here.
+        A JSON-ish dict.
     """
     return {
         "architecture": architecture,
+        "auth_env": auth_env,
         "cpu_model": cpu_model,
         "driver_version": driver_version,
-        "gpu_count": gpu_count,
-        "gpu_memory_mib": gpu_memory_mib,
-        "gpu_name": gpu_name,
+        "driver_version_source": driver_version_source,
+        "endpoint_url": endpoint_url,
+        "git_commit": git_commit,
+        "git_dirty": git_dirty,
+        "hostname": hostname,
+        "lookahead_identity_policy": lookahead_identity_policy,
         "logical_cpu_count": logical_cpu_count,
+        "package_version": package_version,
+        "probe_status": probe_status,
+        "python_version": python_version,
         "system": system,
+        "tls_verify": tls_verify,
     }
+
+
+def driver_for_warn(
+    target: TargetSpec, client_driver: str | None
+) -> tuple[str | None, str]:
+    """Return the warn-only driver string and which source it came from.
+
+    Args:
+        target: Target spec. ``server_driver_version`` wins when set.
+        client_driver: Driver string from the client probe.
+
+    Returns:
+        The version and ``server_declared`` or ``client_probe``.
+    """
+    if target.server_driver_version is not None:
+        return target.server_driver_version, GPU_IDENTITY_SERVER_DECLARED
+    return client_driver, GPU_IDENTITY_CLIENT_PROBE
 
 
 def comparison_key(
@@ -305,7 +440,7 @@ def comparison_key(
     software: dict[str, Any],
     hardware: dict[str, Any],
 ) -> str:
-    """Hash the four comparison components in design order.
+    """Hash the four hard comparison components in design order.
 
     Args:
         workload_fp: The workload fingerprint string.
@@ -319,20 +454,34 @@ def comparison_key(
     return join_components([workload_fp, target, software, hardware])
 
 
-def frontier_group_key(
-    config: ResolvedConfig, software: dict[str, Any], hardware: dict[str, Any]
+def group_key(
+    config: ResolvedConfig,
+    software: dict[str, Any],
+    hardware: dict[str, Any],
+    *,
+    blank_operating_point: bool = False,
+    blank_lanes: bool = False,
+    blank_rate: bool = False,
 ) -> str:
-    """Comparison key with lookahead frame counts removed.
+    """Comparison key with selected workload axes removed.
 
     Args:
         config: Resolved config.
-        software: Software identity.
-        hardware: Hardware identity.
+        software: Hard software identity.
+        hardware: Hard hardware identity.
+        blank_operating_point: Null lookahead frames and cadence.
+        blank_lanes: Null lane counts.
+        blank_rate: Null ``rate_rps``.
 
     Returns:
-        A prefixed digest shared by receipts that differ only in lookahead.
+        A prefixed digest.
     """
-    material = workload_material(config.workload, blank_lookahead=True)
+    material = workload_material(
+        config.workload,
+        blank_operating_point=blank_operating_point,
+        blank_lanes=blank_lanes,
+        blank_rate=blank_rate,
+    )
     return join_components(
         [
             fingerprint(material),
@@ -343,26 +492,48 @@ def frontier_group_key(
     )
 
 
-def capacity_group_key(
+def frontier_group_key(
     config: ResolvedConfig, software: dict[str, Any], hardware: dict[str, Any]
 ) -> str:
-    """Comparison key with lane counts removed.
+    """Comparison key with lookahead frames and cadence removed.
+
+    ``chunk_ms`` remains. It is the transmit size, not the operating
+    point a cadence sweep moves.
 
     Args:
         config: Resolved config.
-        software: Software identity.
-        hardware: Hardware identity.
+        software: Hard software identity.
+        hardware: Hard hardware identity.
+
+    Returns:
+        A prefixed digest shared by one lookahead sweep.
+    """
+    return group_key(
+        config,
+        software,
+        hardware,
+        blank_operating_point=True,
+    )
+
+
+def capacity_group_key(
+    config: ResolvedConfig, software: dict[str, Any], hardware: dict[str, Any]
+) -> str:
+    """Comparison key with lane counts and ``rate_rps`` removed.
+
+    Args:
+        config: Resolved config.
+        software: Hard software identity.
+        hardware: Hard hardware identity.
 
     Returns:
         A prefixed digest shared by a concurrency sweep of one operating
         point.
     """
-    material = workload_material(config.workload, blank_lanes=True)
-    return join_components(
-        [
-            fingerprint(material),
-            target_identity(config.target),
-            software,
-            hardware,
-        ]
+    return group_key(
+        config,
+        software,
+        hardware,
+        blank_lanes=True,
+        blank_rate=True,
     )

@@ -20,14 +20,19 @@ Collapsing them into one score hides exactly the trade a reader needs to see.
 | Metric | Definition |
 |---|---|
 | **WER** | Word error rate against a reference, under a **named** normalization policy |
-| **Substitutions / deletions / insertions** | The three WER components, reported separately |
+| **Substitutions / deletions / insertions** | Alignment components, reported separately from `deletions_from_missing_transcript` |
 | **CER** | Character error rate, for scripts and conditions where word boundaries mislead |
 | **Per-utterance distribution** | Not just the corpus aggregate — a mean hides a handful of catastrophic streams |
 
-Breaking WER into S/D/I is not decoration. Deletions rising under load means the
-server is dropping audio; insertions rising means it is hallucinating through
-silence; substitutions rising means it is simply mishearing. One aggregate number
-cannot distinguish a capacity bug from an acoustic one.
+Breaking WER into S/D/I is not decoration. Alignment deletions rising under load
+means the server returned a shorter transcript; insertions rising means it is
+hallucinating through silence; substitutions rising means it is simply
+mishearing. A session that returns no transcript is
+`deletions_from_missing_transcript` and `n_failed`, counted in the micro
+numerator and denominator, and is not an alignment deletion, so a timeout is
+not read as dropped audio. The spelling is `WER_DEFINITION` and
+`SDI_DEFINITION`. One aggregate number cannot distinguish a capacity bug from
+an acoustic one.
 
 **Normalization is part of the metric, not a preprocessing step.** Three comparisons
 exist and they must not share a normalizer:
@@ -80,14 +85,15 @@ the theoretical floor leaves what the implementation added.
 
 | Metric | Definition |
 |---|---|
-| **Prefix violations** | Count of interims that are not a prefix of the following interim or of the final |
-| **Revision rate** | Fraction of emitted tokens later retracted or rewritten |
+| **Prefix violations** | `PREFIX_VIOLATION_DEFINITION`: each interim is checked against the next interim and against the final, so one interim can count twice |
+| **Revision rate** | `REVISION_RATE_DEFINITION`: revised tokens over newly emitted tokens. The first interim contributes every token; each later interim contributes only tokens past the previous common prefix |
 | **Interim cadence conformance** | Distribution of inter-interim intervals against the configured cadence |
 
-For an append-only streaming decoder, **every interim must be a prefix of the next
-and of the final**. This is the strongest correctness property a streaming ASR client
-can check without a reference transcript: it needs no ground truth, it is exact
-rather than statistical, and a violation is unambiguously a server defect.
+For an append-only streaming decoder, **each interim is checked as a raw prefix
+of the next interim and of the final**. One interim can fail both checks. This
+is the strongest correctness property a streaming ASR client can check without
+a reference transcript: it needs no ground truth, it is exact rather than
+statistical, and a violation is unambiguously a server defect.
 
 A caption that rewrites itself is a bad caption even at a perfect WER, which is why
 revision rate is reported rather than averaged away.
@@ -141,9 +147,12 @@ lookahead**.
 
 Two consequences for reporting:
 
-- **The lookahead belongs inside the comparison key.** Two receipts at different
-  lookaheads describe different operating points of the model, so pooling their WER
-  is as wrong as pooling across hardware.
+- **The lookahead frame count and the cadence that sets it belong inside the
+  comparison key.** Two receipts at different lookaheads describe different
+  operating points of the model, so pooling their WER is as wrong as pooling
+  across hardware. The frontier groups a sweep by removing both, so one cadence
+  sweep is one series. `chunk_ms` is the client's transmit size and stays in
+  that group key.
 - **Identify an operating point by lookahead frame count**, and carry the millisecond
   label beside it. Vendors disagree on the millisecond convention — some count
   lookahead alone, some count lookahead plus the emitted frame — so two tables can
@@ -160,10 +169,11 @@ tabular figures with aligned digits, distributions rather than bare means, and e
 number carrying its denominator and its unit.
 
 The primary panel is the **frontier**: accuracy against measured latency, one point
-per lookahead, with the Pareto edge marked. It answers "which operating point should
-I run?" directly, where a cadence-by-concurrency matrix leaves the reader to
-cross-reference two tables. Concurrency scaling, latency distributions, and the
-outcome-accounting breakdown are the supporting panels.
+per lookahead and the cadence that sets it, with the Pareto edge marked. It
+answers "which operating point should I run?" directly, where a
+cadence-by-concurrency matrix leaves the reader to cross-reference two tables.
+Concurrency scaling, latency distributions, and the outcome-accounting breakdown
+are the supporting panels.
 
 State encodes in form as well as number — a cell that fails the conjunction should
 read as failed at a glance, and it should be visible *which* clause it failed.

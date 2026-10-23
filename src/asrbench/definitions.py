@@ -26,6 +26,18 @@ TTFS_CLOCK = NATIVE_LATENCY_CLOCK
 
 SCHEMA_VERSION = "asrbench-receipt/1"
 
+#: Bumped when reducer or comparison-key semantics change. Replaces the
+#: git commit in the hard comparison key, so a docs-only commit does not
+#: refuse a comparison. Git commit stays on the receipt as warn-only.
+MEASUREMENT_SEMANTICS_VERSION = "1"
+
+GPU_IDENTITY_SERVER_DECLARED = "server_declared"
+GPU_IDENTITY_CLIENT_PROBE = "client_probe"
+
+#: Seconds added after ``timeout_s`` and, when pacing, the clip duration.
+#: The adapter owns ``timeout_s``. This grace is only the hang guard.
+RUNNER_HANG_GRACE_S = 0.25
+
 MODE_STREAMING = "streaming"
 MODE_OFFLINE = "offline"
 
@@ -100,12 +112,16 @@ PER_UTTERANCE_WER_DEFINITION = (
     "without a defined rate stay in n_total."
 )
 WER_DEFINITION = (
-    "Word error rate (substitutions + deletions + insertions) / reference "
-    "words, micro-averaged, under the named normalization policy. A "
-    "session with a reference and no transcript is an empty hypothesis "
-    "and stays in the denominator. A session with no reference stays in "
-    "n_total and is absent from n_with_measure. Undefined when the "
-    "reference-word denominator is zero and any edit remains."
+    "Word error rate (substitutions + alignment deletions + insertions + "
+    "deletions_from_missing_transcript) / reference words, "
+    "micro-averaged, under the named normalization policy. A session "
+    "with a reference and no transcript stays in the denominator as "
+    "deletions_from_missing_transcript and is not an alignment deletion. "
+    "n_failed counts those sessions. A received empty transcript is an "
+    "empty hypothesis and its deletions are alignment deletions. A "
+    "session with no reference stays in n_total and is absent from "
+    "n_with_measure. Undefined when the reference-word denominator is "
+    "zero and any edit remains."
 )
 CER_DEFINITION = (
     "Character error rate under the same named normalization policy as "
@@ -113,9 +129,10 @@ CER_DEFINITION = (
     "interchangeable across policies."
 )
 SDI_DEFINITION = (
-    "Substitutions, deletions, and insertions counted separately. The "
-    "backtrace is deterministic: on a cost tie it prefers a "
-    "substitution, then a deletion, then an insertion."
+    "Alignment substitutions, deletions, and insertions counted "
+    "separately from deletions_from_missing_transcript. The backtrace "
+    "is deterministic: on a cost tie it prefers a substitution, then a "
+    "deletion, then an insertion."
 )
 ORACLE_NORMALIZATION_DEFINITION = (
     "engine_vs_own_oracle compares raw text after whitespace "
@@ -135,17 +152,20 @@ OTHER_SERVER_NORMALIZATION_DEFINITION = (
     "relabeled as that policy."
 )
 PREFIX_VIOLATION_DEFINITION = (
-    "Count of recorded interim hypotheses that are not a raw string "
-    "prefix of the next interim, plus recorded interim hypotheses that "
-    "are not a raw string prefix of the final. No normalization. An "
-    "interim count without interim text is not this measure."
+    "Count of prefix checks that fail, with no normalization. Each "
+    "recorded interim is checked against the next interim, and each "
+    "recorded interim is checked against the final. One interim can "
+    "contribute twice. An interim count without interim text is not "
+    "this measure."
 )
 REVISION_RATE_DEFINITION = (
-    "Whitespace tokens emitted in an interim that fall outside the "
-    "common token prefix of the following interim, or of the final for "
-    "the last interim, divided by whitespace tokens emitted. Not a word "
-    "error rate. Cross-cadence transcript agreement is not this metric "
-    "and is not a pass condition."
+    "Revised whitespace tokens divided by newly emitted whitespace "
+    "tokens. The first interim contributes every token; each later "
+    "interim contributes only tokens past the common token prefix of "
+    "the previous interim. A revised token falls outside the common "
+    "token prefix of the following interim, or of the final for the "
+    "last interim. Not a word error rate. Cross-cadence transcript "
+    "agreement is not this metric and is not a pass condition."
 )
 INTERIM_CADENCE_CLOCK = "client_monotonic/inter_interim_arrival_interval"
 INTERIM_CADENCE_DEFINITION = (
@@ -250,35 +270,54 @@ LOOKAHEAD_IDENTITY_DEFINITION = (
     "server_reported_when_present uses a server-reported frame count "
     "when an outcome carries one; none do yet, so the client count is "
     "used and server_reported_lookahead_frames is null. The policy name "
-    "is part of software identity, so the two policies are not pooled."
+    "is warn-only until an adapter reports a frame count, so naming the "
+    "unused policy does not refuse a comparison."
 )
 HARDWARE_IDENTITY_DEFINITION = (
-    "Hardware identity is system, architecture, cpu_model, "
-    "logical_cpu_count, gpu_name, gpu_count, gpu_memory_mib, and "
-    "driver_version. GPU fields come from nvidia-smi when that probe "
-    "runs and are null when it is absent or fails. The run does not "
-    "require a GPU. Hostname, GPU UUIDs, and the probe timestamp are on "
-    "the receipt and are not identity."
+    "The hard hardware identity is gpu_name, gpu_count, "
+    "gpu_memory_mib, and gpu_identity_source. Those GPU fields are the "
+    "server declaration when the target spec carries one, otherwise "
+    "the client nvidia-smi probe, and gpu_identity_source says which. "
+    "Driver version, client CPU, host, and probe status are warn-only "
+    "and are not this identity. The run does not require a GPU."
 )
 COMPARISON_KEY_DEFINITION = (
-    "sha256 of the canonical JSON texts of workload_fingerprint, "
-    "target_identity, software_identity, and hardware_identity, in that "
-    "order, joined by U+001F. Lookahead frame count is inside the "
-    "workload fingerprint. The lookahead millisecond label, output "
-    "paths, run id, timestamps, hostname, GPU UUIDs, git dirty bit, and "
-    "whether a secret variable was set are not."
+    "sha256 of the canonical JSON texts of the workload fingerprint, "
+    "the hard target identity, the hard software identity, and the hard "
+    "hardware identity, in that order, joined by U+001F. Lookahead "
+    "frame count is inside the workload fingerprint. The millisecond "
+    "label is not. Hard software identity includes normalization "
+    "policy, percentile method, SCHEMA_VERSION, and "
+    "MEASUREMENT_SEMANTICS_VERSION. Warn-only mismatches are listed "
+    "and do not refuse."
+)
+WARN_ONLY_COMPARISON_DEFINITION = (
+    "Warn-only mismatches are recorded and do not refuse: GPU driver "
+    "version, Python version, asrbench git commit and dirty bit, "
+    "endpoint_url, tls_verify, auth_env, package version, lookahead "
+    "identity policy, client CPU, host, and probe status. "
+    "transport_options stay in the hard target identity because they "
+    "change adapter behavior."
 )
 FRONTIER_DEFINITION = (
     "Accuracy against measured latency, one point per receipt, identified "
-    "by lookahead frame count. The millisecond label is carried beside "
-    "the point and is not the identity. Latency is pooled TTFS p50 and "
-    "accuracy is pooled micro WER, each under the clock and normalization "
-    "policy the receipt already names. The Pareto edge is the set of "
-    "points with no other point both faster and more accurate. A "
-    "dominated point is a finding, not a pass failure. Cross-cadence "
-    "transcript agreement is not computed. Points are grouped by "
-    "comparison identity with lookahead frame count removed, so different "
-    "hardware or models are not drawn on one edge."
+    "by lookahead frame count and the cadence that sets it. The "
+    "millisecond label is carried beside the point and is not the "
+    "identity. Latency is pooled TTFS p50 and accuracy is pooled micro "
+    "WER, each under the clock and normalization policy the receipt "
+    "already names. The Pareto edge is the set of points with no other "
+    "point both faster and more accurate. A dominated point is a "
+    "finding, not a pass failure. Cross-cadence transcript agreement is "
+    "not computed. Points are grouped by comparison identity with "
+    "lookahead frame count and cadence removed, so a lookahead sweep "
+    "that also changes cadence is one series, and different hardware "
+    "or models are not drawn on one edge."
+)
+RUNNER_HANG_GUARD_DEFINITION = (
+    "The runner hang guard waits timeout_s, plus the clip duration "
+    f"when pacing, plus {RUNNER_HANG_GRACE_S} seconds. The adapter owns "
+    "timeout_s and may return a partial outcome. The guard replaces "
+    "the outcome only when the adapter does not return."
 )
 VLLM_FORMAT_NOTE = (
     "Shaped like a vLLM serving-benchmark summary so a serving engineer "
@@ -297,6 +336,7 @@ LATENCY_METRIC_RESPONSE = "response_latency"
 RTFX_VALIDITY_UNQUALIFIED = "pacing_fidelity_unavailable"
 RTFX_VALIDITY_PACING_DISABLED = "pacing_disabled"
 RTFX_VALIDITY_NOT_APPLICABLE = "not_this_mode"
+RTFX_VALIDITY_SIMULATED = "simulated"
 DIGEST_COVERS_PCM16 = "pcm16_payload"
 
 

@@ -149,6 +149,7 @@ activemq-data/
 
 # Generated while docs/receipt-schema.md is rebuilt. Not a corpus.
 .asrbench-schema-clip/
+golden-clip/
 
 # Environments
 .env

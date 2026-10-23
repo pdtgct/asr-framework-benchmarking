@@ -10,6 +10,7 @@ from asrbench.identity import (
     NvidiaSmiProbe,
     collect_hardware,
     git_commit,
+    package_repo,
     parse_nvidia_smi_csv,
 )
 
@@ -54,17 +55,15 @@ def test_missing_nvidia_smi_is_absent_not_fatal() -> None:
     assert record.probe_status == "absent"
     assert record.hostname == "injected-host"
     identity = hardware_identity(
-        system=record.system,
-        architecture=record.architecture,
-        cpu_model=record.cpu_model,
-        logical_cpu_count=record.logical_cpu_count,
         gpu_name=record.gpu_name,
         gpu_count=record.gpu_count,
         gpu_memory_mib=record.gpu_memory_mib,
-        driver_version=record.driver_version,
+        gpu_identity_source="client_probe",
     )
     assert "hostname" not in identity
     assert "gpu_uuids" not in identity
+    assert "driver_version" not in identity
+    assert identity["gpu_identity_source"] == "client_probe"
 
 
 def test_distinct_gpu_names_are_sorted_into_one_identity_field() -> None:
@@ -88,6 +87,8 @@ def test_distinct_gpu_names_are_sorted_into_one_identity_field() -> None:
 
 
 def test_git_commit_uses_the_injected_runner() -> None:
+    seen: list[str | None] = []
+
     def runner(
         argv: list[str],
         *,
@@ -97,7 +98,8 @@ def test_git_commit_uses_the_injected_runner() -> None:
         timeout: float,
         cwd: str | None,
     ) -> subprocess.CompletedProcess[str]:
-        del check, capture_output, text, timeout, cwd
+        del check, capture_output, text, timeout
+        seen.append(cwd)
         if argv == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(argv, 0, stdout="abc123\n")
         return subprocess.CompletedProcess(argv, 0, stdout=" M file\n")
@@ -106,6 +108,9 @@ def test_git_commit_uses_the_injected_runner() -> None:
     assert state.commit == "abc123"
     assert state.dirty is True
     assert state.available is True
+    repo = package_repo()
+    assert repo is not None
+    assert seen == [str(repo), str(repo)]
 
 
 def test_git_failure_is_unknown() -> None:

@@ -7,7 +7,9 @@ is in :mod:`asrbench.config` and produces one :class:`ResolvedConfig`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from asrbench.audio import SAMPLE_RATE
@@ -107,12 +109,24 @@ class WorkloadSpec:
     population: tuple[PopulationEntry, ...] = ()
 
 
+def _default_transport_options() -> Mapping[str, Any]:
+    """Return the mock transport options, frozen against later mutation."""
+    return MappingProxyType(
+        {
+            "interim_every_chunks": 2,
+            "transcript": DEFAULT_REFERENCE,
+        }
+    )
+
+
 @dataclass(frozen=True)
 class TargetSpec:
     """Where the work is sent. Identity, not offered-work fingerprint.
 
     ``auth_env`` is the name of an environment variable. The value is
-    never stored on this object.
+    never stored on this object. Server GPU and version fields are the
+    hard hardware and software identity when present. When they are
+    absent, the client probe is the fallback and is labelled as such.
     """
 
     endpoint_url: str = "mock://local"
@@ -120,12 +134,22 @@ class TargetSpec:
     model: str = "mock-asr"
     auth_env: str | None = None
     tls_verify: bool = False
-    transport_options: dict[str, Any] = field(
-        default_factory=lambda: {
-            "interim_every_chunks": 2,
-            "transcript": DEFAULT_REFERENCE,
-        }
+    transport_options: Mapping[str, Any] = field(
+        default_factory=_default_transport_options
     )
+    server_version: str | None = None
+    server_gpu_name: str | None = None
+    server_gpu_count: int | None = None
+    server_gpu_memory_mib: int | None = None
+    server_driver_version: str | None = None
+
+    def __post_init__(self) -> None:
+        """Freeze transport options so a caller cannot mutate identity."""
+        object.__setattr__(
+            self,
+            "transport_options",
+            MappingProxyType(dict(self.transport_options)),
+        )
 
 
 @dataclass(frozen=True)
@@ -146,12 +170,33 @@ class RunSpec:
 
 
 @dataclass(frozen=True)
+class ReproductionOverride:
+    """One field this run changed relative to the receipt it reproduced.
+
+    Values are canonical JSON text so the record stays frozen and
+    printable. The output path is not included: a reproduction is
+    allowed to write a different file.
+    """
+
+    path: str
+    receipt: str
+    resolved: str
+
+
+@dataclass(frozen=True)
 class ResolvedConfig:
-    """One fully resolved run. Frozen, and free of secret values."""
+    """One fully resolved run. Frozen, and free of secret values.
+
+    ``reproduction_overrides`` is stripped from the receipt's
+    ``resolved_config`` and written on the receipt's ``reproduction``
+    object, so two reproductions that differ only by ``--out`` still
+    have equal resolved configs.
+    """
 
     workload: WorkloadSpec = field(default_factory=WorkloadSpec)
     target: TargetSpec = field(default_factory=TargetSpec)
     run: RunSpec = field(default_factory=RunSpec)
+    reproduction_overrides: tuple[ReproductionOverride, ...] = ()
 
 
 def default_config() -> ResolvedConfig:

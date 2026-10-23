@@ -1,5 +1,7 @@
 """Failures stay in every denominator, and unavailable metrics stay null."""
 
+import pytest
+
 from asrbench.definitions import (
     FINALIZATION_CLOCK,
     RESPONSE_LATENCY_CLOCK,
@@ -50,7 +52,8 @@ def test_failures_stay_in_the_population_and_the_audio_denominator() -> None:
         final_latency_s=None,
         response_latencies_s=[],
         interim_texts=None,
-        timed_out=False,
+        timed_out=True,
+        error_detail="TimeoutError: slow",
         protocol_extras={"timed_out": True, "exception": "TimeoutError: slow"},
     )
     errored = session(
@@ -88,9 +91,11 @@ def test_failures_stay_in_the_population_and_the_audio_denominator() -> None:
     wer = reduction["wer"]
     assert isinstance(wer, dict)
     assert wer["micro_wer"] == 0.75
-    assert wer["n_with_measure"] == 4
+    assert wer["n_with_measure"] == 2
     assert wer["n_total"] == 4
-    assert wer["deletions"] == 3
+    assert wer["deletions"] == 1
+    assert wer["deletions_from_missing_transcript"] == 2
+    assert wer["n_failed"] == 2
     audio = reduction["audio"]
     assert isinstance(audio, dict)
     assert audio["attempted_audio_s"] == 6.4
@@ -285,6 +290,84 @@ def test_completion_fraction_can_pass_when_steady_interval_cannot() -> None:
     assert isinstance(closed_goodput, dict)
     assert closed_goodput["availability"] == "unavailable"
     assert closed_goodput["per_second"] is None
+
+
+def test_protocol_residue_alone_is_not_a_timeout() -> None:
+    residue = session(
+        protocol_extras={"timed_out": True, "exception": "TimeoutError: slow"}
+    )
+    reduction = _reduce([residue])
+    counts = reduction["counts"]
+    assert isinstance(counts, dict)
+    assert counts["timed_out"] == 0
+    assert counts["errored"] == 0
+
+
+def test_revision_rate_uses_newly_emitted_tokens() -> None:
+    reduction = _reduce(
+        [
+            session(
+                transcript="a b c",
+                interim_texts=["a", "a x", "a b c"],
+            )
+        ]
+    )
+    stability = reduction["stability"]
+    assert isinstance(stability, dict)
+    revision = stability["revision_rate"]
+    assert isinstance(revision, dict)
+    assert revision["revised_tokens"] == 1
+    assert revision["emitted_tokens"] == 4
+    assert revision["rate"] == 0.25
+
+
+def test_one_interim_can_fail_both_prefix_checks() -> None:
+    reduction = _reduce(
+        [session(transcript="a c", interim_texts=["a b", "a c"])]
+    )
+    stability = reduction["stability"]
+    assert isinstance(stability, dict)
+    prefix = stability["prefix_violations"]
+    assert isinstance(prefix, dict)
+    assert prefix["count"] == 2
+
+
+def test_missing_transcript_is_not_an_alignment_deletion() -> None:
+    reduction = _reduce(
+        [
+            session(label="ok", transcript="hello"),
+            session(
+                label="empty",
+                transcript="",
+                interim_texts=[],
+            ),
+            session(
+                label="missing",
+                transcript=None,
+                ttfs_s=None,
+                final_latency_s=None,
+                response_latencies_s=[],
+                interim_texts=None,
+            ),
+        ]
+    )
+    wer = reduction["wer"]
+    assert isinstance(wer, dict)
+    assert wer["micro_wer"] == pytest.approx(2 / 3)
+    per = wer["per_utterance_wer"]
+    assert isinstance(per, dict)
+    assert per["mean"] == 0.5
+    assert wer["n_with_measure"] == 2
+    assert wer["n_failed"] == 1
+
+
+def test_non_finite_latency_is_a_measurement_error() -> None:
+    from asrbench.reducers import MeasurementError
+
+    with pytest.raises(MeasurementError):
+        _reduce([session(ttfs_s=float("nan"))])
+    with pytest.raises(MeasurementError):
+        _reduce([session(response_latencies_s=[float("inf")])])
 
 
 def test_native_clock_constants_travel_with_the_distribution() -> None:

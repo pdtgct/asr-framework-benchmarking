@@ -34,6 +34,7 @@ def session(
     terminal_status: str = "",
     protocol_errors: list[dict[str, object]] | None = None,
     protocol_extras: dict[str, object] | None = None,
+    error_detail: str | None = None,
     audio_duration_s: float = 1.6,
 ) -> SessionOutcome:
     """Build one outcome. Defaults are a successful one-word session."""
@@ -67,4 +68,5 @@ def session(
         terminal_status=terminal_status,
         protocol_errors=list(protocol_errors or []),
         protocol_extras=dict(protocol_extras or {}),
+        error_detail=error_detail,
     )

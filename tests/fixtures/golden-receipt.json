@@ -1,0 +1,954 @@
+{
+  "schema_version": "asrbench-receipt/1",
+  "run_id": "golden",
+  "started_at": "2026-01-01T00:00:00Z",
+  "finished_at": "2026-01-01T00:00:01Z",
+  "definitions": {
+    "AUDIO_DENOMINATOR_DEFINITION": "attempted_audio_s sums clip duration over every measured session, including failures. successful_audio_s sums clip duration over productive sessions only. Both are reported.",
+    "CER_DEFINITION": "Character error rate under the same named normalization policy as the accompanying WER, over the normalized utterance text. Not interchangeable across policies.",
+    "COMPARISON_KEY_DEFINITION": "sha256 of the canonical JSON texts of the workload fingerprint, the hard target identity, the hard software identity, and the hard hardware identity, in that order, joined by U+001F. Lookahead frame count is inside the workload fingerprint. The millisecond label is not. Hard software identity includes normalization policy, percentile method, SCHEMA_VERSION, and MEASUREMENT_SEMANTICS_VERSION. Warn-only mismatches are listed and do not refuse.",
+    "COMPLETION_FRACTION_DEFINITION": "Fraction of measured sessions that completed. A named policy a preset may select in place of the steady-interval condition. It is not that condition.",
+    "CORPUS_NORMALIZATION_DEFINITION": "corpus_reference applies full normalization: case-fold, strip control tags, strip punctuation, normalize English cardinals (en_cardinals_v1, 0 through 999, including the 'and' form), and collapse whitespace.",
+    "DEFAULT_LOOKAHEAD_IDENTITY_POLICY": "client_declared",
+    "DEFAULT_NORMALIZATION_POLICY": "engine_vs_own_oracle",
+    "DEFAULT_PERCENTILE_METHOD": "numpy_linear",
+    "DEFAULT_SUSTAINABILITY_POLICY": "steady_interval",
+    "DIGEST_COVERS_PCM16": "pcm16_payload",
+    "EMISSION_LAG_CLOCK": "client_monotonic/word_audio_end_to_first_appearance",
+    "EMISSION_LAG_DEFINITION": "A word's audio ending to that word's first appearance in any output. Requires construction-time ground truth: silence of an exact frame count between known utterances. Not inferred by a forced aligner or a voice-activity detector.",
+    "EMISSION_LAG_UNAVAILABLE_REASON": "no_construction_ground_truth",
+    "FINALIZATION_CLOCK": "client_monotonic/last_audio_sample_sent_to_final_result_received",
+    "FINALIZATION_DEFINITION": "Seconds from the last audio sample sent to the final result received, on the client monotonic clock.",
+    "FRONTIER_DEFINITION": "Accuracy against measured latency, one point per receipt, identified by lookahead frame count and the cadence that sets it. The millisecond label is carried beside the point and is not the identity. Latency is pooled TTFS p50 and accuracy is pooled micro WER, each under the clock and normalization policy the receipt already names. The Pareto edge is the set of points with no other point both faster and more accurate. A dominated point is a finding, not a pass failure. Cross-cadence transcript agreement is not computed. Points are grouped by comparison identity with lookahead frame count and cadence removed, so a lookahead sweep that also changes cadence is one series, and different hardware or models are not drawn on one edge.",
+    "GOODPUT_DEFINITION": "Measured sessions that simultaneously were admitted, produced a first partial, met the named latency SLO on that session's own samples, completed, and \u2014 when a reference was declared \u2014 scored within the accuracy tolerance, divided by the measured cell wall span in seconds. Not computed while the sustainability policy is unevaluable, so a missing steady interval cannot become a goodput.",
+    "GPU_IDENTITY_CLIENT_PROBE": "client_probe",
+    "GPU_IDENTITY_SERVER_DECLARED": "server_declared",
+    "HARDWARE_IDENTITY_DEFINITION": "The hard hardware identity is gpu_name, gpu_count, gpu_memory_mib, and gpu_identity_source. Those GPU fields are the server declaration when the target spec carries one, otherwise the client nvidia-smi probe, and gpu_identity_source says which. Driver version, client CPU, host, and probe status are warn-only and are not this identity. The run does not require a GPU.",
+    "HARDWARE_PROBE_NVIDIA_SMI": "nvidia-smi",
+    "INTERIM_CADENCE_CLOCK": "client_monotonic/inter_interim_arrival_interval",
+    "INTERIM_CADENCE_DEFINITION": "Distribution of inter-interim arrival intervals against the configured cadence. Unavailable until outcomes carry interim arrival timestamps.",
+    "INTERIM_CADENCE_UNAVAILABLE_REASON": "interim_arrival_timestamps_not_in_outcome",
+    "LAG_EXCESS_DEFINITION": "Emission lag minus the cadence's theoretical floor: what the implementation costs above what the configuration costs. Unavailable when emission lag is unavailable. Raw emission lag is not compared across cadences.",
+    "LAG_EXCESS_UNAVAILABLE_REASON": "emission_lag_unavailable",
+    "LANE_UNAVAILABLE_DEFINITION": "A session whose adapter set terminal_status to lane_unavailable: an entitled lane this process could not open. The session stays in the population. It is not a crash of the run.",
+    "LATENCY_METRIC_RESPONSE": "response_latency",
+    "LATENCY_METRIC_TTFS": "ttfs",
+    "LOOKAHEAD_IDENTITY_CLIENT_DECLARED": "client_declared",
+    "LOOKAHEAD_IDENTITY_DEFINITION": "An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is warn-only until an adapter reports a frame count, so naming the unused policy does not refuse a comparison.",
+    "LOOKAHEAD_IDENTITY_SERVER_REPORTED": "server_reported_when_present",
+    "MEASUREMENT_SEMANTICS_VERSION": "1",
+    "MODE_OFFLINE": "offline",
+    "MODE_STREAMING": "streaming",
+    "NATIVE_LATENCY_CLOCK": "client_monotonic/first_audio_append_to_nonempty_transcription_delta",
+    "NORMALIZATION_CORPUS_REFERENCE": "corpus_reference",
+    "NORMALIZATION_ENGINE_VS_OTHER_SERVER": "engine_vs_other_server",
+    "NORMALIZATION_ENGINE_VS_OWN_ORACLE": "engine_vs_own_oracle",
+    "OFFLINE_RTFX_DEFINITION": "Successfully transcribed audio seconds divided by the wall-clock span of an unpaced offline cell. A throughput ratio. Not interchangeable with streaming RTFX. A streaming cell with pacing disabled is not this measure.",
+    "ORACLE_NORMALIZATION_DEFINITION": "engine_vs_own_oracle compares raw text after whitespace tokenization only. No case-folding, no punctuation stripping, no tag stripping, and no number normalization.",
+    "OTHER_SERVER_NORMALIZATION_DEFINITION": "engine_vs_other_server applies full normalization and is judged against the pass policy's declared accuracy tolerance. It is a different named policy from corpus_reference and must not be relabeled as that policy.",
+    "OUTCOME_ACCOUNTING_DEFINITION": "Counts over every measured session. attempted is the population. admitted is configured. completed is a terminal transcript without timeout or protocol error, including an empty transcript. productive is completed with a non-empty transcript. timed-out and errored are mutually exclusive, and a timeout wins when both signals are present. no-first-partial overlaps those buckets. lane_unavailable counts sessions the adapter labeled as an entitled lane this process could not open. Warmup sessions are excluded from attempted and recorded as warmup_excluded.",
+    "PACING_FIDELITY_CLOCK": "client_monotonic/intended_vs_actual_chunk_send",
+    "PACING_FIDELITY_DEFINITION": "Deviation between intended and actual chunk send times, from the client send trace. A validity check on every other latency in the cell, not a performance number.",
+    "PACING_FIDELITY_UNAVAILABLE_REASON": "client_send_trace_not_in_outcome",
+    "PASS_CONJUNCTION_DEFINITION": "A cell passes only when every clause passes on that cell: admission fraction, first-partial presence, the latency SLO at the declared percentile of the named latency metric, the named sustainability policy, and accuracy within tolerance under the named normalization policy. An unevaluable clause fails the conjunction. The report names the clause. Cross-cadence transcript agreement is not a clause.",
+    "PERCENTILE_LINEAR_DEFINITION": "numpy_linear, Hyndman-Fan type 7, the NumPy default percentile: rank = (n - 1) * (q / 100), linearly interpolated between the closest order statistics. q is in [0, 100]. Empty input is absent, not zero. This is the only percentile implementation in the package; nearest_rank is the named alternative.",
+    "PERCENTILE_METHOD_NEAREST_RANK": "nearest_rank",
+    "PERCENTILE_METHOD_NUMPY_LINEAR": "numpy_linear",
+    "PERCENTILE_NEAREST_RANK_DEFINITION": "nearest_rank: 1-based rank = max(1, ceil(q / 100 * n)), clamped to n. Empty input is absent, not zero. Named alternative to numpy_linear. Not the default.",
+    "PER_UTTERANCE_WER_DEFINITION": "Distribution of per-utterance word error rates under the named policy. The micro-average is a separate number. A mean of rates hides a catastrophic utterance, so both are reported. Utterances without a defined rate stay in n_total.",
+    "POPULATION_DEFINITION": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted.",
+    "PREFIX_VIOLATION_DEFINITION": "Count of prefix checks that fail, with no normalization. Each recorded interim is checked against the next interim, and each recorded interim is checked against the final. One interim can contribute twice. An interim count without interim text is not this measure.",
+    "PRODUCTIVE_DEFINITION": "A measured session that was configured, received a non-empty final transcript, and was not timed out and not errored.",
+    "RESPONSE_LATENCY_CLOCK": "client_monotonic/latest_audio_append_to_nonempty_transcription_delta",
+    "RESPONSE_LATENCY_DEFINITION": "Seconds from the most recent audio transmitted to each non-empty interim, on one client monotonic clock. One sample per response, not per stream. Not TTFS. Client and server clocks are never subtracted.",
+    "REVISION_RATE_DEFINITION": "Revised whitespace tokens divided by newly emitted whitespace tokens. The first interim contributes every token; each later interim contributes only tokens past the common token prefix of the previous interim. A revised token falls outside the common token prefix of the following interim, or of the final for the last interim. Not a word error rate. Cross-cadence transcript agreement is not this metric and is not a pass condition.",
+    "RTFX_VALIDITY_NOT_APPLICABLE": "not_this_mode",
+    "RTFX_VALIDITY_PACING_DISABLED": "pacing_disabled",
+    "RTFX_VALIDITY_SIMULATED": "simulated",
+    "RTFX_VALIDITY_UNQUALIFIED": "pacing_fidelity_unavailable",
+    "RUNNER_HANG_GUARD_DEFINITION": "The runner hang guard waits timeout_s, plus the clip duration when pacing, plus 0.25 seconds. The adapter owns timeout_s and may return a partial outcome. The guard replaces the outcome only when the adapter does not return.",
+    "SCHEMA_VERSION": "asrbench-receipt/1",
+    "SDI_DEFINITION": "Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion.",
+    "STEADY_INTERVAL_DEFINITION": "Sustainability over a declared steady interval of the cell. Unevaluable until outcomes carry that interval. Fail-closed: the clause does not pass.",
+    "STEADY_INTERVAL_UNAVAILABLE_REASON": "steady_interval_not_in_outcome",
+    "STREAMING_RTFX_CLOCK": "client_monotonic/cell_wall_span",
+    "STREAMING_RTFX_DEFINITION": "Successfully transcribed audio seconds divided by the wall-clock span of the measured cell, warmup excluded from the span. Under real-time pacing this tracks stream count: it is a concurrency measure, not a speedup and not an inference-speed number. The numerator is productive audio only. Without a client send trace the ratio is unqualified, because pacing fidelity is what says the client actually paced.",
+    "SUSTAINABILITY_COMPLETION_FRACTION": "completion_fraction",
+    "SUSTAINABILITY_STEADY_INTERVAL": "steady_interval",
+    "SUSTAINED_STREAMS_DEFINITION": "Largest offered concurrency at which the full pass conjunction still holds. One cell reports its offered lanes and whether its conjunction passed. It does not invent a sweep maximum. A sweep projection may take the maximum passing lanes across receipts that share an operating point aside from lane count.",
+    "SUSTAINED_STREAMS_UNAVAILABLE_REASON": "single_cell_cannot_identify_the_largest_passing_concurrency",
+    "TTFS_CLOCK": "client_monotonic/first_audio_append_to_nonempty_transcription_delta",
+    "TTFS_DEFINITION": "Seconds from the first audio sample transmitted to the first non-empty partial, on one client monotonic clock. Connection, configuration, and admission wait are not included. A session with no non-empty partial stays in n_total and is absent from n_with_measure. This is not a vendor response latency and not vLLM TTFT.",
+    "VLLM_FORMAT_NOTE": "Shaped like a vLLM serving-benchmark summary so a serving engineer can read the counts. ttfs_s is this project's time to first non-empty partial. response_latency_s is per response. Neither field is vLLM TTFT, and neither is a vendor-reported response latency.",
+    "WARN_ONLY_COMPARISON_DEFINITION": "Warn-only mismatches are recorded and do not refuse: GPU driver version, Python version, asrbench git commit and dirty bit, endpoint_url, tls_verify, auth_env, package version, lookahead identity policy, client CPU, host, and probe status. transport_options stay in the hard target identity because they change adapter behavior.",
+    "WER_DEFINITION": "Word error rate (substitutions + alignment deletions + insertions + deletions_from_missing_transcript) / reference words, micro-averaged, under the named normalization policy. A session with a reference and no transcript stays in the denominator as deletions_from_missing_transcript and is not an alignment deletion. n_failed counts those sessions. A received empty transcript is an empty hypothesis and its deletions are alignment deletions. A session with no reference stays in n_total and is absent from n_with_measure. Undefined when the reference-word denominator is zero and any edit remains."
+  },
+  "resolved_config": {
+    "workload": {
+      "clip": {
+        "id": "mock-silence-1.6s",
+        "generator": "pcm16-silence",
+        "duration_s": 1.6,
+        "sample_rate": 16000,
+        "digest": "sha256:16fa66a7dc98d93f2a4c5d20baf5177f59c4c37fc62face65690c11c15fe6ff9",
+        "path": null,
+        "licence": "CC0-1.0",
+        "attribution": "Synthetic silence generated by asrbench; no corpus.",
+        "note": "Mock path only. Not a streaming-behavior claim; clip duration is below a full encoder context."
+      },
+      "reference_transcript": "the birch canoe slid on the smooth planks",
+      "mode": "streaming",
+      "pacing": true,
+      "chunk_ms": 160,
+      "cadence_ms": 320,
+      "lookahead_frames": 4,
+      "lookahead_ms_label": 320.0,
+      "lanes": 1,
+      "rate_rps": null,
+      "iterations": 1,
+      "warmup": 0,
+      "trials": 1,
+      "timeout_s": 5.0,
+      "seed": 0,
+      "language": "en",
+      "punctuation": false,
+      "diarization": false,
+      "interim_results": true,
+      "transcript_policy": "final-and-interims",
+      "population": [
+        {
+          "lanes": 1,
+          "cadence_ms": 320,
+          "lookahead_frames": 4,
+          "lookahead_ms_label": 320.0
+        }
+      ]
+    },
+    "target": {
+      "endpoint_url": "mock://local",
+      "transport": "mock",
+      "model": "mock-asr",
+      "auth_env": null,
+      "tls_verify": false,
+      "transport_options": {
+        "interim_every_chunks": 2,
+        "transcript": "the birch canoe slid on the smooth planks"
+      },
+      "server_version": null,
+      "server_gpu_name": null,
+      "server_gpu_count": null,
+      "server_gpu_memory_mib": null,
+      "server_driver_version": null
+    },
+    "run": {
+      "output_path": "receipt.json",
+      "verbosity": 0,
+      "profiler": null,
+      "percentile_method": "numpy_linear",
+      "lookahead_identity_policy": "client_declared",
+      "pass_policy": {
+        "admission_fraction_min": 1.0,
+        "first_partial_presence_min": 1.0,
+        "latency_metric": "ttfs",
+        "latency_percentile": 99.0,
+        "latency_slo_s": 1.0,
+        "sustainability_policy": "completion_fraction",
+        "sustainability_min": 1.0,
+        "accuracy_tolerance": 0.0,
+        "normalization_policy": "engine_vs_own_oracle"
+      }
+    }
+  },
+  "reproduction": {
+    "overrides": []
+  },
+  "secrets": [],
+  "fingerprints": {
+    "workload": "sha256:a78119b423da3ecea0131c9c8381eaf51654d4f417bec9c2b94d2a9d7c37d2c7",
+    "observation": "sha256:e4936adec76996d496fd78f87d3552c964f9d23e82d8756f861e2be684aa2328"
+  },
+  "identity": {
+    "target": {
+      "model": "mock-asr",
+      "server_version": null,
+      "transport": "mock",
+      "transport_options": {
+        "interim_every_chunks": 2,
+        "transcript": "the birch canoe slid on the smooth planks"
+      }
+    },
+    "software": {
+      "adapter": "mock",
+      "measurement_semantics_version": "1",
+      "normalization_policy": "engine_vs_own_oracle",
+      "package": "asrbench",
+      "percentile_method": "numpy_linear",
+      "schema_version": "asrbench-receipt/1"
+    },
+    "hardware": {
+      "gpu_count": null,
+      "gpu_identity_source": "client_probe",
+      "gpu_memory_mib": null,
+      "gpu_name": null
+    },
+    "warn": {
+      "architecture": "x86_64",
+      "auth_env": null,
+      "cpu_model": "injected-cpu",
+      "driver_version": null,
+      "driver_version_source": "client_probe",
+      "endpoint_url": "mock://local",
+      "git_commit": "unknown",
+      "git_dirty": false,
+      "hostname": "injected-host",
+      "lookahead_identity_policy": "client_declared",
+      "logical_cpu_count": 2,
+      "package_version": "0.0.1",
+      "probe_status": "absent",
+      "python_version": "3.12.0",
+      "system": "Linux",
+      "tls_verify": false
+    }
+  },
+  "probe": {
+    "hardware": {
+      "architecture": "x86_64",
+      "collected_at": "2026-01-01T00:00:00Z",
+      "cpu_model": "injected-cpu",
+      "driver_version": null,
+      "gpu_count": null,
+      "gpu_memory_mib": null,
+      "gpu_name": null,
+      "gpu_uuids": [],
+      "hostname": "injected-host",
+      "logical_cpu_count": 2,
+      "probe_name": "fixed",
+      "probe_status": "absent",
+      "system": "Linux"
+    },
+    "software": {
+      "git_available": false,
+      "git_commit": "unknown",
+      "git_dirty": false
+    }
+  },
+  "comparison_key": "sha256:ec7238deb9c53b78cdde058d3722559d2f71546c74532a42bda0d965bbb1313b",
+  "dataset": {
+    "clip_id": "mock-silence-1.6s",
+    "clip_digest": "sha256:16fa66a7dc98d93f2a4c5d20baf5177f59c4c37fc62face65690c11c15fe6ff9",
+    "digest_covers": "pcm16_payload",
+    "generator": "pcm16-silence",
+    "duration_s": 1.6,
+    "sample_rate": 16000,
+    "licence": "CC0-1.0",
+    "attribution": "Synthetic silence generated by asrbench; no corpus.",
+    "note": "Mock path only. Not a streaming-behavior claim; clip duration is below a full encoder context.",
+    "materialized_path": "golden-clip/mock-silence-1.6s.wav",
+    "reference_transcript": "the birch canoe slid on the smooth planks"
+  },
+  "audio_denominators": {
+    "definition": "attempted_audio_s sums clip duration over every measured session, including failures. successful_audio_s sums clip duration over productive sessions only. Both are reported.",
+    "attempted_audio_s": 1.6,
+    "successful_audio_s": 1.6,
+    "warmup_excluded_sessions": 0
+  },
+  "lookahead": {
+    "policy": "client_declared",
+    "frames": 4,
+    "frames_source": "client_declared",
+    "millisecond_label": 320.0,
+    "server_reported_frames": null,
+    "definition": "An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is warn-only until an adapter reports a frame count, so naming the unused policy does not refuse a comparison."
+  },
+  "trials": [
+    {
+      "trial_index": 0,
+      "warmup_excluded": 0,
+      "cell_wall_span_s": 1.0,
+      "outcomes": [
+        {
+          "label": "t0-lane0-i0",
+          "mode": "full",
+          "clip_name": "mock-silence-1.6s.wav",
+          "chunk_ms": 160,
+          "audio_duration_s": 1.6,
+          "connected": true,
+          "configured": true,
+          "interim_count": 5,
+          "transcript": "the birch canoe slid on the smooth planks",
+          "protocol_errors": [],
+          "ttfs_s": 0.25,
+          "final_latency_s": 0.0625,
+          "response_latencies_s": [
+            0.25,
+            0.5,
+            0.75,
+            1.0,
+            1.25
+          ],
+          "latency_clock": "mock/simulated_first_audio_to_first_nonempty_partial",
+          "response_latency_clock": "mock/simulated_latest_audio_to_nonempty_partial",
+          "protocol_extras": {
+            "adapter": "mock",
+            "markers": {
+              "cohort_label": "t0-lane0-i0"
+            }
+          },
+          "interim_texts": [
+            "the",
+            "the birch",
+            "the birch canoe",
+            "the birch canoe slid",
+            "the birch canoe slid on"
+          ],
+          "timed_out": false,
+          "error_code": null,
+          "terminal_status": "completed",
+          "error_detail": null,
+          "final_latency_clock": "mock/simulated_last_audio_to_final"
+        }
+      ],
+      "warmup_outcomes": [],
+      "reduction": {
+        "counts": {
+          "definition": "Counts over every measured session. attempted is the population. admitted is configured. completed is a terminal transcript without timeout or protocol error, including an empty transcript. productive is completed with a non-empty transcript. timed-out and errored are mutually exclusive, and a timeout wins when both signals are present. no-first-partial overlaps those buckets. lane_unavailable counts sessions the adapter labeled as an entitled lane this process could not open. Warmup sessions are excluded from attempted and recorded as warmup_excluded.",
+          "attempted": 1,
+          "admitted": 1,
+          "completed": 1,
+          "productive": 1,
+          "errored": 0,
+          "timed_out": 0,
+          "no_first_partial": 0,
+          "lane_unavailable": 0,
+          "warmup_excluded": 0
+        },
+        "ttfs_s": {
+          "name": "ttfs_s",
+          "clock": "mock/simulated_first_audio_to_first_nonempty_partial",
+          "clock_attribution": "outcome",
+          "clock_matches_native": false,
+          "definition": "Seconds from the first audio sample transmitted to the first non-empty partial, on one client monotonic clock. Connection, configuration, and admission wait are not included. A session with no non-empty partial stays in n_total and is absent from n_with_measure. This is not a vendor response latency and not vLLM TTFT.",
+          "unit": "s",
+          "percentile_method": "numpy_linear",
+          "availability": "measured",
+          "mean": 0.25,
+          "minimum": 0.25,
+          "maximum": 0.25,
+          "p50": 0.25,
+          "p90": 0.25,
+          "p95": 0.25,
+          "p99": 0.25,
+          "n_with_measure": 1,
+          "n_total": 1,
+          "n_samples": 1,
+          "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
+        },
+        "response_latency_s": {
+          "name": "response_latency_s",
+          "clock": "mock/simulated_latest_audio_to_nonempty_partial",
+          "clock_attribution": "outcome",
+          "clock_matches_native": false,
+          "definition": "Seconds from the most recent audio transmitted to each non-empty interim, on one client monotonic clock. One sample per response, not per stream. Not TTFS. Client and server clocks are never subtracted.",
+          "unit": "s",
+          "percentile_method": "numpy_linear",
+          "availability": "measured",
+          "mean": 0.75,
+          "minimum": 0.25,
+          "maximum": 1.25,
+          "p50": 0.75,
+          "p90": 1.15,
+          "p95": 1.2,
+          "p99": 1.24,
+          "n_with_measure": 1,
+          "n_total": 1,
+          "n_samples": 5,
+          "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
+        },
+        "finalization_s": {
+          "name": "finalization_s",
+          "clock": "mock/simulated_last_audio_to_final",
+          "clock_attribution": "outcome",
+          "clock_matches_native": false,
+          "definition": "Seconds from the last audio sample sent to the final result received, on the client monotonic clock.",
+          "unit": "s",
+          "percentile_method": "numpy_linear",
+          "availability": "measured",
+          "mean": 0.0625,
+          "minimum": 0.0625,
+          "maximum": 0.0625,
+          "p50": 0.0625,
+          "p90": 0.0625,
+          "p95": 0.0625,
+          "p99": 0.0625,
+          "n_with_measure": 1,
+          "n_total": 1,
+          "n_samples": 1,
+          "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
+        },
+        "wer": {
+          "policy": "engine_vs_own_oracle",
+          "definition": "Word error rate (substitutions + alignment deletions + insertions + deletions_from_missing_transcript) / reference words, micro-averaged, under the named normalization policy. A session with a reference and no transcript stays in the denominator as deletions_from_missing_transcript and is not an alignment deletion. n_failed counts those sessions. A received empty transcript is an empty hypothesis and its deletions are alignment deletions. A session with no reference stays in n_total and is absent from n_with_measure. Undefined when the reference-word denominator is zero and any edit remains.",
+          "normalization_definition": "engine_vs_own_oracle compares raw text after whitespace tokenization only. No case-folding, no punctuation stripping, no tag stripping, and no number normalization.",
+          "availability": "measured",
+          "reason": null,
+          "micro_wer": 0.0,
+          "micro_cer": 0.0,
+          "cer_definition": "Character error rate under the same named normalization policy as the accompanying WER, over the normalized utterance text. Not interchangeable across policies.",
+          "sdi_definition": "Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion.",
+          "substitutions": 0,
+          "deletions": 0,
+          "deletions_from_missing_transcript": 0,
+          "n_failed": 0,
+          "chars_from_missing_transcript": 0,
+          "insertions": 0,
+          "reference_tokens": 8,
+          "hypothesis_tokens": 8,
+          "reference_chars": 41,
+          "n_with_measure": 1,
+          "n_total": 1,
+          "per_utterance_wer": {
+            "name": "per_utterance_wer",
+            "definition": "Distribution of per-utterance word error rates under the named policy. The micro-average is a separate number. A mean of rates hides a catastrophic utterance, so both are reported. Utterances without a defined rate stay in n_total.",
+            "percentile_method": "numpy_linear",
+            "availability": "measured",
+            "mean": 0.0,
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "n_with_measure": 1,
+            "n_total": 1,
+            "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
+          },
+          "utterances": [
+            {
+              "label": "t0-lane0-i0",
+              "scored": true,
+              "reason": null,
+              "wer": 0.0,
+              "cer": 0.0,
+              "substitutions": 0,
+              "deletions": 0,
+              "insertions": 0,
+              "reference_tokens": 8,
+              "deletions_from_missing_transcript": 0
+            }
+          ]
+        },
+        "streaming_rtfx": {
+          "name": "streaming_rtfx",
+          "availability": "measured",
+          "reason": null,
+          "value": 1.6,
+          "successful_audio_s": 1.6,
+          "attempted_audio_s": 1.6,
+          "cell_wall_span_s": 1.0,
+          "span_pooling": "measured_cell",
+          "clock": "client_monotonic/cell_wall_span",
+          "definition": "Successfully transcribed audio seconds divided by the wall-clock span of the measured cell, warmup excluded from the span. Under real-time pacing this tracks stream count: it is a concurrency measure, not a speedup and not an inference-speed number. The numerator is productive audio only. Without a client send trace the ratio is unqualified, because pacing fidelity is what says the client actually paced.",
+          "pacing": true,
+          "validity": "simulated"
+        },
+        "offline_rtfx": {
+          "name": "offline_rtfx",
+          "availability": "unavailable",
+          "reason": "mode_is_streaming",
+          "value": null,
+          "successful_audio_s": 1.6,
+          "attempted_audio_s": 1.6,
+          "cell_wall_span_s": 1.0,
+          "span_pooling": "measured_cell",
+          "clock": "client_monotonic/cell_wall_span",
+          "definition": "Successfully transcribed audio seconds divided by the wall-clock span of an unpaced offline cell. A throughput ratio. Not interchangeable with streaming RTFX. A streaming cell with pacing disabled is not this measure.",
+          "pacing": true,
+          "validity": "not_this_mode"
+        },
+        "stability": {
+          "prefix_violations": {
+            "availability": "measured",
+            "reason": null,
+            "count": 0,
+            "pairs_checked": 9,
+            "final_checked": true,
+            "definition": "Count of prefix checks that fail, with no normalization. Each recorded interim is checked against the next interim, and each recorded interim is checked against the final. One interim can contribute twice. An interim count without interim text is not this measure."
+          },
+          "revision_rate": {
+            "availability": "measured",
+            "reason": null,
+            "rate": 0.0,
+            "revised_tokens": 0,
+            "emitted_tokens": 5,
+            "definition": "Revised whitespace tokens divided by newly emitted whitespace tokens. The first interim contributes every token; each later interim contributes only tokens past the common token prefix of the previous interim. A revised token falls outside the common token prefix of the following interim, or of the final for the last interim. Not a word error rate. Cross-cadence transcript agreement is not this metric and is not a pass condition."
+          }
+        },
+        "goodput": {
+          "name": "goodput",
+          "definition": "Measured sessions that simultaneously were admitted, produced a first partial, met the named latency SLO on that session's own samples, completed, and \u2014 when a reference was declared \u2014 scored within the accuracy tolerance, divided by the measured cell wall span in seconds. Not computed while the sustainability policy is unevaluable, so a missing steady interval cannot become a goodput.",
+          "n_total": 1,
+          "cell_wall_span_s": 1.0,
+          "availability": "measured",
+          "reason": null,
+          "streams_meeting_slo": 1,
+          "per_second": 1.0
+        },
+        "sustained_streams_at_slo": {
+          "name": "sustained_streams_at_slo",
+          "availability": "unavailable",
+          "reason": "single_cell_cannot_identify_the_largest_passing_concurrency",
+          "definition": "Largest offered concurrency at which the full pass conjunction still holds. One cell reports its offered lanes and whether its conjunction passed. It does not invent a sweep maximum. A sweep projection may take the maximum passing lanes across receipts that share an operating point aside from lane count.",
+          "offered_lanes": 1,
+          "cell_conjunction_passed": true,
+          "clock": ""
+        },
+        "unavailable": [
+          {
+            "name": "emission_lag",
+            "availability": "unavailable",
+            "reason": "no_construction_ground_truth",
+            "clock": "client_monotonic/word_audio_end_to_first_appearance",
+            "definition": "A word's audio ending to that word's first appearance in any output. Requires construction-time ground truth: silence of an exact frame count between known utterances. Not inferred by a forced aligner or a voice-activity detector."
+          },
+          {
+            "name": "lag_excess",
+            "availability": "unavailable",
+            "reason": "emission_lag_unavailable",
+            "clock": "client_monotonic/word_audio_end_to_first_appearance",
+            "definition": "Emission lag minus the cadence's theoretical floor: what the implementation costs above what the configuration costs. Unavailable when emission lag is unavailable. Raw emission lag is not compared across cadences."
+          },
+          {
+            "name": "pacing_fidelity",
+            "availability": "unavailable",
+            "reason": "client_send_trace_not_in_outcome",
+            "clock": "client_monotonic/intended_vs_actual_chunk_send",
+            "definition": "Deviation between intended and actual chunk send times, from the client send trace. A validity check on every other latency in the cell, not a performance number."
+          },
+          {
+            "name": "interim_cadence_conformance",
+            "availability": "unavailable",
+            "reason": "interim_arrival_timestamps_not_in_outcome",
+            "clock": "client_monotonic/inter_interim_arrival_interval",
+            "definition": "Distribution of inter-interim arrival intervals against the configured cadence. Unavailable until outcomes carry interim arrival timestamps."
+          }
+        ],
+        "conjunction": {
+          "definition": "A cell passes only when every clause passes on that cell: admission fraction, first-partial presence, the latency SLO at the declared percentile of the named latency metric, the named sustainability policy, and accuracy within tolerance under the named normalization policy. An unevaluable clause fails the conjunction. The report names the clause. Cross-cadence transcript agreement is not a clause.",
+          "passed": true,
+          "failed_clauses": [],
+          "unevaluable_clauses": [],
+          "clauses": [
+            {
+              "name": "admission_fraction",
+              "status": "passed",
+              "observed": 1.0,
+              "threshold": 1.0,
+              "detail": "1.0 >= 1.0"
+            },
+            {
+              "name": "first_partial_presence",
+              "status": "passed",
+              "observed": 1.0,
+              "threshold": 1.0,
+              "detail": "1.0 >= 1.0"
+            },
+            {
+              "name": "latency_slo",
+              "status": "passed",
+              "observed": 0.25,
+              "threshold": 1.0,
+              "detail": "ttfs p99 on mock/simulated_first_audio_to_first_nonempty_partial is 0.25 against SLO 1.0"
+            },
+            {
+              "name": "sustainability",
+              "status": "passed",
+              "observed": 1.0,
+              "threshold": 1.0,
+              "detail": "Fraction of measured sessions that completed. A named policy a preset may select in place of the steady-interval condition. It is not that condition."
+            },
+            {
+              "name": "accuracy",
+              "status": "passed",
+              "observed": 0.0,
+              "threshold": 0.0,
+              "detail": "engine_vs_own_oracle micro WER 0.0 <= 0.0"
+            }
+          ]
+        },
+        "audio": {
+          "definition": "attempted_audio_s sums clip duration over every measured session, including failures. successful_audio_s sums clip duration over productive sessions only. Both are reported.",
+          "attempted_audio_s": 1.6,
+          "successful_audio_s": 1.6,
+          "productive_definition": "A measured session that was configured, received a non-empty final transcript, and was not timed out and not errored."
+        }
+      }
+    }
+  ],
+  "summary": {
+    "n_trials": 1,
+    "conjunction_passed": true,
+    "failed_clauses": [],
+    "unevaluable_clauses": [],
+    "across_trials": {
+      "ttfs_p50_s": {
+        "values": [
+          0.25
+        ],
+        "mean": 0.25,
+        "minimum": 0.25,
+        "maximum": 0.25,
+        "n_trials": 1,
+        "n_trials_with_measure": 1
+      },
+      "ttfs_p99_s": {
+        "values": [
+          0.25
+        ],
+        "mean": 0.25,
+        "minimum": 0.25,
+        "maximum": 0.25,
+        "n_trials": 1,
+        "n_trials_with_measure": 1
+      },
+      "response_latency_p50_s": {
+        "values": [
+          0.75
+        ],
+        "mean": 0.75,
+        "minimum": 0.75,
+        "maximum": 0.75,
+        "n_trials": 1,
+        "n_trials_with_measure": 1
+      },
+      "response_latency_p99_s": {
+        "values": [
+          1.24
+        ],
+        "mean": 1.24,
+        "minimum": 1.24,
+        "maximum": 1.24,
+        "n_trials": 1,
+        "n_trials_with_measure": 1
+      },
+      "finalization_p50_s": {
+        "values": [
+          0.0625
+        ],
+        "mean": 0.0625,
+        "minimum": 0.0625,
+        "maximum": 0.0625,
+        "n_trials": 1,
+        "n_trials_with_measure": 1
+      },
+      "micro_wer": {
+        "values": [
+          0.0
+        ],
+        "mean": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "n_trials": 1,
+        "n_trials_with_measure": 1
+      },
+      "streaming_rtfx": {
+        "values": [
+          1.6
+        ],
+        "mean": 1.6,
+        "minimum": 1.6,
+        "maximum": 1.6,
+        "n_trials": 1,
+        "n_trials_with_measure": 1
+      },
+      "offline_rtfx": {
+        "values": [
+          null
+        ],
+        "mean": null,
+        "minimum": null,
+        "maximum": null,
+        "n_trials": 1,
+        "n_trials_with_measure": 0
+      },
+      "goodput_per_second": {
+        "values": [
+          1.0
+        ],
+        "mean": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "n_trials": 1,
+        "n_trials_with_measure": 1
+      }
+    },
+    "pooled": {
+      "counts": {
+        "definition": "Counts over every measured session. attempted is the population. admitted is configured. completed is a terminal transcript without timeout or protocol error, including an empty transcript. productive is completed with a non-empty transcript. timed-out and errored are mutually exclusive, and a timeout wins when both signals are present. no-first-partial overlaps those buckets. lane_unavailable counts sessions the adapter labeled as an entitled lane this process could not open. Warmup sessions are excluded from attempted and recorded as warmup_excluded.",
+        "attempted": 1,
+        "admitted": 1,
+        "completed": 1,
+        "productive": 1,
+        "errored": 0,
+        "timed_out": 0,
+        "no_first_partial": 0,
+        "lane_unavailable": 0,
+        "warmup_excluded": 0
+      },
+      "ttfs_s": {
+        "name": "ttfs_s",
+        "clock": "mock/simulated_first_audio_to_first_nonempty_partial",
+        "clock_attribution": "outcome",
+        "clock_matches_native": false,
+        "definition": "Seconds from the first audio sample transmitted to the first non-empty partial, on one client monotonic clock. Connection, configuration, and admission wait are not included. A session with no non-empty partial stays in n_total and is absent from n_with_measure. This is not a vendor response latency and not vLLM TTFT.",
+        "unit": "s",
+        "percentile_method": "numpy_linear",
+        "availability": "measured",
+        "mean": 0.25,
+        "minimum": 0.25,
+        "maximum": 0.25,
+        "p50": 0.25,
+        "p90": 0.25,
+        "p95": 0.25,
+        "p99": 0.25,
+        "n_with_measure": 1,
+        "n_total": 1,
+        "n_samples": 1,
+        "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
+      },
+      "response_latency_s": {
+        "name": "response_latency_s",
+        "clock": "mock/simulated_latest_audio_to_nonempty_partial",
+        "clock_attribution": "outcome",
+        "clock_matches_native": false,
+        "definition": "Seconds from the most recent audio transmitted to each non-empty interim, on one client monotonic clock. One sample per response, not per stream. Not TTFS. Client and server clocks are never subtracted.",
+        "unit": "s",
+        "percentile_method": "numpy_linear",
+        "availability": "measured",
+        "mean": 0.75,
+        "minimum": 0.25,
+        "maximum": 1.25,
+        "p50": 0.75,
+        "p90": 1.15,
+        "p95": 1.2,
+        "p99": 1.24,
+        "n_with_measure": 1,
+        "n_total": 1,
+        "n_samples": 5,
+        "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
+      },
+      "finalization_s": {
+        "name": "finalization_s",
+        "clock": "mock/simulated_last_audio_to_final",
+        "clock_attribution": "outcome",
+        "clock_matches_native": false,
+        "definition": "Seconds from the last audio sample sent to the final result received, on the client monotonic clock.",
+        "unit": "s",
+        "percentile_method": "numpy_linear",
+        "availability": "measured",
+        "mean": 0.0625,
+        "minimum": 0.0625,
+        "maximum": 0.0625,
+        "p50": 0.0625,
+        "p90": 0.0625,
+        "p95": 0.0625,
+        "p99": 0.0625,
+        "n_with_measure": 1,
+        "n_total": 1,
+        "n_samples": 1,
+        "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
+      },
+      "wer": {
+        "policy": "engine_vs_own_oracle",
+        "definition": "Word error rate (substitutions + alignment deletions + insertions + deletions_from_missing_transcript) / reference words, micro-averaged, under the named normalization policy. A session with a reference and no transcript stays in the denominator as deletions_from_missing_transcript and is not an alignment deletion. n_failed counts those sessions. A received empty transcript is an empty hypothesis and its deletions are alignment deletions. A session with no reference stays in n_total and is absent from n_with_measure. Undefined when the reference-word denominator is zero and any edit remains.",
+        "normalization_definition": "engine_vs_own_oracle compares raw text after whitespace tokenization only. No case-folding, no punctuation stripping, no tag stripping, and no number normalization.",
+        "availability": "measured",
+        "reason": null,
+        "micro_wer": 0.0,
+        "micro_cer": 0.0,
+        "cer_definition": "Character error rate under the same named normalization policy as the accompanying WER, over the normalized utterance text. Not interchangeable across policies.",
+        "sdi_definition": "Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion.",
+        "substitutions": 0,
+        "deletions": 0,
+        "deletions_from_missing_transcript": 0,
+        "n_failed": 0,
+        "chars_from_missing_transcript": 0,
+        "insertions": 0,
+        "reference_tokens": 8,
+        "hypothesis_tokens": 8,
+        "reference_chars": 41,
+        "n_with_measure": 1,
+        "n_total": 1,
+        "per_utterance_wer": {
+          "name": "per_utterance_wer",
+          "definition": "Distribution of per-utterance word error rates under the named policy. The micro-average is a separate number. A mean of rates hides a catastrophic utterance, so both are reported. Utterances without a defined rate stay in n_total.",
+          "percentile_method": "numpy_linear",
+          "availability": "measured",
+          "mean": 0.0,
+          "p50": 0.0,
+          "p90": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "n_with_measure": 1,
+          "n_total": 1,
+          "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
+        },
+        "utterances": [
+          {
+            "label": "t0-lane0-i0",
+            "scored": true,
+            "reason": null,
+            "wer": 0.0,
+            "cer": 0.0,
+            "substitutions": 0,
+            "deletions": 0,
+            "insertions": 0,
+            "reference_tokens": 8,
+            "deletions_from_missing_transcript": 0
+          }
+        ]
+      },
+      "streaming_rtfx": {
+        "name": "streaming_rtfx",
+        "availability": "measured",
+        "reason": null,
+        "value": 1.6,
+        "successful_audio_s": 1.6,
+        "attempted_audio_s": 1.6,
+        "cell_wall_span_s": 1.0,
+        "span_pooling": "sum_of_trial_spans",
+        "clock": "client_monotonic/cell_wall_span",
+        "definition": "Successfully transcribed audio seconds divided by the wall-clock span of the measured cell, warmup excluded from the span. Under real-time pacing this tracks stream count: it is a concurrency measure, not a speedup and not an inference-speed number. The numerator is productive audio only. Without a client send trace the ratio is unqualified, because pacing fidelity is what says the client actually paced.",
+        "pacing": true,
+        "validity": "simulated"
+      },
+      "offline_rtfx": {
+        "name": "offline_rtfx",
+        "availability": "unavailable",
+        "reason": "mode_is_streaming",
+        "value": null,
+        "successful_audio_s": 1.6,
+        "attempted_audio_s": 1.6,
+        "cell_wall_span_s": 1.0,
+        "span_pooling": "sum_of_trial_spans",
+        "clock": "client_monotonic/cell_wall_span",
+        "definition": "Successfully transcribed audio seconds divided by the wall-clock span of an unpaced offline cell. A throughput ratio. Not interchangeable with streaming RTFX. A streaming cell with pacing disabled is not this measure.",
+        "pacing": true,
+        "validity": "not_this_mode"
+      },
+      "stability": {
+        "prefix_violations": {
+          "availability": "measured",
+          "reason": null,
+          "count": 0,
+          "pairs_checked": 9,
+          "final_checked": true,
+          "definition": "Count of prefix checks that fail, with no normalization. Each recorded interim is checked against the next interim, and each recorded interim is checked against the final. One interim can contribute twice. An interim count without interim text is not this measure."
+        },
+        "revision_rate": {
+          "availability": "measured",
+          "reason": null,
+          "rate": 0.0,
+          "revised_tokens": 0,
+          "emitted_tokens": 5,
+          "definition": "Revised whitespace tokens divided by newly emitted whitespace tokens. The first interim contributes every token; each later interim contributes only tokens past the common token prefix of the previous interim. A revised token falls outside the common token prefix of the following interim, or of the final for the last interim. Not a word error rate. Cross-cadence transcript agreement is not this metric and is not a pass condition."
+        }
+      },
+      "goodput": {
+        "name": "goodput",
+        "definition": "Measured sessions that simultaneously were admitted, produced a first partial, met the named latency SLO on that session's own samples, completed, and \u2014 when a reference was declared \u2014 scored within the accuracy tolerance, divided by the measured cell wall span in seconds. Not computed while the sustainability policy is unevaluable, so a missing steady interval cannot become a goodput.",
+        "n_total": 1,
+        "cell_wall_span_s": 1.0,
+        "availability": "measured",
+        "reason": null,
+        "streams_meeting_slo": 1,
+        "per_second": 1.0
+      },
+      "sustained_streams_at_slo": {
+        "name": "sustained_streams_at_slo",
+        "availability": "unavailable",
+        "reason": "single_cell_cannot_identify_the_largest_passing_concurrency",
+        "definition": "Largest offered concurrency at which the full pass conjunction still holds. One cell reports its offered lanes and whether its conjunction passed. It does not invent a sweep maximum. A sweep projection may take the maximum passing lanes across receipts that share an operating point aside from lane count.",
+        "offered_lanes": 1,
+        "cell_conjunction_passed": true,
+        "clock": ""
+      },
+      "unavailable": [
+        {
+          "name": "emission_lag",
+          "availability": "unavailable",
+          "reason": "no_construction_ground_truth",
+          "clock": "client_monotonic/word_audio_end_to_first_appearance",
+          "definition": "A word's audio ending to that word's first appearance in any output. Requires construction-time ground truth: silence of an exact frame count between known utterances. Not inferred by a forced aligner or a voice-activity detector."
+        },
+        {
+          "name": "lag_excess",
+          "availability": "unavailable",
+          "reason": "emission_lag_unavailable",
+          "clock": "client_monotonic/word_audio_end_to_first_appearance",
+          "definition": "Emission lag minus the cadence's theoretical floor: what the implementation costs above what the configuration costs. Unavailable when emission lag is unavailable. Raw emission lag is not compared across cadences."
+        },
+        {
+          "name": "pacing_fidelity",
+          "availability": "unavailable",
+          "reason": "client_send_trace_not_in_outcome",
+          "clock": "client_monotonic/intended_vs_actual_chunk_send",
+          "definition": "Deviation between intended and actual chunk send times, from the client send trace. A validity check on every other latency in the cell, not a performance number."
+        },
+        {
+          "name": "interim_cadence_conformance",
+          "availability": "unavailable",
+          "reason": "interim_arrival_timestamps_not_in_outcome",
+          "clock": "client_monotonic/inter_interim_arrival_interval",
+          "definition": "Distribution of inter-interim arrival intervals against the configured cadence. Unavailable until outcomes carry interim arrival timestamps."
+        }
+      ],
+      "conjunction": {
+        "definition": "A cell passes only when every clause passes on that cell: admission fraction, first-partial presence, the latency SLO at the declared percentile of the named latency metric, the named sustainability policy, and accuracy within tolerance under the named normalization policy. An unevaluable clause fails the conjunction. The report names the clause. Cross-cadence transcript agreement is not a clause.",
+        "passed": true,
+        "failed_clauses": [],
+        "unevaluable_clauses": [],
+        "clauses": [
+          {
+            "name": "admission_fraction",
+            "status": "passed",
+            "observed": 1.0,
+            "threshold": 1.0,
+            "detail": "1.0 >= 1.0"
+          },
+          {
+            "name": "first_partial_presence",
+            "status": "passed",
+            "observed": 1.0,
+            "threshold": 1.0,
+            "detail": "1.0 >= 1.0"
+          },
+          {
+            "name": "latency_slo",
+            "status": "passed",
+            "observed": 0.25,
+            "threshold": 1.0,
+            "detail": "ttfs p99 on mock/simulated_first_audio_to_first_nonempty_partial is 0.25 against SLO 1.0"
+          },
+          {
+            "name": "sustainability",
+            "status": "passed",
+            "observed": 1.0,
+            "threshold": 1.0,
+            "detail": "Fraction of measured sessions that completed. A named policy a preset may select in place of the steady-interval condition. It is not that condition."
+          },
+          {
+            "name": "accuracy",
+            "status": "passed",
+            "observed": 0.0,
+            "threshold": 0.0,
+            "detail": "engine_vs_own_oracle micro WER 0.0 <= 0.0"
+          }
+        ]
+      },
+      "audio": {
+        "definition": "attempted_audio_s sums clip duration over every measured session, including failures. successful_audio_s sums clip duration over productive sessions only. Both are reported.",
+        "attempted_audio_s": 1.6,
+        "successful_audio_s": 1.6,
+        "productive_definition": "A measured session that was configured, received a non-empty final transcript, and was not timed out and not errored."
+      }
+    }
+  }
+}

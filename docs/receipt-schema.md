@@ -20,7 +20,8 @@ Components, in order, joined by U+001F and hashed:
 workload fingerprint, target identity, software identity,
 hardware identity.
 
-Excluded:
+Not in the hard comparison key. Warn-only fields are still
+compared and reported; a mismatch does not refuse:
 
 - `run_id`
 - `started_at`
@@ -33,10 +34,23 @@ Excluded:
 - `workload.clip.licence`
 - `workload.clip.attribution`
 - `workload.clip.note`
-- `probe.hardware.hostname`
+- `identity.warn.driver_version`
+- `identity.warn.python_version`
+- `identity.warn.git_commit`
+- `identity.warn.git_dirty`
+- `identity.warn.endpoint_url`
+- `identity.warn.tls_verify`
+- `identity.warn.auth_env`
+- `identity.warn.package_version`
+- `identity.warn.lookahead_identity_policy`
+- `identity.warn.cpu_model`
+- `identity.warn.logical_cpu_count`
+- `identity.warn.system`
+- `identity.warn.architecture`
+- `identity.warn.hostname`
+- `identity.warn.probe_status`
 - `probe.hardware.gpu_uuids`
 - `probe.hardware.collected_at`
-- `probe.software.git_dirty`
 - `secrets.set`
 - `raw outcomes and trial aggregates`
 
@@ -52,7 +66,7 @@ Excluded:
 
 ### `COMPARISON_KEY_DEFINITION`
 
-> sha256 of the canonical JSON texts of workload_fingerprint, target_identity, software_identity, and hardware_identity, in that order, joined by U+001F. Lookahead frame count is inside the workload fingerprint. The lookahead millisecond label, output paths, run id, timestamps, hostname, GPU UUIDs, git dirty bit, and whether a secret variable was set are not.
+> sha256 of the canonical JSON texts of the workload fingerprint, the hard target identity, the hard software identity, and the hard hardware identity, in that order, joined by U+001F. Lookahead frame count is inside the workload fingerprint. The millisecond label is not. Hard software identity includes normalization policy, percentile method, SCHEMA_VERSION, and MEASUREMENT_SEMANTICS_VERSION. Warn-only mismatches are listed and do not refuse.
 
 ### `COMPLETION_FRACTION_DEFINITION`
 
@@ -104,15 +118,23 @@ Excluded:
 
 ### `FRONTIER_DEFINITION`
 
-> Accuracy against measured latency, one point per receipt, identified by lookahead frame count. The millisecond label is carried beside the point and is not the identity. Latency is pooled TTFS p50 and accuracy is pooled micro WER, each under the clock and normalization policy the receipt already names. The Pareto edge is the set of points with no other point both faster and more accurate. A dominated point is a finding, not a pass failure. Cross-cadence transcript agreement is not computed. Points are grouped by comparison identity with lookahead frame count removed, so different hardware or models are not drawn on one edge.
+> Accuracy against measured latency, one point per receipt, identified by lookahead frame count and the cadence that sets it. The millisecond label is carried beside the point and is not the identity. Latency is pooled TTFS p50 and accuracy is pooled micro WER, each under the clock and normalization policy the receipt already names. The Pareto edge is the set of points with no other point both faster and more accurate. A dominated point is a finding, not a pass failure. Cross-cadence transcript agreement is not computed. Points are grouped by comparison identity with lookahead frame count and cadence removed, so a lookahead sweep that also changes cadence is one series, and different hardware or models are not drawn on one edge.
 
 ### `GOODPUT_DEFINITION`
 
 > Measured sessions that simultaneously were admitted, produced a first partial, met the named latency SLO on that session's own samples, completed, and — when a reference was declared — scored within the accuracy tolerance, divided by the measured cell wall span in seconds. Not computed while the sustainability policy is unevaluable, so a missing steady interval cannot become a goodput.
 
+### `GPU_IDENTITY_CLIENT_PROBE`
+
+> client_probe
+
+### `GPU_IDENTITY_SERVER_DECLARED`
+
+> server_declared
+
 ### `HARDWARE_IDENTITY_DEFINITION`
 
-> Hardware identity is system, architecture, cpu_model, logical_cpu_count, gpu_name, gpu_count, gpu_memory_mib, and driver_version. GPU fields come from nvidia-smi when that probe runs and are null when it is absent or fails. The run does not require a GPU. Hostname, GPU UUIDs, and the probe timestamp are on the receipt and are not identity.
+> The hard hardware identity is gpu_name, gpu_count, gpu_memory_mib, and gpu_identity_source. Those GPU fields are the server declaration when the target spec carries one, otherwise the client nvidia-smi probe, and gpu_identity_source says which. Driver version, client CPU, host, and probe status are warn-only and are not this identity. The run does not require a GPU.
 
 ### `HARDWARE_PROBE_NVIDIA_SMI`
 
@@ -156,11 +178,15 @@ Excluded:
 
 ### `LOOKAHEAD_IDENTITY_DEFINITION`
 
-> An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is part of software identity, so the two policies are not pooled.
+> An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is warn-only until an adapter reports a frame count, so naming the unused policy does not refuse a comparison.
 
 ### `LOOKAHEAD_IDENTITY_SERVER_REPORTED`
 
 > server_reported_when_present
+
+### `MEASUREMENT_SEMANTICS_VERSION`
+
+> 1
 
 ### `MODE_OFFLINE`
 
@@ -244,7 +270,7 @@ Excluded:
 
 ### `PREFIX_VIOLATION_DEFINITION`
 
-> Count of recorded interim hypotheses that are not a raw string prefix of the next interim, plus recorded interim hypotheses that are not a raw string prefix of the final. No normalization. An interim count without interim text is not this measure.
+> Count of prefix checks that fail, with no normalization. Each recorded interim is checked against the next interim, and each recorded interim is checked against the final. One interim can contribute twice. An interim count without interim text is not this measure.
 
 ### `PRODUCTIVE_DEFINITION`
 
@@ -260,7 +286,7 @@ Excluded:
 
 ### `REVISION_RATE_DEFINITION`
 
-> Whitespace tokens emitted in an interim that fall outside the common token prefix of the following interim, or of the final for the last interim, divided by whitespace tokens emitted. Not a word error rate. Cross-cadence transcript agreement is not this metric and is not a pass condition.
+> Revised whitespace tokens divided by newly emitted whitespace tokens. The first interim contributes every token; each later interim contributes only tokens past the common token prefix of the previous interim. A revised token falls outside the common token prefix of the following interim, or of the final for the last interim. Not a word error rate. Cross-cadence transcript agreement is not this metric and is not a pass condition.
 
 ### `RTFX_VALIDITY_NOT_APPLICABLE`
 
@@ -270,9 +296,17 @@ Excluded:
 
 > pacing_disabled
 
+### `RTFX_VALIDITY_SIMULATED`
+
+> simulated
+
 ### `RTFX_VALIDITY_UNQUALIFIED`
 
 > pacing_fidelity_unavailable
+
+### `RUNNER_HANG_GUARD_DEFINITION`
+
+> The runner hang guard waits timeout_s, plus the clip duration when pacing, plus 0.25 seconds. The adapter owns timeout_s and may return a partial outcome. The guard replaces the outcome only when the adapter does not return.
 
 ### `SCHEMA_VERSION`
 
@@ -280,7 +314,7 @@ Excluded:
 
 ### `SDI_DEFINITION`
 
-> Substitutions, deletions, and insertions counted separately. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion.
+> Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion.
 
 ### `STEADY_INTERVAL_DEFINITION`
 
@@ -326,9 +360,13 @@ Excluded:
 
 > Shaped like a vLLM serving-benchmark summary so a serving engineer can read the counts. ttfs_s is this project's time to first non-empty partial. response_latency_s is per response. Neither field is vLLM TTFT, and neither is a vendor-reported response latency.
 
+### `WARN_ONLY_COMPARISON_DEFINITION`
+
+> Warn-only mismatches are recorded and do not refuse: GPU driver version, Python version, asrbench git commit and dirty bit, endpoint_url, tls_verify, auth_env, package version, lookahead identity policy, client CPU, host, and probe status. transport_options stay in the hard target identity because they change adapter behavior.
+
 ### `WER_DEFINITION`
 
-> Word error rate (substitutions + deletions + insertions) / reference words, micro-averaged, under the named normalization policy. A session with a reference and no transcript is an empty hypothesis and stays in the denominator. A session with no reference stays in n_total and is absent from n_with_measure. Undefined when the reference-word denominator is zero and any edit remains.
+> Word error rate (substitutions + alignment deletions + insertions + deletions_from_missing_transcript) / reference words, micro-averaged, under the named normalization policy. A session with a reference and no transcript stays in the denominator as deletions_from_missing_transcript and is not an alignment deletion. n_failed counts those sessions. A received empty transcript is an empty hypothesis and its deletions are alignment deletions. A session with no reference stays in n_total and is absent from n_with_measure. Undefined when the reference-word denominator is zero and any edit remains.
 
 ## Mock preset receipt shape
 
@@ -339,79 +377,7 @@ with injected hardware and a scripted cell span.
 - `run_id`: string
 - `started_at`: string
 - `finished_at`: string
-- `definitions`: object
-  - `AUDIO_DENOMINATOR_DEFINITION`: string
-  - `CER_DEFINITION`: string
-  - `COMPARISON_KEY_DEFINITION`: string
-  - `COMPLETION_FRACTION_DEFINITION`: string
-  - `CORPUS_NORMALIZATION_DEFINITION`: string
-  - `DEFAULT_LOOKAHEAD_IDENTITY_POLICY`: string
-  - `DEFAULT_NORMALIZATION_POLICY`: string
-  - `DEFAULT_PERCENTILE_METHOD`: string
-  - `DEFAULT_SUSTAINABILITY_POLICY`: string
-  - `DIGEST_COVERS_PCM16`: string
-  - `EMISSION_LAG_CLOCK`: string
-  - `EMISSION_LAG_DEFINITION`: string
-  - `EMISSION_LAG_UNAVAILABLE_REASON`: string
-  - `FINALIZATION_CLOCK`: string
-  - `FINALIZATION_DEFINITION`: string
-  - `FRONTIER_DEFINITION`: string
-  - `GOODPUT_DEFINITION`: string
-  - `HARDWARE_IDENTITY_DEFINITION`: string
-  - `HARDWARE_PROBE_NVIDIA_SMI`: string
-  - `INTERIM_CADENCE_CLOCK`: string
-  - `INTERIM_CADENCE_DEFINITION`: string
-  - `INTERIM_CADENCE_UNAVAILABLE_REASON`: string
-  - `LAG_EXCESS_DEFINITION`: string
-  - `LAG_EXCESS_UNAVAILABLE_REASON`: string
-  - `LANE_UNAVAILABLE_DEFINITION`: string
-  - `LATENCY_METRIC_RESPONSE`: string
-  - `LATENCY_METRIC_TTFS`: string
-  - `LOOKAHEAD_IDENTITY_CLIENT_DECLARED`: string
-  - `LOOKAHEAD_IDENTITY_DEFINITION`: string
-  - `LOOKAHEAD_IDENTITY_SERVER_REPORTED`: string
-  - `MODE_OFFLINE`: string
-  - `MODE_STREAMING`: string
-  - `NATIVE_LATENCY_CLOCK`: string
-  - `NORMALIZATION_CORPUS_REFERENCE`: string
-  - `NORMALIZATION_ENGINE_VS_OTHER_SERVER`: string
-  - `NORMALIZATION_ENGINE_VS_OWN_ORACLE`: string
-  - `OFFLINE_RTFX_DEFINITION`: string
-  - `ORACLE_NORMALIZATION_DEFINITION`: string
-  - `OTHER_SERVER_NORMALIZATION_DEFINITION`: string
-  - `OUTCOME_ACCOUNTING_DEFINITION`: string
-  - `PACING_FIDELITY_CLOCK`: string
-  - `PACING_FIDELITY_DEFINITION`: string
-  - `PACING_FIDELITY_UNAVAILABLE_REASON`: string
-  - `PASS_CONJUNCTION_DEFINITION`: string
-  - `PERCENTILE_LINEAR_DEFINITION`: string
-  - `PERCENTILE_METHOD_NEAREST_RANK`: string
-  - `PERCENTILE_METHOD_NUMPY_LINEAR`: string
-  - `PERCENTILE_NEAREST_RANK_DEFINITION`: string
-  - `PER_UTTERANCE_WER_DEFINITION`: string
-  - `POPULATION_DEFINITION`: string
-  - `PREFIX_VIOLATION_DEFINITION`: string
-  - `PRODUCTIVE_DEFINITION`: string
-  - `RESPONSE_LATENCY_CLOCK`: string
-  - `RESPONSE_LATENCY_DEFINITION`: string
-  - `REVISION_RATE_DEFINITION`: string
-  - `RTFX_VALIDITY_NOT_APPLICABLE`: string
-  - `RTFX_VALIDITY_PACING_DISABLED`: string
-  - `RTFX_VALIDITY_UNQUALIFIED`: string
-  - `SCHEMA_VERSION`: string
-  - `SDI_DEFINITION`: string
-  - `STEADY_INTERVAL_DEFINITION`: string
-  - `STEADY_INTERVAL_UNAVAILABLE_REASON`: string
-  - `STREAMING_RTFX_CLOCK`: string
-  - `STREAMING_RTFX_DEFINITION`: string
-  - `SUSTAINABILITY_COMPLETION_FRACTION`: string
-  - `SUSTAINABILITY_STEADY_INTERVAL`: string
-  - `SUSTAINED_STREAMS_DEFINITION`: string
-  - `SUSTAINED_STREAMS_UNAVAILABLE_REASON`: string
-  - `TTFS_CLOCK`: string
-  - `TTFS_DEFINITION`: string
-  - `VLLM_FORMAT_NOTE`: string
-  - `WER_DEFINITION`: string
+- `definitions`: object of emitted constants quoted above
 - `resolved_config`: object
   - `workload`: object
     - `clip`: object
@@ -458,6 +424,11 @@ with injected hardware and a scripted cell span.
     - `transport_options`: object
       - `interim_every_chunks`: int
       - `transcript`: string
+    - `server_version`: null
+    - `server_gpu_name`: null
+    - `server_gpu_count`: null
+    - `server_gpu_memory_mib`: null
+    - `server_driver_version`: null
   - `run`: object
     - `output_path`: string
     - `verbosity`: int
@@ -474,6 +445,8 @@ with injected hardware and a scripted cell span.
       - `sustainability_min`: float
       - `accuracy_tolerance`: float
       - `normalization_policy`: string
+- `reproduction`: object
+  - `overrides`: list
 - `secrets`: list[object]
   - item: object
     - `name`: string
@@ -483,41 +456,59 @@ with injected hardware and a scripted cell span.
   - `observation`: string
 - `identity`: object
   - `target`: object
-    - `auth_env`: string
-    - `endpoint_url`: string
     - `model`: string
-    - `tls_verify`: bool
+    - `server_version`: null
     - `transport`: string
     - `transport_options`: object
       - `interim_every_chunks`: int
       - `transcript`: string
   - `software`: object
     - `adapter`: string
-    - `git_commit`: string
-    - `lookahead_identity_policy`: string
+    - `measurement_semantics_version`: string
     - `normalization_policy`: string
     - `package`: string
-    - `package_version`: string
     - `percentile_method`: string
+    - `schema_version`: string
+  - `hardware`: object
+    - `gpu_count`: null
+    - `gpu_identity_source`: string
+    - `gpu_memory_mib`: null
+    - `gpu_name`: null
+  - `warn`: object
+    - `architecture`: string
+    - `auth_env`: string
+    - `cpu_model`: string
+    - `driver_version`: null
+    - `driver_version_source`: string
+    - `endpoint_url`: string
+    - `git_commit`: string
+    - `git_dirty`: bool
+    - `hostname`: string
+    - `lookahead_identity_policy`: string
+    - `logical_cpu_count`: int
+    - `package_version`: string
+    - `probe_status`: string
     - `python_version`: string
+    - `system`: string
+    - `tls_verify`: bool
+- `probe`: object
   - `hardware`: object
     - `architecture`: string
+    - `collected_at`: string
     - `cpu_model`: string
     - `driver_version`: null
     - `gpu_count`: null
     - `gpu_memory_mib`: null
     - `gpu_name`: null
-    - `logical_cpu_count`: int
-    - `system`: string
-- `probe`: object
-  - `hardware`: object
-    - `collected_at`: string
     - `gpu_uuids`: list
     - `hostname`: string
+    - `logical_cpu_count`: int
     - `probe_name`: string
     - `probe_status`: string
+    - `system`: string
   - `software`: object
     - `git_available`: bool
+    - `git_commit`: string
     - `git_dirty`: bool
 - `comparison_key`: string
 - `dataset`: object
@@ -574,33 +565,9 @@ with injected hardware and a scripted cell span.
         - `timed_out`: bool
         - `error_code`: null
         - `terminal_status`: string
+        - `error_detail`: null
         - `final_latency_clock`: string
-    - `warmup_outcomes`: list[object]
-      - item: object
-        - `label`: string
-        - `mode`: string
-        - `clip_name`: string
-        - `chunk_ms`: int
-        - `audio_duration_s`: float
-        - `connected`: bool
-        - `configured`: bool
-        - `interim_count`: int
-        - `transcript`: string
-        - `protocol_errors`: list
-        - `ttfs_s`: float
-        - `final_latency_s`: float
-        - `response_latencies_s`: list[float]
-        - `latency_clock`: string
-        - `response_latency_clock`: string
-        - `protocol_extras`: object
-          - `adapter`: string
-          - `markers`: object
-            - `cohort_label`: string
-        - `interim_texts`: list[string]
-        - `timed_out`: bool
-        - `error_code`: null
-        - `terminal_status`: string
-        - `final_latency_clock`: string
+    - `warmup_outcomes`: list[object] (same item shape as outcomes)
     - `reduction`: object
       - `counts`: object
         - `definition`: string
@@ -685,6 +652,9 @@ with injected hardware and a scripted cell span.
         - `sdi_definition`: string
         - `substitutions`: int
         - `deletions`: int
+        - `deletions_from_missing_transcript`: int
+        - `n_failed`: int
+        - `chars_from_missing_transcript`: int
         - `insertions`: int
         - `reference_tokens`: int
         - `hypothesis_tokens`: int
@@ -715,6 +685,7 @@ with injected hardware and a scripted cell span.
             - `deletions`: int
             - `insertions`: int
             - `reference_tokens`: int
+            - `deletions_from_missing_transcript`: int
       - `streaming_rtfx`: object
         - `name`: string
         - `availability`: string
@@ -950,6 +921,9 @@ with injected hardware and a scripted cell span.
       - `sdi_definition`: string
       - `substitutions`: int
       - `deletions`: int
+      - `deletions_from_missing_transcript`: int
+      - `n_failed`: int
+      - `chars_from_missing_transcript`: int
       - `insertions`: int
       - `reference_tokens`: int
       - `hypothesis_tokens`: int
@@ -980,6 +954,7 @@ with injected hardware and a scripted cell span.
           - `deletions`: int
           - `insertions`: int
           - `reference_tokens`: int
+          - `deletions_from_missing_transcript`: int
     - `streaming_rtfx`: object
       - `name`: string
       - `availability`: string

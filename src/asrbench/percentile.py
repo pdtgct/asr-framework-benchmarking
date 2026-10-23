@@ -48,16 +48,31 @@ def percentile(
         The percentile, or ``None`` when ``samples`` is empty.
 
     Raises:
-        PercentileError: ``q`` is outside ``[0, 100]`` or ``method`` is not
-            a named policy.
+        PercentileError: ``q`` is outside ``[0, 100]``, a sample is not
+            finite, or ``method`` is not a named policy.
     """
     if method not in PERCENTILE_METHODS:
         raise PercentileError(f"unknown percentile method {method!r}")
-    if q < 0.0 or q > 100.0:
+    if (
+        isinstance(q, bool)
+        or not isinstance(q, (int, float))
+        or not math.isfinite(q)
+        or q < 0.0
+        or q > 100.0
+    ):
         raise PercentileError("percentile q must be in [0, 100]")
     if not samples:
         return None
-    ordered = sorted(float(sample) for sample in samples)
+    ordered: list[float] = []
+    for sample in samples:
+        if (
+            isinstance(sample, bool)
+            or not isinstance(sample, (int, float))
+            or not math.isfinite(sample)
+        ):
+            raise PercentileError("percentile samples must be finite")
+        ordered.append(float(sample))
+    ordered.sort()
     if method == PERCENTILE_METHOD_NUMPY_LINEAR:
         return _numpy_linear(ordered, q)
     return _nearest_rank(ordered, q)
@@ -79,7 +94,7 @@ def _numpy_linear(ordered: list[float], q: float) -> float:
     lower = math.floor(position)
     upper = min(lower + 1, len(ordered) - 1)
     fraction = position - lower
-    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
 
 
 def _nearest_rank(ordered: list[float], q: float) -> float:
