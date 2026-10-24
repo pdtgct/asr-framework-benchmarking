@@ -196,6 +196,10 @@ def test_finals_are_concatenated_and_empty_interims_have_no_latency(
     assert outcome.transcript == "ABC"
     assert outcome.ttfs_s is None
     assert outcome.response_latencies_s == []
+    first_final = outcome.protocol_extras["first_final_s"]
+    assert isinstance(first_final, float)
+    assert outcome.final_latency_s is not None
+    assert first_final < outcome.final_latency_s
     empty = RunningFake(FakeRiva(mode="empty-interim", transcript="HELLO"))
     try:
         outcome = asyncio.run(
@@ -233,6 +237,10 @@ def test_one_response_with_several_results_is_one_interim(
     assert len(outcome.response_latencies_s) == 1
     assert outcome.ttfs_s is not None
     assert outcome.transcript == "ABC"
+    first_final = outcome.protocol_extras["first_final_s"]
+    assert isinstance(first_final, float)
+    assert outcome.final_latency_s is not None
+    assert first_final <= outcome.final_latency_s
 
 
 def test_barrier_releases_before_audio(tmp_path: Path) -> None:

@@ -598,9 +598,11 @@ def _consume(
     carries several non-final results. Those transcripts are
     concatenated with no added separator, matching the public client's
     partial join. Final transcripts are concatenated the same way, with
-    no extra space. TTFS and response latency count a non-empty interim
-    once per response. ``stability`` is not a latency. A result that
-    arrives before any audio does not invent a latency.
+    no extra space. ``final_latency_s`` stays the last final.
+    ``protocol_extras["first_final_s"]`` is the first final and is set
+    once. TTFS and response latency count a non-empty interim once per
+    response. ``stability`` is not a latency. A result that arrives
+    before any audio does not invent a latency.
     """
     parts: list[str] = []
     if outcome.transcript is not None:
@@ -618,6 +620,8 @@ def _consume(
             if isinstance(latest, float):
                 latency = time.monotonic() - latest
                 if latency >= 0:
+                    if "first_final_s" not in outcome.protocol_extras:
+                        outcome.protocol_extras["first_final_s"] = latency
                     outcome.final_latency_s = latency
                     outcome.final_latency_clock = FINALIZATION_CLOCK
             _progress(progress_callback, request.label, "final.received")

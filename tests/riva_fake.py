@@ -137,6 +137,7 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             yield _response(self.transcript, final=True)
         elif self.mode == "two-finals":
             yield _response("AB", final=True)
+            time.sleep(0.05)
             yield _response("C", final=True)
         elif self.mode == "empty-final":
             yield _response("", final=True)
