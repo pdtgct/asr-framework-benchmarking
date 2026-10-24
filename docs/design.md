@@ -90,8 +90,10 @@ vocabulary.
 
 Adapter diagnostics are bounded lifecycle edges, never per-chunk log spam.
 
-Planned adapters: an OpenAI-style realtime WebSocket, NVIDIA Riva public gRPC, and
-offline HTTP or gRPC transcription for maximum-throughput cells.
+Implemented adapters: the mock, the vLLM realtime WebSocket dialect (`realtime-ws`),
+NVIDIA Riva public gRPC (`riva-grpc`), and the NIM transcription WebSocket
+(`nim-realtime`, `/v1/realtime?intent=transcription`). `nim-realtime` is not the
+vLLM dialect. Offline HTTP or gRPC transcription is still planned.
 
 ### Runner
 

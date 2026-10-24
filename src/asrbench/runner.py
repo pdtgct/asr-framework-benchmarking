@@ -181,8 +181,8 @@ def load_adapter(target: TargetSpec) -> TransportAdapter:
 
     Raises:
         ConfigError: The transport is unknown, the realtime WebSocket
-            adapter was asked to open its own client session, or the
-            riva extra is not installed.
+            adapter was asked to open its own client session, or a
+            transport extra is not installed.
     """
     if target.transport == "mock":
         from asrbench.adapters.mock import MockAdapter
@@ -207,6 +207,10 @@ def load_adapter(target: TargetSpec) -> TransportAdapter:
         from asrbench.adapters.riva_grpc import RivaGrpcAdapter
 
         return RivaGrpcAdapter.from_target(target)
+    if target.transport == "nim-realtime":
+        from asrbench.adapters.nim_realtime import NimRealtimeAdapter
+
+        return NimRealtimeAdapter.from_target(target)
     raise ConfigError(
         f"unknown transport {target.transport!r}. A further protocol "
         "plugs in by handling its transport name in load_adapter. An "

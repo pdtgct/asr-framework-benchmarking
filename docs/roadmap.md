@@ -138,6 +138,10 @@ has not been shown to be an interface, and the mock adapter is a proof of concep
 not a second protocol. An adapter-authoring guide is written after this, not before,
 so it describes an interface that has survived a second transport.
 
+StreamingRecognize, the NIM compatibility preset, and the NIM transcription
+WebSocket are in the tree. Offline Recognize is not implemented, so this step
+is not done.
+
 Vendor lanes that require entitlement must degrade to "lane unavailable" rather than
 failing the run. Public users will not have that access, and a benchmark that refuses
 to run for them is not public.
