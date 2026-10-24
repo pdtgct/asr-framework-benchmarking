@@ -23,7 +23,9 @@ NVIDIA's public StreamingRecognize protocol, and `presets/nim-compat-streaming.j
 is the vendor-compatibility cell. `presets/nim-compat-smoke.json` is the single-GPU
 smoke: interims on, three explicit iterations, TTFS p99 under 1 s, and
 corpus-reference WER within 0.10. Finalization is written beside that receipt and
-is not a pass gate. `nim-realtime` speaks the public NIM transcription WebSocket
+is not a pass gate. `scripts/prepare_librispeech_clip.py` turns the locked FLAC
+into the WAV that preset names and prints the WAV sha256. Set `--model` to the
+`model_name` the server reports. `nim-realtime` speaks the public NIM transcription WebSocket
 (`/v1/realtime?intent=transcription`). That is a different dialect from
 `realtime-ws`. Offline Recognize is not implemented, so roadmap step 3 is not closed.
 See [`docs/roadmap.md`](docs/roadmap.md).

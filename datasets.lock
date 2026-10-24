@@ -15,7 +15,7 @@
       "source": "https://www.openslr.org/resources/12/dev-clean.tar.gz#LibriSpeech/dev-clean/1272/135031/1272-135031-0000.flac",
       "licence": "CC-BY-4.0",
       "attribution": "LibriSpeech ASR corpus (Panayotov et al., ICASSP 2015)",
-      "note": "10.885 s. The clip NVIDIA's published streaming figures use."
+      "note": "10.885 s. The clip NVIDIA's published streaming figures use. The PCM16 WAV is produced by scripts/prepare_librispeech_clip.py; its sha256 is printed at prepare time and is not this FLAC digest."
     },
     {
       "name": "riva-en-US-sample",

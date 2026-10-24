@@ -83,6 +83,18 @@ reasons, both load-bearing:
 These reproduce a published comparison. They do not replace the longer fixtures for
 state-boundedness or endpointing.
 
+Prepare `clips/1272-135031-0000.wav` on the machine that runs the cell.
+`datasets.lock` pins the FLAC (`librispeech-1272-135031-0000`).
+`scripts/prepare_librispeech_clip.py` checks that digest, decodes 16 kHz mono
+PCM16 to the WAV, and prints the WAV sha256. Record that digest in the run
+notes. Do not commit the audio.
+
+Set `target.model` to the `model_name` reported by
+`GetRivaSpeechRecognitionConfig` (`model_config[].model_name`), via `--model`
+or the preset field. The adapter sends that string as `RecognitionConfig.model`.
+An unknown name fails on Riva. The placeholder `server-reported-model-name` in
+`presets/nim-compat-smoke.json` is not a model identity.
+
 ## AMI Meeting Corpus
 
 <https://groups.inf.ed.ac.uk/ami/corpus/> — for endpointing and conversational

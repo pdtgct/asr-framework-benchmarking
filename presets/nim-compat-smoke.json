@@ -8,7 +8,7 @@
       "path": "clips/1272-135031-0000.wav",
       "licence": "CC-BY-4.0",
       "attribution": "LibriSpeech ASR corpus (Panayotov et al., ICASSP 2015)",
-      "note": "datasets.lock entry librispeech-1272-135031-0000. The lock digest is the FLAC; the runner pins the PCM16 WAV at path when the file is present. Audio is not committed. 10.885 s is 2.4 contexts of the 80 ms frame. Not an endpointing clip. lookahead_frames 2 is client-declared from 160 ms / 80 ms and is not server-reported. Set target.model to the model_name from GetRivaSpeechRecognitionConfig; RecognitionConfig.model is that string verbatim. iterations is explicit. finalization_s is reported by the receipt and the perf TSV and is not the pass gate."
+      "note": "datasets.lock entry librispeech-1272-135031-0000. The lock digest is the FLAC. scripts/prepare_librispeech_clip.py checks it and writes the PCM16 WAV; the runner pins that WAV when the file is present. Audio is not committed. 10.885 s is 2.4 contexts of the 80 ms frame. Not an endpointing clip. lookahead_frames 2 is client-declared from 160 ms / 80 ms and is not server-reported. Set target.model to the model_name from GetRivaSpeechRecognitionConfig; RecognitionConfig.model is that string verbatim. iterations is explicit. finalization_s is reported by the receipt and the perf TSV and is not the pass gate."
     },
     "reference_transcript": "BECAUSE YOU WERE SLEEPING INSTEAD OF CONQUERING THE LOVELY ROSE PRINCESS HAS BECOME A FIDDLE WITHOUT A BOW WHILE POOR SHAGGY SITS THERE A COOING DOVE",
     "mode": "streaming",
