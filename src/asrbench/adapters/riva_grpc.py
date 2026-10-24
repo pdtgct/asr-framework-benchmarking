@@ -14,6 +14,10 @@ does not assign the token to itself, the request, or the outcome.
 An unreachable server, or ``UNAUTHENTICATED`` / ``PERMISSION_DENIED``, is
 a ``lane_unavailable`` outcome. It is not a crash and it does not invent a
 latency. A deadline after audio has started is a timeout.
+
+``GetRivaSpeechRecognitionConfig`` is a probe. Any failure, including a
+timeout and any gRPC status, is recorded on ``server_identity`` and the
+session still streams. A channel that never becomes ready does not.
 """
 
 from __future__ import annotations
@@ -372,28 +376,24 @@ class RivaGrpcAdapter:
                 metadata=metadata,
             )
         except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
-            _mark_lane_unavailable(
+            _record_config_probe(
                 outcome,
-                "UNAVAILABLE",
+                "DEADLINE_EXCEEDED",
                 "recognition config timed out",
                 progress_callback,
                 request.label,
             )
             return
         except Exception as error:  # noqa: BLE001 - the lane stays data
-            name, _detail = _grpc_status(error)
-            if name == "UNIMPLEMENTED":
-                outcome.protocol_extras["server_identity"] = {
-                    "models": [],
-                    "config_status": "UNIMPLEMENTED",
-                }
-                _progress(
-                    progress_callback,
-                    request.label,
-                    "recognition_config.unimplemented",
-                )
-                return
-            self._fail_setup(outcome, error, request.label, progress_callback)
+            name, text = _grpc_status(error)
+            detail = _redact(text, self._auth_env) or type(error).__name__
+            _record_config_probe(
+                outcome,
+                name or type(error).__name__,
+                detail,
+                progress_callback,
+                request.label,
+            )
             return
         outcome.protocol_extras["server_identity"] = _server_identity(response)
         _progress(
@@ -629,6 +629,39 @@ def _consume(
             outcome.ttfs_s = now - first
         if isinstance(latest, float):
             outcome.response_latencies_s.append(now - latest)
+
+
+def _record_config_probe(
+    outcome: SessionOutcome,
+    code: str,
+    detail: str,
+    progress_callback: SessionProgressCallback | None,
+    label: str,
+) -> None:
+    """Remember a failed config probe and leave the session open.
+
+    The probe is not admission. A server that rejects it, or does not
+    implement it, can still answer ``StreamingRecognize``. The status is
+    identity. It is not ``terminal_status``.
+
+    Args:
+        outcome: Session being filled in.
+        code: gRPC status name, or ``DEADLINE_EXCEEDED`` on timeout.
+        detail: Redacted status text.
+        progress_callback: Bounded lifecycle edge.
+        label: Session label.
+    """
+    outcome.protocol_extras["server_identity"] = {
+        "models": [],
+        "config_status": code,
+        "config_detail": detail,
+    }
+    _progress(
+        progress_callback,
+        label,
+        "recognition_config.probe_failed",
+        code=code,
+    )
 
 
 def _mark_lane_unavailable(

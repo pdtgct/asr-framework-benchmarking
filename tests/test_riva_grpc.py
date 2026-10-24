@@ -288,7 +288,7 @@ def test_auth_and_permission_failures_are_lane_unavailable(
 ) -> None:
     monkeypatch.setenv("ASRBENCH_RIVA_TOKEN", _MARKER)
     path = _wav(tmp_path, 0.02)
-    for mode in ("unauth", "denied", "config-denied"):
+    for mode in ("unauth", "denied"):
         server = RunningFake(FakeRiva(mode=mode))
         try:
             outcome = asyncio.run(
@@ -398,6 +398,28 @@ def test_unimplemented_config_still_recognizes(tmp_path: Path) -> None:
     identity = outcome.protocol_extras["server_identity"]
     assert identity["config_status"] == "UNIMPLEMENTED"
     assert identity["models"] == []
+
+
+def test_config_probe_failure_still_streams(tmp_path: Path) -> None:
+    path = _wav(tmp_path, 0.02)
+    cases = (
+        ("config-unimplemented", "UNIMPLEMENTED"),
+        ("config-not-found", "NOT_FOUND"),
+        ("config-denied", "PERMISSION_DENIED"),
+    )
+    for mode, status in cases:
+        server = RunningFake(FakeRiva(mode=mode, transcript="HELLO"))
+        try:
+            outcome = asyncio.run(_adapter(server.endpoint).run(_request(path)))
+        finally:
+            server.stop()
+        assert outcome.terminal_status == "completed", mode
+        assert outcome.transcript == "HELLO"
+        assert outcome.error_code is None
+        identity = outcome.protocol_extras["server_identity"]
+        assert identity["config_status"] == status
+        assert identity["models"] == []
+        assert identity["config_detail"]
 
 
 def test_perf_table_tsv_refuses_a_mixed_population(tmp_path: Path) -> None:

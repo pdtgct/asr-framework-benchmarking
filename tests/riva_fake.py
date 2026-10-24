@@ -46,6 +46,8 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             context.abort(grpc.StatusCode.PERMISSION_DENIED, "nope")
         if self.mode == "config-unimplemented":
             context.abort(grpc.StatusCode.UNIMPLEMENTED, "no config")
+        if self.mode == "config-not-found":
+            context.abort(grpc.StatusCode.NOT_FOUND, "no such model")
         config = riva_asr_pb2.RivaSpeechRecognitionConfigResponse.Config(
             model_name=request.model_name or "fake"
         )
@@ -123,6 +125,8 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             "interim",
             "empty-interim",
             "config-unimplemented",
+            "config-denied",
+            "config-not-found",
         }:
             yield _response(self.transcript, final=True)
         elif self.mode == "two-finals":
