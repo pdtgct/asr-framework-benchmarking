@@ -26,7 +26,7 @@
     "language": "en-US",
     "punctuation": true,
     "diarization": false,
-    "interim_results": false,
+    "interim_results": true,
     "transcript_policy": "final-and-interims",
     "correctness_streams": [1, 4],
     "performance_streams": [1, 4, 8, 16, 32, 64],

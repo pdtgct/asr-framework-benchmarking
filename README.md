@@ -20,8 +20,11 @@ The measurement core is in the tree: a frozen workload, one receipt per run, red
 that keep failures in the denominator, and reporters that read only that receipt.
 `presets/mock-streaming.json` runs with no server and no network. `riva-grpc` speaks
 NVIDIA's public StreamingRecognize protocol, and `presets/nim-compat-streaming.json`
-is the vendor-compatibility cell. `nim-realtime` speaks the public NIM transcription
-WebSocket (`/v1/realtime?intent=transcription`). That is a different dialect from
+is the vendor-compatibility cell. `presets/nim-compat-smoke.json` is the single-GPU
+smoke: interims on, three explicit iterations, TTFS p99 under 1 s, and
+corpus-reference WER within 0.10. Finalization is written beside that receipt and
+is not a pass gate. `nim-realtime` speaks the public NIM transcription WebSocket
+(`/v1/realtime?intent=transcription`). That is a different dialect from
 `realtime-ws`. Offline Recognize is not implemented, so roadmap step 3 is not closed.
 See [`docs/roadmap.md`](docs/roadmap.md).
 
