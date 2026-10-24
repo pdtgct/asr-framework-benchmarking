@@ -13,7 +13,9 @@ does not assign the token to itself, the request, or the outcome.
 
 An unreachable server, or ``UNAUTHENTICATED`` / ``PERMISSION_DENIED``, is
 a ``lane_unavailable`` outcome. It is not a crash and it does not invent a
-latency. A deadline after audio has started is a timeout.
+latency. A deadline after audio has started is a timeout. ``UNAVAILABLE``
+after audio has started is a session error: the lane was open and the
+server failed. The same status before any audio is ``lane_unavailable``.
 
 ``GetRivaSpeechRecognitionConfig`` is a probe. Any failure, including a
 timeout and any gRPC status, is recorded on ``server_identity`` and the
@@ -555,6 +557,11 @@ class RivaGrpcAdapter:
             outcome.terminal_status = "timed_out"
             outcome.error_code = name or "DEADLINE_EXCEEDED"
             outcome.error_detail = detail
+            return
+        # The lane accepted audio. A later UNAVAILABLE is the server
+        # failing the session, and samples already taken stay.
+        if audio_started and name == "UNAVAILABLE":
+            _mark_protocol_error(outcome, name, detail)
             return
         if (
             name in _LANE_CODES

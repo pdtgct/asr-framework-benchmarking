@@ -123,6 +123,14 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
                 ]
                 if len(audio_seen) == 1:
                     yield _results_response([("STA", False), ("BLE", False)])
+            if (
+                self.mode == "unavailable-after-audio"
+                and kind == "audio_content"
+            ):
+                yield _response("PARTIAL", final=False)
+                context.set_code(grpc.StatusCode.UNAVAILABLE)
+                context.set_details("server gone")
+                return
         if self.mode == "hang":
             self._wait_until_inactive(context)
             return

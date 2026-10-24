@@ -18,6 +18,8 @@ from asrbench.config import ConfigError
 from asrbench.outcome import (
     FINALIZATION_CLOCK,
     NATIVE_LATENCY_CLOCK,
+    RESPONSE_LATENCY_CLOCK,
+    SessionOutcome,
     SessionRequest,
 )
 from asrbench.reporters import (
@@ -396,6 +398,101 @@ def test_invalid_argument_is_a_protocol_error(tmp_path: Path) -> None:
     assert outcome.terminal_status == "errored"
     assert outcome.error_code == "INVALID_ARGUMENT"
     assert outcome.ttfs_s is None
+
+
+class _GrpcStatus(Exception):
+    """Stand-in for an ``AioRpcError`` with a named status."""
+
+    def __init__(self, name: str, detail: str = "gone") -> None:
+        super().__init__(name)
+        self._name = name
+        self._detail = detail
+
+    def code(self) -> object:
+        return type("Code", (), {"name": self._name})()
+
+    def details(self) -> str:
+        return self._detail
+
+
+def test_unavailable_after_audio_keeps_the_partial(tmp_path: Path) -> None:
+    server = RunningFake(FakeRiva(mode="unavailable-after-audio"))
+    try:
+        outcome = asyncio.run(
+            _adapter(server.endpoint).run(
+                _request(
+                    _wav(tmp_path, 0.02),
+                    interim_results=True,
+                )
+            )
+        )
+    finally:
+        server.stop()
+    assert outcome.terminal_status == "errored"
+    assert outcome.error_code == "UNAVAILABLE"
+    assert outcome.interim_texts == ["PARTIAL"]
+    assert outcome.ttfs_s is not None
+    assert outcome.ttfs_s >= 0
+
+
+def test_unavailable_class_follows_whether_audio_started() -> None:
+    adapter = _adapter("127.0.0.1:1")
+    request = _request(Path("clip.wav"))
+    before = _blank_outcome()
+    adapter._fail_stream(
+        before,
+        _GrpcStatus("UNAVAILABLE"),
+        {"first": None, "latest": None},
+        request,
+        None,
+    )
+    assert before.terminal_status == "lane_unavailable"
+    assert before.ttfs_s is None
+    after = _blank_outcome()
+    after.ttfs_s = 0.2
+    after.interim_count = 1
+    adapter._fail_stream(
+        after,
+        _GrpcStatus("UNAVAILABLE"),
+        {"first": 1.0, "latest": 1.0},
+        request,
+        None,
+    )
+    assert after.terminal_status == "errored"
+    assert after.error_code == "UNAVAILABLE"
+    assert after.ttfs_s == 0.2
+    deadline = _blank_outcome()
+    adapter._fail_stream(
+        deadline,
+        _GrpcStatus("DEADLINE_EXCEEDED"),
+        {"first": 1.0, "latest": 1.0},
+        request,
+        None,
+    )
+    assert deadline.terminal_status == "timed_out"
+    assert deadline.timed_out is True
+    denied = _blank_outcome()
+    adapter._fail_stream(
+        denied,
+        _GrpcStatus("UNAUTHENTICATED"),
+        {"first": 1.0, "latest": 1.0},
+        request,
+        None,
+    )
+    assert denied.terminal_status == "lane_unavailable"
+
+
+def _blank_outcome() -> SessionOutcome:
+    return SessionOutcome(
+        label="s",
+        lifecycle="full",
+        clip_name="clip.wav",
+        chunk_ms=100,
+        audio_duration_s=0.02,
+        latency_clock=NATIVE_LATENCY_CLOCK,
+        response_latency_clock=RESPONSE_LATENCY_CLOCK,
+        final_latency_clock=FINALIZATION_CLOCK,
+    )
 
 
 def test_deadline_after_audio_is_a_timeout(tmp_path: Path) -> None:
