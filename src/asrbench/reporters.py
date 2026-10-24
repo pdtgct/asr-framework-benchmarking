@@ -20,7 +20,7 @@ from asrbench.fingerprint import capacity_group_key, frontier_group_key
 
 
 class NotHomogeneousError(ValueError):
-    """Vendor TSV is only defined for a homogeneous population."""
+    """A pooled projection requires one cadence and one lookahead."""
 
 
 def console_report(receipt: dict[str, Any]) -> str:
@@ -268,7 +268,12 @@ def frontier_report(
 
     Returns:
         A JSON-ish frontier object.
+
+    Raises:
+        NotHomogeneousError: A receipt mixes cadence or lookahead.
     """
+    for receipt in receipts:
+        _require_homogeneous(receipt)
     order, grouped = _group(
         receipts, sources, frontier_group_key, _frontier_point
     )
@@ -341,7 +346,12 @@ def sustained_streams_report(
 
     Returns:
         A JSON-ish projection. ``value`` is null when no cell passed.
+
+    Raises:
+        NotHomogeneousError: A receipt mixes cadence or lookahead.
     """
+    for receipt in receipts:
+        _require_homogeneous(receipt)
     order, grouped = _group(
         receipts, sources, capacity_group_key, _capacity_cell
     )
@@ -485,9 +495,7 @@ def _require_homogeneous(receipt: dict[str, Any]) -> None:
     frames = {entry["lookahead_frames"] for entry in population}
     cadences = {entry["cadence_ms"] for entry in population}
     if len(frames) != 1 or len(cadences) != 1:
-        raise NotHomogeneousError(
-            "vendor TSV requires one cadence and one lookahead"
-        )
+        raise NotHomogeneousError("one cadence and one lookahead are required")
 
 
 def _cell(value: object) -> str:

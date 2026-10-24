@@ -230,6 +230,11 @@ def test_a_raising_lane_is_an_errored_outcome(tmp_path: Path) -> None:
     assert counts["attempted"] == 1
     text = receipt["trials"][0]["outcomes"][0]["error_detail"]
     assert "RuntimeError" in text
+    failed = receipt["trials"][0]["outcomes"][0]
+    assert failed["entry_index"] == 0
+    assert failed["cadence_ms"] == 320
+    assert failed["lookahead_frames"] == 4
+    assert failed["lifecycle"] == "full"
     extras = receipt["trials"][0]["outcomes"][0]["protocol_extras"]
     assert "exception" not in extras
 
@@ -288,7 +293,7 @@ def _drive(
 def _success(request: SessionRequest) -> SessionOutcome:
     return SessionOutcome(
         label=request.label,
-        mode=request.mode,
+        lifecycle=request.lifecycle,
         clip_name=request.clip_path.name,
         chunk_ms=request.chunk_ms,
         audio_duration_s=1.6,
@@ -354,6 +359,15 @@ def test_each_lane_runs_at_its_population_cadence(tmp_path: Path) -> None:
 
     receipt = _drive(config, tmp_path, "mixed", Recording())
     assert seen == [(160, 2), (320, 4), (320, 4)]
+    recorded = [
+        (
+            item["entry_index"],
+            item["cadence_ms"],
+            item["lookahead_frames"],
+        )
+        for item in receipt["trials"][0]["outcomes"]
+    ]
+    assert recorded == [(0, 160, 2), (1, 320, 4), (1, 320, 4)]
     resolved = receipt["resolved_config"]
     assert isinstance(resolved, dict)
     assert resolved["workload"]["cadence_ms"] is None

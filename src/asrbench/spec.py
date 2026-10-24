@@ -119,6 +119,15 @@ def _default_transport_options() -> Mapping[str, Any]:
     )
 
 
+def _default_channel_options() -> Mapping[str, Any]:
+    """Return empty channel tuning, frozen against later mutation.
+
+    Keepalive and maximum message size live here, not in
+    ``transport_options``. They are warn-only identity.
+    """
+    return MappingProxyType({})
+
+
 @dataclass(frozen=True)
 class TargetSpec:
     """Where the work is sent. Identity, not offered-work fingerprint.
@@ -137,6 +146,10 @@ class TargetSpec:
     transport_options: Mapping[str, Any] = field(
         default_factory=_default_transport_options
     )
+    #: Keepalive and maximum message size. Not hard identity.
+    channel_options: Mapping[str, Any] = field(
+        default_factory=_default_channel_options
+    )
     server_version: str | None = None
     server_gpu_name: str | None = None
     server_gpu_count: int | None = None
@@ -144,11 +157,16 @@ class TargetSpec:
     server_driver_version: str | None = None
 
     def __post_init__(self) -> None:
-        """Freeze transport options so a caller cannot mutate identity."""
+        """Freeze option maps so a caller cannot mutate them later."""
         object.__setattr__(
             self,
             "transport_options",
             MappingProxyType(dict(self.transport_options)),
+        )
+        object.__setattr__(
+            self,
+            "channel_options",
+            MappingProxyType(dict(self.channel_options)),
         )
 
 

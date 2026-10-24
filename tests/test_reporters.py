@@ -116,15 +116,29 @@ def test_chunk_ms_splits_a_frontier_and_cadence_does_not(
     assert len(joined["series"]) == 1
 
 
-def test_vendor_tsv_refuses_a_mixed_population(tmp_path: Path) -> None:
-    receipt = _receipt(tmp_path)
+def _mix(receipt: dict[str, Any]) -> dict[str, Any]:
     workload = receipt["resolved_config"]["workload"]
     workload["population"] = [
         {"lanes": 1, "cadence_ms": 160, "lookahead_frames": 2},
         {"lanes": 1, "cadence_ms": 320, "lookahead_frames": 4},
     ]
+    return receipt
+
+
+def test_vendor_tsv_refuses_a_mixed_population(tmp_path: Path) -> None:
+    receipt = _mix(_receipt(tmp_path))
     with pytest.raises(NotHomogeneousError):
         vendor_tsv(receipt)
+
+
+def test_frontier_and_sustained_refuse_a_mixed_population(
+    tmp_path: Path,
+) -> None:
+    receipt = _mix(_receipt(tmp_path))
+    with pytest.raises(NotHomogeneousError):
+        frontier_report([receipt], ["mixed"])
+    with pytest.raises(NotHomogeneousError):
+        sustained_streams_report([receipt], ["mixed"])
 
 
 def test_frontier_marks_the_pareto_edge_and_keeps_gpus_apart(

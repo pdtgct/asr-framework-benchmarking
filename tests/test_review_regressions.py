@@ -97,6 +97,18 @@ def test_a_language_change_names_the_field(tmp_path: Path) -> None:
     assert any(item.field.endswith("language") for item in result.differences)
 
 
+def test_channel_options_warn_and_do_not_refuse(tmp_path: Path) -> None:
+    left = _run(tmp_path)
+    right = json.loads(json.dumps(left))
+    right["resolved_config"]["target"]["channel_options"] = {
+        "keepalive_time_ms": 30000
+    }
+    result = compare_receipts(left, right)
+    assert result.status == "comparable"
+    assert result.comparison_key_left == result.comparison_key_right
+    assert any("channel_options" in item.field for item in result.warnings)
+
+
 def test_driver_and_git_commit_warn_and_do_not_refuse(tmp_path: Path) -> None:
     left = _run(tmp_path)
     driver = json.loads(json.dumps(left))

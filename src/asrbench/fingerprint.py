@@ -8,8 +8,10 @@ text, and every run-observation field.
 
 The comparison key hashes four hard components. Warn-only fields are
 stored beside the key and do not refuse. ``transport_options`` stay hard
-because they change what the adapter sends. Git commit is warn-only and
-is read from this package's repository, not the caller's directory.
+because they change what the adapter sends. ``channel_options`` are
+warn-only: keepalive and maximum message size do not. Git commit is
+warn-only and is read from this package's repository, not the caller's
+directory.
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ COMPARISON_EXCLUSIONS: tuple[str, ...] = (
     "identity.warn.architecture",
     "identity.warn.hostname",
     "identity.warn.probe_status",
+    "identity.warn.channel_options",
     "probe.hardware.gpu_uuids",
     "probe.hardware.collected_at",
     "secrets.set",
@@ -318,6 +321,7 @@ def _warn_block(
         "lookahead_identity_policy": config.run.lookahead_identity_policy,
         "logical_cpu_count": probe.get("logical_cpu_count"),
         "package_version": versions["package_version"],
+        "channel_options": dict(config.target.channel_options),
         "probe_status": probe.get("probe_status"),
         "python_version": versions["python_version"],
         "system": probe.get("system"),

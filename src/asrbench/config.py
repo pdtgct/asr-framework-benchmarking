@@ -263,6 +263,7 @@ def config_to_dict(config: ResolvedConfig) -> dict[str, Any]:
         for item in fields(config.target)
     }
     target["transport_options"] = dict(config.target.transport_options)
+    target["channel_options"] = dict(config.target.channel_options)
     encoded = {"workload": workload, "target": target, "run": run}
     decoded: dict[str, Any] = json.loads(json.dumps(encoded, allow_nan=False))
     return decoded
@@ -682,8 +683,8 @@ def _merge(
             )
         elif name == "population":
             updates[name] = _population(value)
-        elif name == "transport_options":
-            updates[name] = _options(value)
+        elif name in {"transport_options", "channel_options"}:
+            updates[name] = _options(value, name)
         else:
             updates[name] = _coerce(
                 value, str(known[name].type), f"{where}.{name}"
@@ -730,12 +731,12 @@ def _population(value: object) -> tuple[PopulationEntry, ...]:
     return tuple(entries)
 
 
-def _options(value: object) -> dict[str, Any]:
+def _options(value: object, where: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ConfigError("transport_options must be an object")
+        raise ConfigError(f"{where} must be an object")
     for key in value:
         if not isinstance(key, str):
-            raise ConfigError("transport_options keys must be strings")
+            raise ConfigError(f"{where} keys must be strings")
     return dict(value)
 
 

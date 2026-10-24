@@ -12,6 +12,7 @@ from asrbench.config import (
     resolve,
     secret_records,
 )
+from asrbench.definitions import SCHEMA_VERSION
 from asrbench.spec import default_config
 
 _PRESET = Path("presets/mock-streaming.json")
@@ -182,7 +183,7 @@ def test_from_receipt_rejects_stray_env_and_a_foreign_schema(
     receipt.write_text(
         json.dumps(
             {
-                "schema_version": "asrbench-receipt/1",
+                "schema_version": SCHEMA_VERSION,
                 "resolved_config": config_to_dict(good),
             }
         ),

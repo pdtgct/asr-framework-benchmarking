@@ -3,7 +3,7 @@
 Generated from `asrbench.schema_doc`. Do not edit by hand.
 Regenerate with `uv run python -m asrbench.schema_doc`.
 
-Schema version: `asrbench-receipt/1`
+Schema version: `asrbench-receipt/2`
 
 Clock and definition strings below are the constants the receipt
 writes. Where `docs/metrics.md` and a constant disagree, the
@@ -49,6 +49,7 @@ compared and reported; a mismatch does not refuse:
 - `identity.warn.architecture`
 - `identity.warn.hostname`
 - `identity.warn.probe_status`
+- `identity.warn.channel_options`
 - `probe.hardware.gpu_uuids`
 - `probe.hardware.collected_at`
 - `secrets.set`
@@ -119,7 +120,7 @@ compared and reported; a mismatch does not refuse:
 | `RTFX_VALIDITY_SIMULATED` | simulated |
 | `RTFX_VALIDITY_UNQUALIFIED` | pacing_fidelity_unavailable |
 | `RUNNER_HANG_GUARD_DEFINITION` | The runner hang guard waits twice timeout_s, plus one timeout_s for the cohort barrier, plus the clip duration when pacing, plus 0.25 seconds. realtime-ws may spend timeout_s waiting for session.updated and timeout_s again waiting for the final, and a peer may spend timeout_s at the barrier on the slowest handshake. The adapter owns each timeout_s and may return a partial outcome. The guard replaces the outcome only when the adapter does not return. |
-| `SCHEMA_VERSION` | asrbench-receipt/1 |
+| `SCHEMA_VERSION` | asrbench-receipt/2 |
 | `SDI_DEFINITION` | Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion. |
 | `STEADY_INTERVAL_DEFINITION` | Sustainability over a declared steady interval of the cell. Unevaluable until outcomes carry that interval. Fail-closed: the clause does not pass. |
 | `STEADY_INTERVAL_UNAVAILABLE_REASON` | steady_interval_not_in_outcome |
@@ -132,7 +133,7 @@ compared and reported; a mismatch does not refuse:
 | `TTFS_CLOCK` | client_monotonic/first_audio_append_to_nonempty_transcription_delta |
 | `TTFS_DEFINITION` | Seconds from the first audio sample transmitted to the first non-empty partial, on one client monotonic clock. Connection, configuration, and admission wait are not included. A session with no non-empty partial stays in n_total and is absent from n_with_measure. This is not a vendor response latency and not vLLM TTFT. |
 | `VLLM_FORMAT_NOTE` | Shaped like a vLLM serving-benchmark summary so a serving engineer can read the counts. ttfs_s is this project's time to first non-empty partial. response_latency_s is per response. Neither field is vLLM TTFT, and neither is a vendor-reported response latency. |
-| `WARN_ONLY_COMPARISON_DEFINITION` | Warn-only mismatches are recorded and do not refuse: GPU driver version, Python version, asrbench git commit and dirty bit, endpoint_url, tls_verify, auth_env, package version, lookahead identity policy, client CPU, host, and probe status. transport_options stay in the hard target identity because they change adapter behavior. |
+| `WARN_ONLY_COMPARISON_DEFINITION` | Warn-only mismatches are recorded and do not refuse: GPU driver version, Python version, asrbench git commit and dirty bit, endpoint_url, tls_verify, auth_env, package version, lookahead identity policy, client CPU, host, probe status, and channel_options. transport_options stay in the hard target identity because they change adapter behavior. channel_options are keepalive and maximum message size; a channel tweak does not refuse. |
 | `WER_DEFINITION` | Word error rate (substitutions + alignment deletions + insertions + deletions_from_missing_transcript) / reference words, micro-averaged, under the named normalization policy. A session with a reference and no transcript stays in the denominator as deletions_from_missing_transcript and is not an alignment deletion. n_failed counts those sessions. A received empty transcript is an empty hypothesis and its deletions are alignment deletions. A session with no reference stays in n_total and is absent from n_with_measure. Undefined when the reference-word denominator is zero and any edit remains. |
 
 ## Mock preset receipt shape
@@ -192,6 +193,7 @@ object is named once and then cited by path.
     - `transport_options`: object
       - `interim_every_chunks`: int
       - `transcript`: string
+    - `channel_options`: object
     - `server_version`: null
     - `server_gpu_name`: null
     - `server_gpu_count`: null
@@ -255,6 +257,7 @@ object is named once and then cited by path.
     - `lookahead_identity_policy`: string
     - `logical_cpu_count`: int
     - `package_version`: string
+    - `channel_options`: object
     - `probe_status`: string
     - `python_version`: string
     - `system`: string
@@ -311,7 +314,7 @@ object is named once and then cited by path.
     - `outcomes`: list[object]
       - item: object
         - `label`: string
-        - `mode`: string
+        - `lifecycle`: string
         - `clip_name`: string
         - `chunk_ms`: int
         - `audio_duration_s`: float
@@ -335,6 +338,9 @@ object is named once and then cited by path.
         - `terminal_status`: string
         - `error_detail`: null
         - `final_latency_clock`: string
+        - `entry_index`: int
+        - `cadence_ms`: int
+        - `lookahead_frames`: int
     - `warmup_outcomes`: list[object] (same item shape as outcomes)
     - `reduction`: object
       - `counts`: object

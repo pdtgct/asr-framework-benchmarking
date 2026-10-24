@@ -12,7 +12,7 @@ from asrbench.tracking import build_index, write_index
 def _receipt(path: Path, key: str, gpu: str) -> None:
     payload = {
         "comparison_key": key,
-        "schema_version": "asrbench-receipt/1",
+        "schema_version": "asrbench-receipt/2",
         "summary": {"conjunction_passed": True},
         "identity": {
             "hardware": {"gpu_name": gpu},

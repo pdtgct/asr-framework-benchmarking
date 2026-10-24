@@ -24,7 +24,7 @@ from asrbench.outcome import (
 # reader does not have to know the outcome field's historical name.
 TTFS_CLOCK = NATIVE_LATENCY_CLOCK
 
-SCHEMA_VERSION = "asrbench-receipt/1"
+SCHEMA_VERSION = "asrbench-receipt/2"
 
 #: Bumped when reducer or comparison-key semantics change. Replaces the
 #: git commit in the hard comparison key, so a docs-only commit does not
@@ -288,9 +288,10 @@ WARN_ONLY_COMPARISON_DEFINITION = (
     "Warn-only mismatches are recorded and do not refuse: GPU driver "
     "version, Python version, asrbench git commit and dirty bit, "
     "endpoint_url, tls_verify, auth_env, package version, lookahead "
-    "identity policy, client CPU, host, and probe status. "
-    "transport_options stay in the hard target identity because they "
-    "change adapter behavior."
+    "identity policy, client CPU, host, probe status, and "
+    "channel_options. transport_options stay in the hard target identity "
+    "because they change adapter behavior. channel_options are keepalive "
+    "and maximum message size; a channel tweak does not refuse."
 )
 FRONTIER_DEFINITION = (
     "Accuracy against measured latency, one point per receipt, identified "

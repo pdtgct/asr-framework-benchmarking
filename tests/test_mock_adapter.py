@@ -51,7 +51,7 @@ class ReplayAdapter:
         chunks = chunk_pcm16(pcm, request.chunk_ms)
         outcome = SessionOutcome(
             label=request.label,
-            mode=request.mode,
+            lifecycle=request.lifecycle,
             clip_name=request.clip_path.name,
             chunk_ms=request.chunk_ms,
             audio_duration_s=len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE,
@@ -96,7 +96,7 @@ def _request(clip: Path, **overrides: Any) -> SessionRequest:
         chunk_ms=160,
         cadence_ms=320,
         timeout_s=5.0,
-        mode="full",
+        lifecycle="full",
         pace=False,
     )
     return replace(request, **overrides) if overrides else request
@@ -182,6 +182,6 @@ def test_the_request_is_frozen(tmp_path: Path) -> None:
     """Offered work cannot drift mid-run, or the receipt would be a lie."""
     request = _request(_write_wav(tmp_path / "clip.wav", 0.16))
 
-    for field_name in ("chunk_ms", "cadence_ms", "mode", "pace"):
+    for field_name in ("chunk_ms", "cadence_ms", "lifecycle", "pace"):
         with pytest.raises(FrozenInstanceError):
             setattr(request, field_name, 999)

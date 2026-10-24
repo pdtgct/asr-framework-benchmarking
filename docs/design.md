@@ -148,7 +148,9 @@ comparison_key = sha256(workload_fingerprint ‖ target_identity
 ```
 
 Hard target identity is the model, the transport, `transport_options`, and the
-server version. Hard software identity is the adapter, the normalization policy,
+server version. `channel_options` — keepalive and maximum message size — are
+warn-only, so a channel tweak does not refuse a comparison. Hard software
+identity is the adapter, the normalization policy,
 the percentile method, `SCHEMA_VERSION`, and `MEASUREMENT_SEMANTICS_VERSION`.
 Hard hardware identity is GPU name, count, and memory, plus
 `gpu_identity_source`: `server_declared` when the target spec names a server
@@ -157,8 +159,8 @@ GPU, otherwise `client_probe` from nvidia-smi. Those two sources are not mixed.
 Warn-only fields are stored and listed on a mismatch, and they do not refuse:
 driver version, Python version, this package's git commit and dirty bit,
 endpoint URL, TLS verification, the auth variable name, package version, the
-lookahead-identity policy, and the client CPU and host. Git commit is read
-from asrbench's own checkout. `docs/receipt-schema.md` quotes
+lookahead-identity policy, the client CPU and host, and `channel_options`.
+Git commit is read from asrbench's own checkout. `docs/receipt-schema.md` quotes
 `COMPARISON_KEY_DEFINITION` and `WARN_ONLY_COMPARISON_DEFINITION`.
 
 Comparison refuses when a hard field differs and names that field. Forcing a

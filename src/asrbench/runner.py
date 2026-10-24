@@ -234,18 +234,20 @@ def hang_guard_s(timeout_s: float, audio_s: float, *, pacing: bool) -> float:
 
 def lane_entries(
     population: tuple[PopulationEntry, ...],
-) -> list[PopulationEntry]:
+) -> list[tuple[int, PopulationEntry]]:
     """Expand a population into one entry per lane, in declaration order.
 
     Args:
         population: Population entries. Each is repeated ``lanes`` times.
 
     Returns:
-        One entry per lane. A mixed cadence stays per lane.
+        ``(entry_index, entry)`` per lane. A mixed cadence stays per lane.
+        ``entry_index`` is the index in ``population``, shared by every
+        lane of that entry.
     """
-    assigned: list[PopulationEntry] = []
-    for entry in population:
-        assigned.extend([entry] * entry.lanes)
+    assigned: list[tuple[int, PopulationEntry]] = []
+    for index, entry in enumerate(population):
+        assigned.extend((index, entry) for _ in range(entry.lanes))
     return assigned
 
 
@@ -415,7 +417,7 @@ def _refuse_unsent_options(
 async def _phase(
     config: ResolvedConfig,
     adapter: TransportAdapter,
-    assigned: list[PopulationEntry],
+    assigned: list[tuple[int, PopulationEntry]],
     *,
     trial_index: int,
     phase: str,
@@ -431,6 +433,7 @@ async def _phase(
                     config,
                     adapter,
                     entry,
+                    population_index=index,
                     trial_index=trial_index,
                     lane=lane,
                     phase=phase,
@@ -439,7 +442,7 @@ async def _phase(
                     wav_path=wav_path,
                     barrier=barrier,
                 )
-                for lane, entry in enumerate(assigned)
+                for lane, (index, entry) in enumerate(assigned)
             )
         )
     )
@@ -451,6 +454,7 @@ async def _lane_sessions(
     adapter: TransportAdapter,
     entry: PopulationEntry,
     *,
+    population_index: int,
     trial_index: int,
     lane: int,
     phase: str,
@@ -466,6 +470,7 @@ async def _lane_sessions(
                 config,
                 adapter,
                 entry,
+                population_index=population_index,
                 trial_index=trial_index,
                 lane=lane,
                 phase=phase,
@@ -483,6 +488,7 @@ async def _session(
     adapter: TransportAdapter,
     entry: PopulationEntry,
     *,
+    population_index: int,
     trial_index: int,
     lane: int,
     phase: str,
@@ -500,7 +506,7 @@ async def _session(
         chunk_ms=config.workload.chunk_ms,
         cadence_ms=entry.cadence_ms,
         timeout_s=config.workload.timeout_s,
-        mode="full",
+        lifecycle="full",
         pace=config.workload.pacing,
         language=config.workload.language,
         punctuation=config.workload.punctuation,
@@ -514,17 +520,19 @@ async def _session(
         config.workload.timeout_s, audio_s, pacing=config.workload.pacing
     )
     try:
-        return await asyncio.wait_for(
+        outcome = await asyncio.wait_for(
             adapter.run(request, admission_barrier=barrier),
             timeout=guard,
         )
     except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
-        return _failed(request, audio_s, timed_out=True, error=None)
+        outcome = _failed(request, audio_s, timed_out=True, error=None)
     except Exception as error:  # noqa: BLE001 - a lane must stay data
-        return _failed(request, audio_s, timed_out=False, error=error)
+        outcome = _failed(request, audio_s, timed_out=False, error=error)
     finally:
         if barrier is not None:
             await barrier.abandon(request.label)
+    _record_entry(outcome, population_index, entry)
+    return outcome
 
 
 def _failed(
@@ -537,7 +545,7 @@ def _failed(
     detail = None if error is None else f"{type(error).__name__}: {error}"
     return SessionOutcome(
         label=request.label,
-        mode=request.mode,
+        lifecycle=request.lifecycle,
         clip_name=request.clip_path.name,
         chunk_ms=request.chunk_ms,
         audio_duration_s=audio_s,
@@ -549,6 +557,21 @@ def _failed(
         terminal_status="timed_out" if timed_out else "errored",
         error_detail=detail,
     )
+
+
+def _record_entry(
+    outcome: SessionOutcome, population_index: int, entry: PopulationEntry
+) -> None:
+    """Stamp the population entry onto an outcome the runner produced.
+
+    Adapters do not know which population entry a lane belongs to. The
+    runner does, and every outcome — including a timeout the runner
+    synthesized — carries that entry so a later reduction can refuse to
+    pool a mixed population.
+    """
+    outcome.entry_index = population_index
+    outcome.cadence_ms = entry.cadence_ms
+    outcome.lookahead_frames = entry.lookahead_frames
 
 
 def _python_version() -> str:

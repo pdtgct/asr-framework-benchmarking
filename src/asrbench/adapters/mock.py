@@ -82,7 +82,7 @@ class MockAdapter:
         chunks = chunk_pcm16(pcm, request.chunk_ms)
         outcome = SessionOutcome(
             label=request.label,
-            mode=request.mode,
+            lifecycle=request.lifecycle,
             clip_name=request.clip_path.name,
             chunk_ms=request.chunk_ms,
             audio_duration_s=len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE,

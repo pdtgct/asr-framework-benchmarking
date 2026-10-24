@@ -1,5 +1,5 @@
 {
-  "schema_version": "asrbench-receipt/1",
+  "schema_version": "asrbench-receipt/2",
   "run_id": "golden",
   "started_at": "2026-01-01T00:00:00Z",
   "finished_at": "2026-01-01T00:00:01Z",
@@ -65,7 +65,7 @@
     "RTFX_VALIDITY_SIMULATED": "simulated",
     "RTFX_VALIDITY_UNQUALIFIED": "pacing_fidelity_unavailable",
     "RUNNER_HANG_GUARD_DEFINITION": "The runner hang guard waits twice timeout_s, plus one timeout_s for the cohort barrier, plus the clip duration when pacing, plus 0.25 seconds. realtime-ws may spend timeout_s waiting for session.updated and timeout_s again waiting for the final, and a peer may spend timeout_s at the barrier on the slowest handshake. The adapter owns each timeout_s and may return a partial outcome. The guard replaces the outcome only when the adapter does not return.",
-    "SCHEMA_VERSION": "asrbench-receipt/1",
+    "SCHEMA_VERSION": "asrbench-receipt/2",
     "SDI_DEFINITION": "Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion.",
     "STEADY_INTERVAL_DEFINITION": "Sustainability over a declared steady interval of the cell. Unevaluable until outcomes carry that interval. Fail-closed: the clause does not pass.",
     "STEADY_INTERVAL_UNAVAILABLE_REASON": "steady_interval_not_in_outcome",
@@ -78,7 +78,7 @@
     "TTFS_CLOCK": "client_monotonic/first_audio_append_to_nonempty_transcription_delta",
     "TTFS_DEFINITION": "Seconds from the first audio sample transmitted to the first non-empty partial, on one client monotonic clock. Connection, configuration, and admission wait are not included. A session with no non-empty partial stays in n_total and is absent from n_with_measure. This is not a vendor response latency and not vLLM TTFT.",
     "VLLM_FORMAT_NOTE": "Shaped like a vLLM serving-benchmark summary so a serving engineer can read the counts. ttfs_s is this project's time to first non-empty partial. response_latency_s is per response. Neither field is vLLM TTFT, and neither is a vendor-reported response latency.",
-    "WARN_ONLY_COMPARISON_DEFINITION": "Warn-only mismatches are recorded and do not refuse: GPU driver version, Python version, asrbench git commit and dirty bit, endpoint_url, tls_verify, auth_env, package version, lookahead identity policy, client CPU, host, and probe status. transport_options stay in the hard target identity because they change adapter behavior.",
+    "WARN_ONLY_COMPARISON_DEFINITION": "Warn-only mismatches are recorded and do not refuse: GPU driver version, Python version, asrbench git commit and dirty bit, endpoint_url, tls_verify, auth_env, package version, lookahead identity policy, client CPU, host, probe status, and channel_options. transport_options stay in the hard target identity because they change adapter behavior. channel_options are keepalive and maximum message size; a channel tweak does not refuse.",
     "WER_DEFINITION": "Word error rate (substitutions + alignment deletions + insertions + deletions_from_missing_transcript) / reference words, micro-averaged, under the named normalization policy. A session with a reference and no transcript stays in the denominator as deletions_from_missing_transcript and is not an alignment deletion. n_failed counts those sessions. A received empty transcript is an empty hypothesis and its deletions are alignment deletions. A session with no reference stays in n_total and is absent from n_with_measure. Undefined when the reference-word denominator is zero and any edit remains."
   },
   "resolved_config": {
@@ -132,6 +132,7 @@
         "interim_every_chunks": 2,
         "transcript": "the birch canoe slid on the smooth planks"
       },
+      "channel_options": {},
       "server_version": null,
       "server_gpu_name": null,
       "server_gpu_count": null,
@@ -181,7 +182,7 @@
       "normalization_policy": "engine_vs_own_oracle",
       "package": "asrbench",
       "percentile_method": "numpy_linear",
-      "schema_version": "asrbench-receipt/1"
+      "schema_version": "asrbench-receipt/2"
     },
     "hardware": {
       "gpu_count": null,
@@ -202,6 +203,7 @@
       "lookahead_identity_policy": "client_declared",
       "logical_cpu_count": 2,
       "package_version": "0.0.1",
+      "channel_options": {},
       "probe_status": "absent",
       "python_version": "3.12.0",
       "system": "Linux",
@@ -230,7 +232,7 @@
       "git_dirty": false
     }
   },
-  "comparison_key": "sha256:ec7238deb9c53b78cdde058d3722559d2f71546c74532a42bda0d965bbb1313b",
+  "comparison_key": "sha256:22f76e469c5666638170abec7af183398a8430f9bb238d75e10c077974b2fb4d",
   "dataset": {
     "clip_id": "mock-silence-1.6s",
     "clip_digest": "sha256:16fa66a7dc98d93f2a4c5d20baf5177f59c4c37fc62face65690c11c15fe6ff9",
@@ -266,7 +268,7 @@
       "outcomes": [
         {
           "label": "t0-lane0-i0",
-          "mode": "full",
+          "lifecycle": "full",
           "clip_name": "mock-silence-1.6s.wav",
           "chunk_ms": 160,
           "audio_duration_s": 1.6,
@@ -303,7 +305,10 @@
           "error_code": null,
           "terminal_status": "completed",
           "error_detail": null,
-          "final_latency_clock": "mock/simulated_last_audio_to_final"
+          "final_latency_clock": "mock/simulated_last_audio_to_final",
+          "entry_index": 0,
+          "cadence_ms": 320,
+          "lookahead_frames": 4
         }
       ],
       "warmup_outcomes": [],

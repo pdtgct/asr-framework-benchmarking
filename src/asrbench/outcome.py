@@ -59,9 +59,10 @@ class SessionRequest:
     cadence_ms: int | None
     #: Bound on both session configuration and transcript completion.
     timeout_s: float
-    #: Lifecycle probe selector, not a workload knob. See the module note in
-    #: ``asrbench.adapters.realtime_ws``.
-    mode: str
+    #: Realtime WebSocket lifecycle probe, such as ``full``. Not a workload
+    #: knob and not :attr:`workload_mode`. See the module note in
+    #: ``asrbench.adapters.realtime_ws``. gRPC does not read it.
+    lifecycle: str
     #: Transmit in real time (one ``chunk_ms`` of audio per ``chunk_ms``)
     #: rather than as fast as the transport accepts.
     pace: bool
@@ -78,7 +79,7 @@ class SessionRequest:
     #: Client-declared lookahead for this session, in frames.
     lookahead_frames: int | None = None
     #: Workload mode, ``streaming`` or ``offline``. Distinct from
-    #: :attr:`mode`, which is the realtime lifecycle probe.
+    #: :attr:`lifecycle`, which is the realtime lifecycle probe.
     workload_mode: str = "streaming"
 
 
@@ -94,7 +95,8 @@ class SessionOutcome:
 
     #: Echoed from the request so an outcome is self-identifying.
     label: str
-    mode: str
+    #: Realtime lifecycle probe echoed from the request, not workload mode.
+    lifecycle: str
     clip_name: str
     chunk_ms: int
     #: Duration of the source clip, not of the session.
@@ -148,3 +150,10 @@ class SessionOutcome:
     #: name one; reducers then attribute :data:`FINALIZATION_CLOCK` and
     #: say they did so.
     final_latency_clock: str = ""
+    #: Index into the workload population. The runner writes it. ``None``
+    #: means the outcome was not produced by the runner.
+    entry_index: int | None = None
+    #: Cadence of that population entry, in milliseconds.
+    cadence_ms: int | None = None
+    #: Lookahead frame count of that population entry.
+    lookahead_frames: int | None = None

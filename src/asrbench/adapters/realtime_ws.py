@@ -13,7 +13,7 @@ The non-final commit is what starts generation. Omitting it is not a
 degraded run but a hang: the session accepts audio and never produces a
 transcript.
 
-``mode`` selects a lifecycle probe rather than a workload. ``full`` is the
+``lifecycle`` selects a lifecycle probe rather than a workload. ``full`` is the
 measurement path; ``disconnect`` and ``abort`` exercise server cleanup, and
 ``no-start-commit`` and ``late-start`` reproduce specific client mistakes on
 purpose, so a hang can be attributed rather than guessed at. Only ``full``
@@ -103,7 +103,7 @@ class RealtimeWebSocketAdapter:
 
         outcome = SessionOutcome(
             label=label,
-            mode=request.mode,
+            lifecycle=request.lifecycle,
             clip_name=request.clip_path.name,
             chunk_ms=request.chunk_ms,
             audio_duration_s=len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE,
@@ -237,7 +237,10 @@ class RealtimeWebSocketAdapter:
                                 "first_audio_append.sent",
                                 bytes=len(frame),
                             )
-                        if request.mode == "disconnect" and index >= cutoff:
+                        if (
+                            request.lifecycle == "disconnect"
+                            and index >= cutoff
+                        ):
                             extras["disconnected_after_frames"] = index
                             await ws.close()
                             return False
@@ -296,23 +299,23 @@ class RealtimeWebSocketAdapter:
                     extras.setdefault("markers", {}).update(released)
                     _progress(progress_callback, label, "barrier.released")
 
-                if request.mode in ("full", "disconnect", "abort"):
+                if request.lifecycle in ("full", "disconnect", "abort"):
                     # The non-final commit is what starts generation.
                     await send(
                         {"type": "input_audio_buffer.commit", "final": False}
                     )
                     _progress(progress_callback, label, "start_commit.sent")
                     streamed = await append_all()
-                elif request.mode == "late-start":
+                elif request.lifecycle == "late-start":
                     streamed = await append_all()
                     await send(
                         {"type": "input_audio_buffer.commit", "final": False}
                     )
                     _progress(progress_callback, label, "start_commit.sent")
-                elif request.mode == "no-start-commit":
+                elif request.lifecycle == "no-start-commit":
                     streamed = await append_all()
                 else:
-                    raise SystemExit(f"unknown mode {request.mode}")
+                    raise SystemExit(f"unknown lifecycle {request.lifecycle}")
 
                 if streamed:
                     final_commit_at = time.monotonic()
@@ -320,7 +323,7 @@ class RealtimeWebSocketAdapter:
                         {"type": "input_audio_buffer.commit", "final": True}
                     )
                     _progress(progress_callback, label, "final_commit.sent")
-                    if request.mode == "abort":
+                    if request.lifecycle == "abort":
                         # Close while generation is still in flight.
                         await asyncio.sleep(0.05)
                         extras["aborted"] = True
