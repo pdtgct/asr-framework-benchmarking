@@ -57,27 +57,41 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
     def StreamingRecognize(self, request_iterator: Any, context: Any) -> Any:
         self._note_metadata(context)
         if self.mode == "unauth":
-            context.abort(
+            self._status(
+                request_iterator,
+                context,
                 grpc.StatusCode.UNAUTHENTICATED,
                 "authorization Bearer SENTINEL-VALUE rejected",
             )
+            return
         if self.mode == "denied":
-            context.abort(grpc.StatusCode.PERMISSION_DENIED, "denied")
+            self._status(
+                request_iterator,
+                context,
+                grpc.StatusCode.PERMISSION_DENIED,
+                "denied",
+            )
+            return
         if self.mode == "invalid":
-            # Consume the config so the RPC is established, then name the
-            # status. abort() before any read is sometimes reported as
-            # INTERNAL by this grpc build.
-            for _request in request_iterator:
-                break
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("bad audio")
+            self._status(
+                request_iterator,
+                context,
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "bad audio",
+            )
             return
         if self.mode == "echo-auth":
             echoed = ""
             for key, value in context.invocation_metadata():
                 if key == "authorization" and value.startswith("Bearer "):
                     echoed = value[len("Bearer ") :]
-            context.abort(grpc.StatusCode.UNAUTHENTICATED, "rejected " + echoed)
+            self._status(
+                request_iterator,
+                context,
+                grpc.StatusCode.UNAUTHENTICATED,
+                "rejected " + echoed,
+            )
+            return
         sequence: list[tuple[str, float]] = []
         with self._lock:
             self.streams.append(sequence)
@@ -116,6 +130,24 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             yield _response("C", final=True)
         elif self.mode == "empty-final":
             yield _response("", final=True)
+
+    def _status(
+        self,
+        request_iterator: Any,
+        context: Any,
+        code: Any,
+        details: str,
+    ) -> None:
+        """Name a status after the RPC is established.
+
+        ``abort`` before any read is sometimes reported to the client as
+        ``INTERNAL`` by this grpc build. Consuming one request, then
+        ``set_code``, keeps the status the test asked for.
+        """
+        for _request in request_iterator:
+            break
+        context.set_code(code)
+        context.set_details(details)
 
     def _wait_until_inactive(self, context: Any) -> None:
         """Block until the client cancels or five seconds pass."""
