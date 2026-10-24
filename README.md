@@ -60,9 +60,9 @@ and the framework enforces them rather than documenting them.
   streams sustained," and read the latency percentiles for responsiveness.
 - **Client and server clocks are different clocks.** Correlate by request; never
   subtract one from the other.
-- **WER is comparable only within one named normalization policy.** Engine-vs-oracle,
-  engine-vs-corpus-reference, and engine-vs-other-server are three different
-  comparisons and must not share a normalizer.
+- **WER is comparable only within one named normalization policy.**
+  Engine-vs-own-oracle is raw. Engine-vs-corpus-reference is full normalization.
+  Another accuracy policy needs its own hypothesis source.
 - **Two receipts are comparable only when their comparison key matches.** A silent
   cross-hardware or cross-model delta is worse than no delta, so the tool refuses
   rather than guessing.

@@ -33,6 +33,16 @@ class MockAdapter:
     """Replay a scripted transcript over the clip's real chunking."""
 
     name = "mock"
+    supported_workload_options = frozenset(
+        {
+            "language",
+            "punctuation",
+            "diarization",
+            "interim_results",
+            "transcript_policy",
+            "mode",
+        }
+    )
 
     def __init__(self, transcript: str, interim_every_chunks: int = 2) -> None:
         """Store the script.

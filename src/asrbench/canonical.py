@@ -155,6 +155,71 @@ def fingerprint(value: Any) -> str:
     return sha256_text(dumps(value))
 
 
+def leaves(value: Any, prefix: str = "") -> dict[str, Any]:
+    """Flatten a JSON-ish tree to dotted leaf paths.
+
+    Args:
+        value: A dict, list, or scalar.
+        prefix: Path of this node. Empty at the root.
+
+    Returns:
+        Leaf path to value. Dict keys are sorted. List indexes use
+        ``[n]``.
+    """
+    if isinstance(value, dict):
+        found: dict[str, Any] = {}
+        for key in sorted(value):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            found.update(leaves(value[key], path))
+        return found
+    if isinstance(value, list):
+        found = {}
+        for index, item in enumerate(value):
+            found.update(leaves(item, f"{prefix}[{index}]"))
+        return found
+    return {prefix: value}
+
+
+def leaf_differences(
+    left: Any, right: Any, prefix: str = ""
+) -> list[tuple[str, Any, Any]]:
+    """Return leaves that differ, as ``(path, left, right)``.
+
+    Lists of different lengths are one difference at ``prefix``. Missing
+    dict keys are differences. The path is empty at a root scalar.
+
+    Args:
+        left: Left tree.
+        right: Right tree.
+        prefix: Path of this node.
+
+    Returns:
+        Differences in key-sorted order.
+    """
+    if isinstance(left, dict) and isinstance(right, dict):
+        found: list[tuple[str, Any, Any]] = []
+        for key in sorted(set(left) | set(right)):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key not in left or key not in right:
+                found.append((path, left.get(key), right.get(key)))
+            else:
+                found.extend(leaf_differences(left[key], right[key], path))
+        return found
+    if isinstance(left, list) and isinstance(right, list):
+        if len(left) != len(right):
+            return [(prefix, left, right)]
+        found = []
+        pairs = zip(left, right, strict=True)
+        for index, (item_left, item_right) in enumerate(pairs):
+            found.extend(
+                leaf_differences(item_left, item_right, f"{prefix}[{index}]")
+            )
+        return found
+    if left != right:
+        return [(prefix, left, right)]
+    return []
+
+
 def join_components(components: list[Any]) -> str:
     """Hash comparison-key components in the order given.
 

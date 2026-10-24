@@ -139,6 +139,20 @@ def test_observation_fingerprint_mismatch_does_not_refuse(
     assert json.loads(out)["observation_fingerprint_match"] is False
 
 
+def test_reason_without_force_is_refused(
+    tmp_path: Path, sealed_env: None
+) -> None:
+    del sealed_env
+    source = tmp_path / "r1.json"
+    code, _, err = _run(["run", "--preset", str(_PRESET), "--out", str(source)])
+    assert code == 0, err
+    code, _out, err = _run(
+        ["compare", str(source), str(source), "--reason", "because"]
+    )
+    assert code == 2
+    assert "--force" in err
+
+
 def test_force_without_a_hard_mismatch_does_not_record_the_reason(
     tmp_path: Path, sealed_env: None
 ) -> None:

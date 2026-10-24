@@ -14,14 +14,13 @@ is read from this package's repository, not the caller's directory.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from asrbench.canonical import fingerprint, join_components, sha256_text
 from asrbench.definitions import (
     GPU_IDENTITY_CLIENT_PROBE,
     GPU_IDENTITY_SERVER_DECLARED,
-    MEASUREMENT_SEMANTICS_VERSION,
-    SCHEMA_VERSION,
 )
 from asrbench.spec import (
     PopulationEntry,
@@ -221,16 +220,8 @@ def observation_fingerprint(config: ResolvedConfig) -> str:
     return fingerprint(observation_material(config.run))
 
 
-def server_gpu_declared(target: TargetSpec) -> bool:
-    """Return whether the target spec names a server GPU.
-
-    Args:
-        target: The target spec.
-
-    Returns:
-        True when any server GPU field is set. Those fields are then
-        the hard GPU identity. A count of zero is a declaration.
-    """
+def _server_gpu_declared(target: TargetSpec) -> bool:
+    """Return whether any server GPU field is set, including a count of zero."""
     return (
         target.server_gpu_name is not None
         or target.server_gpu_count is not None
@@ -238,18 +229,8 @@ def server_gpu_declared(target: TargetSpec) -> bool:
     )
 
 
-def target_identity(target: TargetSpec) -> dict[str, Any]:
-    """Return the hard target identity.
-
-    Endpoint URL, TLS, and the auth variable name are warn-only.
-    ``transport_options`` stay here because they change adapter behavior.
-
-    Args:
-        target: The target spec.
-
-    Returns:
-        A JSON-ish dict.
-    """
+def _target_block(target: TargetSpec) -> dict[str, Any]:
+    """Hard target identity. Endpoint, TLS, and auth name are warn-only."""
     return {
         "model": target.model,
         "server_version": target.server_version,
@@ -258,58 +239,29 @@ def target_identity(target: TargetSpec) -> dict[str, Any]:
     }
 
 
-def software_identity(
-    *,
-    adapter: str,
-    normalization_policy: str,
-    percentile_method: str,
-    schema_version: str = SCHEMA_VERSION,
+def _software_block(
+    versions: Mapping[str, Any], policy: str, method: str
 ) -> dict[str, Any]:
-    """Return the hard software identity.
-
-    Git commit, the Python version, the package version, and the
-    lookahead-identity policy are warn-only. ``schema_version`` and
-    :data:`~asrbench.definitions.MEASUREMENT_SEMANTICS_VERSION` are what
-    a comparison refuses on when the measurement itself changed.
-
-    Args:
-        adapter: Adapter ``name``.
-        normalization_policy: Named WER policy.
-        percentile_method: Named percentile policy.
-        schema_version: Receipt schema string. Receipt build uses the
-            package constant. Compare uses the string the receipt stored.
-
-    Returns:
-        A JSON-ish dict.
-    """
+    """Hard software identity. Semantics version is the caller's string."""
+    semantics = versions["measurement_semantics_version"]
     return {
-        "adapter": adapter,
-        "measurement_semantics_version": MEASUREMENT_SEMANTICS_VERSION,
-        "normalization_policy": normalization_policy,
+        "adapter": versions["adapter"],
+        "measurement_semantics_version": semantics,
+        "normalization_policy": policy,
         "package": "asrbench",
-        "percentile_method": percentile_method,
-        "schema_version": schema_version,
+        "percentile_method": method,
+        "schema_version": versions["schema_version"],
     }
 
 
-def hardware_identity(
+def _hardware_block(
     *,
     gpu_name: str | None,
     gpu_count: int | None,
     gpu_memory_mib: int | None,
     gpu_identity_source: str,
 ) -> dict[str, Any]:
-    """Return the hard hardware identity.
-
-    Args:
-        gpu_name: Server GPU name, or the client probe's name.
-        gpu_count: How many GPUs that source reported.
-        gpu_memory_mib: Minimum total memory in MiB, or ``None``.
-        gpu_identity_source: ``server_declared`` or ``client_probe``.
-
-    Returns:
-        A JSON-ish dict. Driver version and client CPU are not here.
-    """
+    """Hard hardware identity. Driver version and client CPU are not here."""
     return {
         "gpu_count": gpu_count,
         "gpu_identity_source": gpu_identity_source,
@@ -318,119 +270,93 @@ def hardware_identity(
     }
 
 
-def hard_hardware(
-    target: TargetSpec,
-    *,
-    client_gpu_name: str | None,
-    client_gpu_count: int | None,
-    client_gpu_memory_mib: int | None,
+def _hard_hardware(
+    target: TargetSpec, probe: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Choose server-declared GPU identity, or the labelled client probe.
-
-    Args:
-        target: Target spec. Server GPU fields win when any is set.
-        client_gpu_name: Client probe GPU name.
-        client_gpu_count: Client probe GPU count.
-        client_gpu_memory_mib: Client probe minimum memory.
-
-    Returns:
-        The hard hardware identity.
-    """
-    if server_gpu_declared(target):
-        return hardware_identity(
+    """Server-declared GPU identity, or the labelled client probe."""
+    if _server_gpu_declared(target):
+        return _hardware_block(
             gpu_name=target.server_gpu_name,
             gpu_count=target.server_gpu_count,
             gpu_memory_mib=target.server_gpu_memory_mib,
             gpu_identity_source=GPU_IDENTITY_SERVER_DECLARED,
         )
-    return hardware_identity(
-        gpu_name=client_gpu_name,
-        gpu_count=client_gpu_count,
-        gpu_memory_mib=client_gpu_memory_mib,
+    return _hardware_block(
+        gpu_name=probe.get("gpu_name"),
+        gpu_count=probe.get("gpu_count"),
+        gpu_memory_mib=probe.get("gpu_memory_mib"),
         gpu_identity_source=GPU_IDENTITY_CLIENT_PROBE,
     )
 
 
-def warn_identity(
-    *,
-    endpoint_url: str,
-    tls_verify: bool,
-    auth_env: str | None,
-    lookahead_identity_policy: str,
-    package_version: str,
-    python_version: str,
-    git_commit: str,
-    git_dirty: bool,
-    driver_version: str | None,
-    driver_version_source: str,
-    system: str,
-    architecture: str,
-    cpu_model: str | None,
-    logical_cpu_count: int | None,
-    hostname: str | None,
-    probe_status: str | None,
-) -> dict[str, Any]:
-    """Return fields that are compared and do not refuse.
-
-    Args:
-        endpoint_url: Server URL. A redeploy at the same URL is not
-            caught here; server version is the hard field for that.
-        tls_verify: Whether the client verified TLS.
-        auth_env: Auth variable name. The value is never included.
-        lookahead_identity_policy: Named lookahead policy.
-        package_version: ``asrbench`` version string.
-        python_version: Interpreter ``major.minor.micro``.
-        git_commit: Hex commit of this package's repository, or
-            ``unknown``.
-        git_dirty: Whether that worktree had uncommitted changes.
-        driver_version: Server driver when declared, else the client
-            probe's driver.
-        driver_version_source: Which of those two was used.
-        system: Client ``platform.system()`` value.
-        architecture: Client ``platform.machine()`` value.
-        cpu_model: Client CPU model, or ``None``.
-        logical_cpu_count: Client logical CPUs, or ``None``.
-        hostname: Client hostname. Warn-only, and still not a secret.
-        probe_status: Client GPU probe status.
-
-    Returns:
-        A JSON-ish dict.
-    """
-    return {
-        "architecture": architecture,
-        "auth_env": auth_env,
-        "cpu_model": cpu_model,
-        "driver_version": driver_version,
-        "driver_version_source": driver_version_source,
-        "endpoint_url": endpoint_url,
-        "git_commit": git_commit,
-        "git_dirty": git_dirty,
-        "hostname": hostname,
-        "lookahead_identity_policy": lookahead_identity_policy,
-        "logical_cpu_count": logical_cpu_count,
-        "package_version": package_version,
-        "probe_status": probe_status,
-        "python_version": python_version,
-        "system": system,
-        "tls_verify": tls_verify,
-    }
-
-
-def driver_for_warn(
+def _driver(
     target: TargetSpec, client_driver: str | None
 ) -> tuple[str | None, str]:
-    """Return the warn-only driver string and which source it came from.
-
-    Args:
-        target: Target spec. ``server_driver_version`` wins when set.
-        client_driver: Driver string from the client probe.
-
-    Returns:
-        The version and ``server_declared`` or ``client_probe``.
-    """
+    """Warn-only driver string and ``server_declared`` or ``client_probe``."""
     if target.server_driver_version is not None:
         return target.server_driver_version, GPU_IDENTITY_SERVER_DECLARED
     return client_driver, GPU_IDENTITY_CLIENT_PROBE
+
+
+def _warn_block(
+    config: ResolvedConfig,
+    probe: Mapping[str, Any],
+    versions: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Fields that are compared and do not refuse."""
+    driver, source = _driver(config.target, probe.get("driver_version"))
+    return {
+        "architecture": probe.get("architecture"),
+        "auth_env": config.target.auth_env,
+        "cpu_model": probe.get("cpu_model"),
+        "driver_version": driver,
+        "driver_version_source": source,
+        "endpoint_url": config.target.endpoint_url,
+        "git_commit": versions["git_commit"],
+        "git_dirty": versions["git_dirty"],
+        "hostname": probe.get("hostname"),
+        "lookahead_identity_policy": config.run.lookahead_identity_policy,
+        "logical_cpu_count": probe.get("logical_cpu_count"),
+        "package_version": versions["package_version"],
+        "probe_status": probe.get("probe_status"),
+        "python_version": versions["python_version"],
+        "system": probe.get("system"),
+        "tls_verify": config.target.tls_verify,
+    }
+
+
+def identity_blocks(
+    config: ResolvedConfig,
+    probe: Mapping[str, Any],
+    versions: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Return the target, software, hardware, and warn identity blocks.
+
+    ``versions["measurement_semantics_version"]`` and
+    ``versions["schema_version"]`` are stored as given. Receipt build
+    passes the installed constants. Compare passes the strings on the
+    receipt, so two old receipts stay comparable after a bump.
+
+    Args:
+        config: Resolved config. Clip digest is already pinned or trusted.
+        probe: Client probe fields: GPU name, count, memory, driver,
+            system, architecture, CPU, hostname, and probe status.
+        versions: Adapter name, schema version, measurement semantics
+            version, package version, Python version, git commit, and
+            git dirty bit.
+
+    Returns:
+        A dict with keys ``target``, ``software``, ``hardware``, and
+        ``warn``.
+    """
+    policy = config.run.pass_policy.normalization_policy
+    method = config.run.percentile_method
+    return {
+        "target": _target_block(config.target),
+        "software": _software_block(versions, policy, method),
+        "hardware": _hard_hardware(config.target, probe),
+        "warn": _warn_block(config, probe, versions),
+    }
 
 
 def comparison_key(
@@ -444,9 +370,9 @@ def comparison_key(
 
     Args:
         workload_fp: The workload fingerprint string.
-        target: :func:`target_identity`.
-        software: :func:`software_identity`.
-        hardware: :func:`hardware_identity`.
+        target: Hard target identity.
+        software: Hard software identity.
+        hardware: Hard hardware identity.
 
     Returns:
         A prefixed sha256 digest.
@@ -485,7 +411,7 @@ def group_key(
     return join_components(
         [
             fingerprint(material),
-            target_identity(config.target),
+            _target_block(config.target),
             software,
             hardware,
         ]

@@ -117,16 +117,49 @@ def vllm_report(receipt: dict[str, Any]) -> dict[str, Any]:
         "completed_sessions": counts["completed"],
         "failed_sessions": counts["errored"] + counts["timed_out"],
         "percentile_method": ttfs["percentile_method"],
-        "ttfs_s": _latency_block(ttfs),
-        "response_latency_s": _latency_block(response),
-        "streaming_rtfx": {
-            "value": rtfx["value"],
-            "validity": rtfx["validity"],
-            "definition": rtfx["definition"],
-            "clock": rtfx["clock"],
-            "successful_audio_s": rtfx["successful_audio_s"],
-            "attempted_audio_s": rtfx["attempted_audio_s"],
-        },
+        "ttfs_s": _pick(
+            ttfs,
+            (
+                "mean",
+                "p50",
+                "p90",
+                "p95",
+                "p99",
+                "n_with_measure",
+                "n_total",
+                "n_samples",
+                "clock",
+                "definition",
+                "clock_matches_native",
+            ),
+        ),
+        "response_latency_s": _pick(
+            response,
+            (
+                "mean",
+                "p50",
+                "p90",
+                "p95",
+                "p99",
+                "n_with_measure",
+                "n_total",
+                "n_samples",
+                "clock",
+                "definition",
+                "clock_matches_native",
+            ),
+        ),
+        "streaming_rtfx": _pick(
+            rtfx,
+            (
+                "value",
+                "validity",
+                "definition",
+                "clock",
+                "successful_audio_s",
+                "attempted_audio_s",
+            ),
+        ),
     }
 
 
@@ -236,33 +269,9 @@ def frontier_report(
     Returns:
         A JSON-ish frontier object.
     """
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    order: list[str] = []
-    for receipt, source in zip(receipts, sources, strict=True):
-        config, software, hardware = _identity(receipt)
-        key = frontier_group_key(config, software, hardware)
-        pooled = receipt["summary"]["pooled"]
-        point = {
-            "source": source,
-            "lookahead_frames": receipt["lookahead"]["frames"],
-            "lookahead_ms_label": receipt["lookahead"]["millisecond_label"],
-            "cadence_ms": receipt["resolved_config"]["workload"]["cadence_ms"],
-            "wer": pooled["wer"]["micro_wer"],
-            "wer_policy": pooled["wer"]["policy"],
-            "latency_s": pooled["ttfs_s"]["p50"],
-            "latency_metric": "ttfs",
-            "latency_percentile": 50,
-            "latency_clock": pooled["ttfs_s"]["clock"],
-            "n_with_measure_latency": pooled["ttfs_s"]["n_with_measure"],
-            "n_total_latency": pooled["ttfs_s"]["n_total"],
-            "n_with_measure_wer": pooled["wer"]["n_with_measure"],
-            "n_total_wer": pooled["wer"]["n_total"],
-            "findings": [],
-        }
-        if key not in grouped:
-            order.append(key)
-            grouped[key] = []
-        grouped[key].append(point)
+    order, grouped = _group(
+        receipts, sources, frontier_group_key, _frontier_point
+    )
     series = []
     for key in order:
         points = grouped[key]
@@ -333,21 +342,9 @@ def sustained_streams_report(
     Returns:
         A JSON-ish projection. ``value`` is null when no cell passed.
     """
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    order: list[str] = []
-    for receipt, source in zip(receipts, sources, strict=True):
-        config, software, hardware = _identity(receipt)
-        key = capacity_group_key(config, software, hardware)
-        cell = {
-            "source": source,
-            "lanes": receipt["resolved_config"]["workload"]["lanes"],
-            "lookahead_frames": receipt["lookahead"]["frames"],
-            "conjunction_passed": receipt["summary"]["conjunction_passed"],
-        }
-        if key not in grouped:
-            order.append(key)
-            grouped[key] = []
-        grouped[key].append(cell)
+    order, grouped = _group(
+        receipts, sources, capacity_group_key, _capacity_cell
+    )
     series = []
     for key in order:
         cells = grouped[key]
@@ -374,6 +371,58 @@ def sustained_streams_report(
         "availability": "measured",
         "series": series,
     }
+
+
+def _group(
+    receipts: list[dict[str, Any]],
+    sources: list[str],
+    key_fn: Any,
+    cell_fn: Any,
+) -> tuple[list[str], dict[str, list[dict[str, Any]]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for receipt, source in zip(receipts, sources, strict=True):
+        config, software, hardware = _identity(receipt)
+        key = key_fn(config, software, hardware)
+        if key not in grouped:
+            order.append(key)
+            grouped[key] = []
+        grouped[key].append(cell_fn(receipt, source))
+    return order, grouped
+
+
+def _frontier_point(receipt: dict[str, Any], source: str) -> dict[str, Any]:
+    pooled = receipt["summary"]["pooled"]
+    return {
+        "source": source,
+        "lookahead_frames": receipt["lookahead"]["frames"],
+        "lookahead_ms_label": receipt["lookahead"]["millisecond_label"],
+        "cadence_ms": receipt["resolved_config"]["workload"]["cadence_ms"],
+        "wer": pooled["wer"]["micro_wer"],
+        "wer_policy": pooled["wer"]["policy"],
+        "latency_s": pooled["ttfs_s"]["p50"],
+        "latency_metric": "ttfs",
+        "latency_percentile": 50,
+        "latency_clock": pooled["ttfs_s"]["clock"],
+        "n_with_measure_latency": pooled["ttfs_s"]["n_with_measure"],
+        "n_total_latency": pooled["ttfs_s"]["n_total"],
+        "n_with_measure_wer": pooled["wer"]["n_with_measure"],
+        "n_total_wer": pooled["wer"]["n_total"],
+        "findings": [],
+    }
+
+
+def _capacity_cell(receipt: dict[str, Any], source: str) -> dict[str, Any]:
+    return {
+        "source": source,
+        "lanes": receipt["resolved_config"]["workload"]["lanes"],
+        "lookahead_frames": receipt["lookahead"]["frames"],
+        "conjunction_passed": receipt["summary"]["conjunction_passed"],
+    }
+
+
+def _pick(block: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    return {key: block[key] for key in keys}
 
 
 def _identity(
@@ -439,22 +488,6 @@ def _require_homogeneous(receipt: dict[str, Any]) -> None:
         raise NotHomogeneousError(
             "vendor TSV requires one cadence and one lookahead"
         )
-
-
-def _latency_block(distribution: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "mean": distribution["mean"],
-        "p50": distribution["p50"],
-        "p90": distribution["p90"],
-        "p95": distribution["p95"],
-        "p99": distribution["p99"],
-        "n_with_measure": distribution["n_with_measure"],
-        "n_total": distribution["n_total"],
-        "n_samples": distribution["n_samples"],
-        "clock": distribution["clock"],
-        "definition": distribution["definition"],
-        "clock_matches_native": distribution["clock_matches_native"],
-    }
 
 
 def _cell(value: object) -> str:

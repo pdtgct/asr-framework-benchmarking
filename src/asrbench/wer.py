@@ -1,10 +1,9 @@
 """Word and character error rate under a named normalization policy.
 
-The three policies do not share a normalizer. Engine-versus-oracle is
-raw. Corpus reference and engine-versus-other-server both apply full
-normalization, through separate functions, and the second policy is the
-one a tolerance is declared against. A score records the policy name next
-to the rate.
+Engine-versus-oracle is raw whitespace tokenization. Corpus reference
+applies full normalization. The policy name is stored beside the rate.
+A second hypothesis source is required before another accuracy policy
+is added.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from dataclasses import dataclass
 
 from asrbench.definitions import (
     NORMALIZATION_CORPUS_REFERENCE,
-    NORMALIZATION_ENGINE_VS_OTHER_SERVER,
     NORMALIZATION_ENGINE_VS_OWN_ORACLE,
 )
 
@@ -179,22 +177,6 @@ def _oracle_tokens(text: str) -> list[str]:
     return text.split()
 
 
-def _other_server_tokens(text: str) -> list[str]:
-    """Full normalization for engine-versus-other-server.
-
-    This is a different policy from corpus reference even though the
-    steps match. Callers must not relabel one result as the other. The
-    declared tolerance lives on the pass policy, not in this function.
-
-    Args:
-        text: Raw text.
-
-    Returns:
-        Tokens ready for alignment.
-    """
-    return _full_normalization(text)
-
-
 def _corpus_tokens(text: str) -> list[str]:
     """Full normalization for engine-versus-corpus-reference.
 
@@ -210,7 +192,6 @@ def _corpus_tokens(text: str) -> list[str]:
 _TOKENIZERS = {
     NORMALIZATION_ENGINE_VS_OWN_ORACLE: _oracle_tokens,
     NORMALIZATION_CORPUS_REFERENCE: _corpus_tokens,
-    NORMALIZATION_ENGINE_VS_OTHER_SERVER: _other_server_tokens,
 }
 
 
@@ -219,7 +200,7 @@ def normalize(text: str, policy: str) -> list[str]:
 
     Args:
         text: Raw text.
-        policy: One of the three normalization policy names.
+        policy: One of the named normalization policies.
 
     Returns:
         Tokens.

@@ -34,8 +34,8 @@ MEASUREMENT_SEMANTICS_VERSION = "1"
 GPU_IDENTITY_SERVER_DECLARED = "server_declared"
 GPU_IDENTITY_CLIENT_PROBE = "client_probe"
 
-#: Seconds added after ``timeout_s`` and, when pacing, the clip duration.
-#: The adapter owns ``timeout_s``. This grace is only the hang guard.
+#: Seconds of slack after the adapter's own waits and the barrier budget.
+#: The adapter owns each ``timeout_s``. This grace is only the hang guard.
 RUNNER_HANG_GRACE_S = 0.25
 
 MODE_STREAMING = "streaming"
@@ -51,7 +51,6 @@ DEFAULT_LOOKAHEAD_IDENTITY_POLICY = LOOKAHEAD_IDENTITY_CLIENT_DECLARED
 
 NORMALIZATION_ENGINE_VS_OWN_ORACLE = "engine_vs_own_oracle"
 NORMALIZATION_CORPUS_REFERENCE = "corpus_reference"
-NORMALIZATION_ENGINE_VS_OTHER_SERVER = "engine_vs_other_server"
 DEFAULT_NORMALIZATION_POLICY = NORMALIZATION_ENGINE_VS_OWN_ORACLE
 
 SUSTAINABILITY_STEADY_INTERVAL = "steady_interval"
@@ -144,12 +143,6 @@ CORPUS_NORMALIZATION_DEFINITION = (
     "control tags, strip punctuation, normalize English cardinals "
     "(en_cardinals_v1, 0 through 999, including the 'and' form), and "
     "collapse whitespace."
-)
-OTHER_SERVER_NORMALIZATION_DEFINITION = (
-    "engine_vs_other_server applies full normalization and is judged "
-    "against the pass policy's declared accuracy tolerance. It is a "
-    "different named policy from corpus_reference and must not be "
-    "relabeled as that policy."
 )
 PREFIX_VIOLATION_DEFINITION = (
     "Count of prefix checks that fail, with no normalization. Each "
@@ -314,10 +307,14 @@ FRONTIER_DEFINITION = (
     "or models are not drawn on one edge."
 )
 RUNNER_HANG_GUARD_DEFINITION = (
-    "The runner hang guard waits timeout_s, plus the clip duration "
-    f"when pacing, plus {RUNNER_HANG_GRACE_S} seconds. The adapter owns "
-    "timeout_s and may return a partial outcome. The guard replaces "
-    "the outcome only when the adapter does not return."
+    "The runner hang guard waits twice timeout_s, plus one timeout_s "
+    "for the cohort barrier, plus the clip duration when pacing, plus "
+    f"{RUNNER_HANG_GRACE_S} seconds. realtime-ws may spend timeout_s "
+    "waiting for session.updated and timeout_s again waiting for the "
+    "final, and a peer may spend timeout_s at the barrier on the "
+    "slowest handshake. The adapter owns each timeout_s and may return "
+    "a partial outcome. The guard replaces the outcome only when the "
+    "adapter does not return."
 )
 VLLM_FORMAT_NOTE = (
     "Shaped like a vLLM serving-benchmark summary so a serving engineer "

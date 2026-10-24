@@ -12,9 +12,9 @@ the same cadence on every lane.
 
 Measured iterations are not lockstep waves. Lanes share one barrier
 before the first measured session, then each lane loops its own
-iterations. The adapter owns ``timeout_s``. The runner's wait is a hang
-guard of ``timeout_s`` plus the clip duration when pacing, plus
-:data:`asrbench.definitions.RUNNER_HANG_GRACE_S`.
+iterations. The adapter owns each ``timeout_s``. The runner's wait is
+the hang guard in
+:data:`asrbench.definitions.RUNNER_HANG_GUARD_DEFINITION`.
 
 A second transport plugs in through :func:`load_adapter`. An entitled
 lane this process cannot open must come back as an outcome with
@@ -51,7 +51,12 @@ from asrbench.outcome import (
     SessionRequest,
 )
 from asrbench.receipt import build_receipt
-from asrbench.spec import PopulationEntry, ResolvedConfig, TargetSpec
+from asrbench.spec import (
+    PopulationEntry,
+    ResolvedConfig,
+    TargetSpec,
+    WorkloadSpec,
+)
 
 
 class MonotonicClock(Protocol):
@@ -111,13 +116,17 @@ class CohortBarrier:
     the others are not held until the hang guard.
     """
 
-    def __init__(self, parties: int) -> None:
+    def __init__(self, parties: int, *, timeout_s: float | None = None) -> None:
         """Create a barrier for one trial's measured start.
 
         Args:
             parties: How many lanes are in the trial.
+            timeout_s: Bound on the wait. ``None`` waits until release.
+                The runner passes one session timeout, the budget of the
+                slowest handshake.
         """
         self.parties = parties
+        self.timeout_s = timeout_s
         self._arrived = 0
         self._labels: set[str] = set()
         self._lock = asyncio.Lock()
@@ -138,7 +147,10 @@ class CohortBarrier:
                 self._arrived += 1
             if self._arrived >= self.parties:
                 self._event.set()
-        await self._event.wait()
+        if self.timeout_s is None:
+            await self._event.wait()
+        else:
+            await asyncio.wait_for(self._event.wait(), self.timeout_s)
         return {"cohort_label": label}
 
     async def abandon(self, label: str) -> None:
@@ -203,8 +215,13 @@ def load_adapter(target: TargetSpec) -> TransportAdapter:
 def hang_guard_s(timeout_s: float, audio_s: float, *, pacing: bool) -> float:
     """Return the runner's hang budget for one session.
 
+    realtime-ws may spend ``timeout_s`` before the barrier and
+    ``timeout_s`` again after the audio. Peers may also sit at the
+    barrier for one ``timeout_s``. Paced sends add the clip duration.
+
     Args:
-        timeout_s: The budget the adapter itself owns.
+        timeout_s: The budget the adapter itself owns, used twice, plus
+            once for the barrier.
         audio_s: Clip duration.
         pacing: When true, real-time send time is added.
 
@@ -212,7 +229,7 @@ def hang_guard_s(timeout_s: float, audio_s: float, *, pacing: bool) -> float:
         Seconds. The adapter may return a partial outcome before this.
     """
     paced = audio_s if pacing else 0.0
-    return timeout_s + paced + RUNNER_HANG_GRACE_S
+    return 2 * timeout_s + timeout_s + paced + RUNNER_HANG_GRACE_S
 
 
 def lane_entries(
@@ -282,6 +299,7 @@ async def run_benchmark(
     if len(assigned) != config.workload.lanes:
         raise ConfigError("population lane counts must sum to workload.lanes")
     chosen = adapter if adapter is not None else load_adapter(config.target)
+    _refuse_unsent_options(chosen, config.workload)
     chosen_clock = clock if clock is not None else SystemClock()
     directory = materialize_dir
     if directory is None:
@@ -292,41 +310,31 @@ async def run_benchmark(
     start_marker = started_at if started_at is not None else utc_timestamp()
     trials: list[dict[str, Any]] = []
     for trial_index in range(config.workload.trials):
-        warmup_groups = await asyncio.gather(
-            *(
-                _lane_sessions(
-                    config,
-                    chosen,
-                    entry,
-                    trial_index=trial_index,
-                    lane=lane,
-                    phase="warmup",
-                    count=config.workload.warmup,
-                    audio_s=audio_s,
-                    wav_path=wav_path,
-                    barrier=None,
-                )
-                for lane, entry in enumerate(assigned)
-            )
+        warmup_groups = await _phase(
+            config,
+            chosen,
+            assigned,
+            trial_index=trial_index,
+            phase="warmup",
+            count=config.workload.warmup,
+            audio_s=audio_s,
+            wav_path=wav_path,
+            barrier=None,
         )
-        barrier = CohortBarrier(len(assigned))
+        barrier = CohortBarrier(
+            len(assigned), timeout_s=config.workload.timeout_s
+        )
         span_start = chosen_clock.monotonic()
-        measured_groups = await asyncio.gather(
-            *(
-                _lane_sessions(
-                    config,
-                    chosen,
-                    entry,
-                    trial_index=trial_index,
-                    lane=lane,
-                    phase="measured",
-                    count=config.workload.iterations,
-                    audio_s=audio_s,
-                    wav_path=wav_path,
-                    barrier=barrier,
-                )
-                for lane, entry in enumerate(assigned)
-            )
+        measured_groups = await _phase(
+            config,
+            chosen,
+            assigned,
+            trial_index=trial_index,
+            phase="measured",
+            count=config.workload.iterations,
+            audio_s=audio_s,
+            wav_path=wav_path,
+            barrier=barrier,
         )
         span_end = chosen_clock.monotonic()
         warmup = [item for group in warmup_groups for item in group]
@@ -360,6 +368,82 @@ async def run_benchmark(
         finished_at=finish_marker,
         materialized_path=str(wav_path),
     )
+
+
+_OPTION_NAMES = (
+    "language",
+    "punctuation",
+    "diarization",
+    "interim_results",
+    "transcript_policy",
+    "mode",
+)
+_OPTION_DEFAULTS = WorkloadSpec()
+
+
+def _refuse_unsent_options(
+    adapter: TransportAdapter, workload: WorkloadSpec
+) -> None:
+    """Refuse non-default workload options the adapter does not send.
+
+    Args:
+        adapter: The transport. Adapters that omit
+            ``supported_workload_options`` are not checked.
+        workload: Offered work.
+
+    Raises:
+        ConfigError: A non-default option would be fingerprinted and
+            never sent.
+    """
+    supported = getattr(adapter, "supported_workload_options", None)
+    if supported is None:
+        return
+    refused = [
+        name
+        for name in _OPTION_NAMES
+        if name not in supported
+        and getattr(workload, name) != getattr(_OPTION_DEFAULTS, name)
+    ]
+    if refused:
+        raise ConfigError(
+            f"{adapter.name} does not send {', '.join(refused)}; "
+            "refusing a non-default value that would be fingerprinted "
+            "and not offered"
+        )
+
+
+async def _phase(
+    config: ResolvedConfig,
+    adapter: TransportAdapter,
+    assigned: list[PopulationEntry],
+    *,
+    trial_index: int,
+    phase: str,
+    count: int,
+    audio_s: float,
+    wav_path: Path,
+    barrier: CohortBarrier | None,
+) -> list[list[SessionOutcome]]:
+    groups: list[list[SessionOutcome]] = list(
+        await asyncio.gather(
+            *(
+                _lane_sessions(
+                    config,
+                    adapter,
+                    entry,
+                    trial_index=trial_index,
+                    lane=lane,
+                    phase=phase,
+                    count=count,
+                    audio_s=audio_s,
+                    wav_path=wav_path,
+                    barrier=barrier,
+                )
+                for lane, entry in enumerate(assigned)
+            )
+        )
+    )
+    return groups
 
 
 async def _lane_sessions(

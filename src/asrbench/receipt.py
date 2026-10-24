@@ -14,17 +14,14 @@ from asrbench.config import config_to_dict
 from asrbench.definitions import (
     DIGEST_COVERS_PCM16,
     LOOKAHEAD_IDENTITY_DEFINITION,
+    MEASUREMENT_SEMANTICS_VERSION,
     SCHEMA_VERSION,
     emitted_definitions,
 )
 from asrbench.fingerprint import (
     comparison_key,
-    driver_for_warn,
-    hard_hardware,
+    identity_blocks,
     observation_fingerprint,
-    software_identity,
-    target_identity,
-    warn_identity,
     workload_fingerprint,
 )
 from asrbench.identity import GitState, HardwareRecord
@@ -99,39 +96,34 @@ def build_receipt(
     """
     workload_fp = workload_fingerprint(config)
     observation_fp = observation_fingerprint(config)
-    target = target_identity(config.target)
-    software = software_identity(
-        adapter=adapter_name,
-        normalization_policy=config.run.pass_policy.normalization_policy,
-        percentile_method=config.run.percentile_method,
+    blocks = identity_blocks(
+        config,
+        {
+            "architecture": hardware.architecture,
+            "cpu_model": hardware.cpu_model,
+            "driver_version": hardware.driver_version,
+            "gpu_count": hardware.gpu_count,
+            "gpu_memory_mib": hardware.gpu_memory_mib,
+            "gpu_name": hardware.gpu_name,
+            "hostname": hardware.hostname,
+            "logical_cpu_count": hardware.logical_cpu_count,
+            "probe_status": hardware.probe_status,
+            "system": hardware.system,
+        },
+        {
+            "adapter": adapter_name,
+            "git_commit": git_state.commit,
+            "git_dirty": git_state.dirty,
+            "measurement_semantics_version": MEASUREMENT_SEMANTICS_VERSION,
+            "package_version": package_version,
+            "python_version": python_version,
+            "schema_version": SCHEMA_VERSION,
+        },
     )
-    hardware_id = hard_hardware(
-        config.target,
-        client_gpu_name=hardware.gpu_name,
-        client_gpu_count=hardware.gpu_count,
-        client_gpu_memory_mib=hardware.gpu_memory_mib,
-    )
-    driver, driver_source = driver_for_warn(
-        config.target, hardware.driver_version
-    )
-    warn = warn_identity(
-        endpoint_url=config.target.endpoint_url,
-        tls_verify=config.target.tls_verify,
-        auth_env=config.target.auth_env,
-        lookahead_identity_policy=config.run.lookahead_identity_policy,
-        package_version=package_version,
-        python_version=python_version,
-        git_commit=git_state.commit,
-        git_dirty=git_state.dirty,
-        driver_version=driver,
-        driver_version_source=driver_source,
-        system=hardware.system,
-        architecture=hardware.architecture,
-        cpu_model=hardware.cpu_model,
-        logical_cpu_count=hardware.logical_cpu_count,
-        hostname=hardware.hostname,
-        probe_status=hardware.probe_status,
-    )
+    target = blocks["target"]
+    software = blocks["software"]
+    hardware_id = blocks["hardware"]
+    warn = blocks["warn"]
     rendered_trials: list[dict[str, Any]] = []
     measured: list[SessionOutcome] = []
     spans: list[float] = []
@@ -186,7 +178,7 @@ def build_receipt(
         "started_at": started_at,
         "finished_at": finished_at,
         "definitions": emitted_definitions(),
-        "resolved_config": _config_dict(config),
+        "resolved_config": config_to_dict(config),
         "reproduction": {
             "overrides": [
                 asdict(item) for item in config.reproduction_overrides
@@ -264,7 +256,3 @@ def build_receipt(
         "summary": summary,
     }
     return cast(dict[str, Any], json_ready(receipt))
-
-
-def _config_dict(config: ResolvedConfig) -> dict[str, Any]:
-    return config_to_dict(config)

@@ -10,70 +10,85 @@ never filled with a zero.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Any
 
-from asrbench.definitions import (
-    AUDIO_DENOMINATOR_DEFINITION,
-    CER_DEFINITION,
-    COMPLETION_FRACTION_DEFINITION,
-    CORPUS_NORMALIZATION_DEFINITION,
-    EMISSION_LAG_CLOCK,
-    EMISSION_LAG_DEFINITION,
-    EMISSION_LAG_UNAVAILABLE_REASON,
-    FINALIZATION_CLOCK,
-    FINALIZATION_DEFINITION,
-    GOODPUT_DEFINITION,
-    INTERIM_CADENCE_CLOCK,
-    INTERIM_CADENCE_DEFINITION,
-    INTERIM_CADENCE_UNAVAILABLE_REASON,
-    LAG_EXCESS_DEFINITION,
-    LAG_EXCESS_UNAVAILABLE_REASON,
-    LATENCY_METRIC_RESPONSE,
-    LATENCY_METRIC_TTFS,
-    MODE_OFFLINE,
-    MODE_STREAMING,
-    OFFLINE_RTFX_DEFINITION,
-    ORACLE_NORMALIZATION_DEFINITION,
-    OTHER_SERVER_NORMALIZATION_DEFINITION,
-    OUTCOME_ACCOUNTING_DEFINITION,
-    PACING_FIDELITY_CLOCK,
-    PACING_FIDELITY_DEFINITION,
-    PACING_FIDELITY_UNAVAILABLE_REASON,
-    PASS_CONJUNCTION_DEFINITION,
-    PER_UTTERANCE_WER_DEFINITION,
-    POPULATION_DEFINITION,
-    PREFIX_VIOLATION_DEFINITION,
-    PRODUCTIVE_DEFINITION,
-    RESPONSE_LATENCY_CLOCK,
-    RESPONSE_LATENCY_DEFINITION,
-    REVISION_RATE_DEFINITION,
-    RTFX_VALIDITY_NOT_APPLICABLE,
-    RTFX_VALIDITY_PACING_DISABLED,
-    RTFX_VALIDITY_SIMULATED,
-    RTFX_VALIDITY_UNQUALIFIED,
-    SDI_DEFINITION,
-    STEADY_INTERVAL_DEFINITION,
-    STEADY_INTERVAL_UNAVAILABLE_REASON,
-    STREAMING_RTFX_CLOCK,
-    STREAMING_RTFX_DEFINITION,
-    SUSTAINABILITY_COMPLETION_FRACTION,
-    SUSTAINABILITY_STEADY_INTERVAL,
-    SUSTAINED_STREAMS_DEFINITION,
-    SUSTAINED_STREAMS_UNAVAILABLE_REASON,
-    TTFS_CLOCK,
-    TTFS_DEFINITION,
-    WER_DEFINITION,
-)
+from asrbench import definitions as d
 from asrbench.outcome import SessionOutcome
 from asrbench.percentile import percentile
 from asrbench.spec import PassPolicy
 from asrbench.wer import score_texts
 
 _NORM_TEXT = {
-    "engine_vs_own_oracle": ORACLE_NORMALIZATION_DEFINITION,
-    "corpus_reference": CORPUS_NORMALIZATION_DEFINITION,
-    "engine_vs_other_server": OTHER_SERVER_NORMALIZATION_DEFINITION,
+    "engine_vs_own_oracle": d.ORACLE_NORMALIZATION_DEFINITION,
+    "corpus_reference": d.CORPUS_NORMALIZATION_DEFINITION,
 }
+_ACROSS = (
+    ("ttfs_p50_s", "ttfs_s", "p50"),
+    ("ttfs_p99_s", "ttfs_s", "p99"),
+    ("response_latency_p50_s", "response_latency_s", "p50"),
+    ("response_latency_p99_s", "response_latency_s", "p99"),
+    ("finalization_p50_s", "finalization_s", "p50"),
+    ("micro_wer", "wer", "micro_wer"),
+    ("streaming_rtfx", "streaming_rtfx", "value"),
+    ("offline_rtfx", "offline_rtfx", "value"),
+    ("goodput_per_second", "goodput", "per_second"),
+)
+_WER_SUMS = (
+    "substitutions",
+    "deletions",
+    "deletions_from_missing_transcript",
+    "n_failed",
+    "chars_from_missing_transcript",
+    "insertions",
+    "reference_tokens",
+    "hypothesis_tokens",
+    "reference_chars",
+)
+_RTFX = (
+    (
+        "streaming_rtfx",
+        d.STREAMING_RTFX_DEFINITION,
+        d.MODE_STREAMING,
+        "mode_is_offline",
+        False,
+    ),
+    (
+        "offline_rtfx",
+        d.OFFLINE_RTFX_DEFINITION,
+        d.MODE_OFFLINE,
+        "mode_is_streaming",
+        True,
+    ),
+)
+_UNAVAILABLE = (
+    (
+        "emission_lag",
+        d.EMISSION_LAG_UNAVAILABLE_REASON,
+        d.EMISSION_LAG_CLOCK,
+        d.EMISSION_LAG_DEFINITION,
+    ),
+    (
+        "lag_excess",
+        d.LAG_EXCESS_UNAVAILABLE_REASON,
+        d.EMISSION_LAG_CLOCK,
+        d.LAG_EXCESS_DEFINITION,
+    ),
+    (
+        "pacing_fidelity",
+        d.PACING_FIDELITY_UNAVAILABLE_REASON,
+        d.PACING_FIDELITY_CLOCK,
+        d.PACING_FIDELITY_DEFINITION,
+    ),
+    (
+        "interim_cadence_conformance",
+        d.INTERIM_CADENCE_UNAVAILABLE_REASON,
+        d.INTERIM_CADENCE_CLOCK,
+        d.INTERIM_CADENCE_DEFINITION,
+    ),
+)
+_STATS = ("mean", "minimum", "maximum", "p50", "p90", "p95", "p99")
+_Reader = Callable[[SessionOutcome], tuple[list[float], str, bool]]
 
 
 class MeasurementError(ValueError):
@@ -109,14 +124,7 @@ def is_productive(outcome: SessionOutcome) -> bool:
 
 
 def has_first_partial(outcome: SessionOutcome) -> bool:
-    """Return whether a non-empty partial was observed.
-
-    Args:
-        outcome: One session.
-
-    Returns:
-        True when ``ttfs_s`` is present.
-    """
+    """Return whether a non-empty partial was observed."""
     return outcome.ttfs_s is not None
 
 
@@ -132,6 +140,7 @@ def reduce_trial(
     percentile_method: str,
     warmup_excluded: int,
     span_pooling: str = "measured_cell",
+    wer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reduce one trial's measured outcomes.
 
@@ -146,6 +155,8 @@ def reduce_trial(
         percentile_method: Named percentile policy.
         warmup_excluded: How many warmup sessions were left out.
         span_pooling: ``measured_cell`` or ``sum_of_trial_spans``.
+        wer: Precomputed WER block. The pooled reduction passes the
+            concatenation of trial rows so utterances are not scored twice.
 
     Returns:
         A JSON-ish reduction. Unavailable metrics are present and null,
@@ -155,81 +166,65 @@ def reduce_trial(
         MeasurementError: A latency sample is not finite.
     """
     _check_finite(outcomes)
-    counts = _counts(outcomes, warmup_excluded)
-    ttfs = _latency(
+    population = len(outcomes)
+    ttfs, ttfs_samples = _measure(
         outcomes,
         name="ttfs_s",
-        native_clock=TTFS_CLOCK,
-        definition=TTFS_DEFINITION,
+        native_clock=d.TTFS_CLOCK,
+        definition=d.TTFS_DEFINITION,
         method=percentile_method,
-        value_of=lambda item: item.ttfs_s,
-        clock_of=lambda item: item.latency_clock,
-        population=len(outcomes),
+        population=population,
+        read=_scalar_reader("ttfs_s", "latency_clock", d.TTFS_CLOCK),
     )
-    response = _response_latency(outcomes, percentile_method)
-    finalization = _latency(
+    response, response_samples = _measure(
+        outcomes,
+        name="response_latency_s",
+        native_clock=d.RESPONSE_LATENCY_CLOCK,
+        definition=d.RESPONSE_LATENCY_DEFINITION,
+        method=percentile_method,
+        population=population,
+        read=_read_response,
+    )
+    finalization, _final_samples = _measure(
         outcomes,
         name="finalization_s",
-        native_clock=FINALIZATION_CLOCK,
-        definition=FINALIZATION_DEFINITION,
+        native_clock=d.FINALIZATION_CLOCK,
+        definition=d.FINALIZATION_DEFINITION,
         method=percentile_method,
-        value_of=lambda item: item.final_latency_s,
-        clock_of=lambda item: item.final_latency_clock,
-        population=len(outcomes),
+        population=population,
+        read=_scalar_reader(
+            "final_latency_s", "final_latency_clock", d.FINALIZATION_CLOCK
+        ),
     )
-    wer = _wer(
-        outcomes, reference, pass_policy.normalization_policy, percentile_method
-    )
+    if wer is None:
+        wer = _wer(
+            outcomes,
+            reference,
+            pass_policy.normalization_policy,
+            percentile_method,
+        )
     attempted, successful = _audio(outcomes)
-    simulated = _clocks_are_simulated(outcomes)
-    streaming = _rtfx(
-        name="streaming_rtfx",
-        definition=STREAMING_RTFX_DEFINITION,
-        applicable=mode == MODE_STREAMING,
-        inapplicable_reason="mode_is_offline",
+    rtfx = _rtfx_blocks(
+        mode=mode,
         pacing=pacing,
         attempted=attempted,
         successful=successful,
         wall_span_s=wall_span_s,
         span_pooling=span_pooling,
-        offline=False,
-        simulated=simulated,
+        simulated=_clocks_are_simulated(outcomes),
     )
-    offline = _rtfx(
-        name="offline_rtfx",
-        definition=OFFLINE_RTFX_DEFINITION,
-        applicable=mode == MODE_OFFLINE,
-        inapplicable_reason="mode_is_streaming",
-        pacing=pacing,
-        attempted=attempted,
-        successful=successful,
-        wall_span_s=wall_span_s,
-        span_pooling=span_pooling,
-        offline=True,
-        simulated=simulated,
-    )
-    stability = {
-        "prefix_violations": _prefix(outcomes),
-        "revision_rate": _revision(outcomes),
-    }
-    unavailable = _unavailable()
+    counts = _counts(outcomes, warmup_excluded)
     conjunction = _conjunction(
         outcomes,
         counts=counts,
-        ttfs=ttfs,
-        response=response,
+        metrics={
+            d.LATENCY_METRIC_TTFS: (ttfs, ttfs_samples),
+            d.LATENCY_METRIC_RESPONSE: (response, response_samples),
+        },
         wer=wer,
         reference=reference,
         pass_policy=pass_policy,
         percentile_method=percentile_method,
-    )
-    goodput = _goodput(
-        outcomes,
-        wall_span_s=wall_span_s,
-        reference=reference,
-        pass_policy=pass_policy,
-        percentile_method=percentile_method,
-        utterances=wer["utterances"],
     )
     return {
         "counts": counts,
@@ -237,26 +232,36 @@ def reduce_trial(
         "response_latency_s": response,
         "finalization_s": finalization,
         "wer": wer,
-        "streaming_rtfx": streaming,
-        "offline_rtfx": offline,
-        "stability": stability,
-        "goodput": goodput,
+        "streaming_rtfx": rtfx["streaming_rtfx"],
+        "offline_rtfx": rtfx["offline_rtfx"],
+        "stability": {
+            "prefix_violations": _prefix(outcomes),
+            "revision_rate": _revision(outcomes),
+        },
+        "goodput": _goodput(
+            outcomes,
+            wall_span_s=wall_span_s,
+            reference=reference,
+            pass_policy=pass_policy,
+            percentile_method=percentile_method,
+            utterances=wer["utterances"],
+        ),
         "sustained_streams_at_slo": {
             "name": "sustained_streams_at_slo",
             "availability": "unavailable",
-            "reason": SUSTAINED_STREAMS_UNAVAILABLE_REASON,
-            "definition": SUSTAINED_STREAMS_DEFINITION,
+            "reason": d.SUSTAINED_STREAMS_UNAVAILABLE_REASON,
+            "definition": d.SUSTAINED_STREAMS_DEFINITION,
             "offered_lanes": lanes,
             "cell_conjunction_passed": conjunction["passed"],
             "clock": "",
         },
-        "unavailable": unavailable,
+        "unavailable": _unavailable(),
         "conjunction": conjunction,
         "audio": {
-            "definition": AUDIO_DENOMINATOR_DEFINITION,
+            "definition": d.AUDIO_DENOMINATOR_DEFINITION,
             "attempted_audio_s": attempted,
             "successful_audio_s": successful,
-            "productive_definition": PRODUCTIVE_DEFINITION,
+            "productive_definition": d.PRODUCTIVE_DEFINITION,
         },
     }
 
@@ -276,9 +281,10 @@ def summarize_trials(
 ) -> dict[str, Any]:
     """Summarize trials without dropping one that lacks a measure.
 
-    The across-trial block is the mean of trial-level scalars. ``values``
-    keeps a null where a trial had no measure. ``pooled`` re-reduces every
-    measured session together and labels that choice.
+    The across-trial block is the mean of trial-level scalars. ``pooled``
+    re-reduces every measured session. Its per-utterance rows are the
+    trial rows concatenated, and its micro totals are the sums of the
+    trial totals.
 
     Args:
         reductions: Per-trial reductions, in trial order.
@@ -295,42 +301,24 @@ def summarize_trials(
     Returns:
         The receipt ``summary`` object.
     """
-
-    def values(reader: Any) -> list[float | None]:
-        return [reader(reduction) for reduction in reductions]
-
     across = {
-        "ttfs_p50_s": _across(values(lambda item: item["ttfs_s"]["p50"])),
-        "ttfs_p99_s": _across(values(lambda item: item["ttfs_s"]["p99"])),
-        "response_latency_p50_s": _across(
-            values(lambda item: item["response_latency_s"]["p50"])
-        ),
-        "response_latency_p99_s": _across(
-            values(lambda item: item["response_latency_s"]["p99"])
-        ),
-        "finalization_p50_s": _across(
-            values(lambda item: item["finalization_s"]["p50"])
-        ),
-        "micro_wer": _across(values(lambda item: item["wer"]["micro_wer"])),
-        "streaming_rtfx": _across(
-            values(lambda item: item["streaming_rtfx"]["value"])
-        ),
-        "offline_rtfx": _across(
-            values(lambda item: item["offline_rtfx"]["value"])
-        ),
-        "goodput_per_second": _across(
-            values(lambda item: item["goodput"]["per_second"])
-        ),
+        key: _across([item[section][field] for item in reductions])
+        for key, section, field in _ACROSS
     }
-    failed: list[str] = []
-    unevaluable: list[str] = []
-    for reduction in reductions:
-        for name in reduction["conjunction"]["failed_clauses"]:
-            if name not in failed:
-                failed.append(name)
-        for name in reduction["conjunction"]["unevaluable_clauses"]:
-            if name not in unevaluable:
-                unevaluable.append(name)
+    failed = list(
+        dict.fromkeys(
+            name
+            for reduction in reductions
+            for name in reduction["conjunction"]["failed_clauses"]
+        )
+    )
+    unevaluable = list(
+        dict.fromkeys(
+            name
+            for reduction in reductions
+            for name in reduction["conjunction"]["unevaluable_clauses"]
+        )
+    )
     pooled = reduce_trial(
         outcomes,
         wall_span_s=wall_span_s,
@@ -342,6 +330,7 @@ def summarize_trials(
         percentile_method=percentile_method,
         warmup_excluded=warmup_excluded,
         span_pooling="sum_of_trial_spans",
+        wer=_pooled_wer(reductions, reference, pass_policy, percentile_method),
     )
     return {
         "n_trials": len(reductions),
@@ -358,7 +347,7 @@ def _counts(
     outcomes: list[SessionOutcome], warmup_excluded: int
 ) -> dict[str, Any]:
     return {
-        "definition": OUTCOME_ACCOUNTING_DEFINITION,
+        "definition": d.OUTCOME_ACCOUNTING_DEFINITION,
         "attempted": len(outcomes),
         "admitted": sum(1 for item in outcomes if item.configured),
         "completed": sum(1 for item in outcomes if is_completed(item)),
@@ -414,6 +403,22 @@ def _common_prefix(left: list[str], right: list[str]) -> int:
     return count
 
 
+def _blank_stats() -> dict[str, None]:
+    return {name: None for name in _STATS}
+
+
+def _percentiles(samples: list[float], method: str) -> dict[str, Any]:
+    return {
+        "mean": sum(samples) / len(samples),
+        "minimum": min(samples),
+        "maximum": max(samples),
+        "p50": percentile(samples, 50, method),
+        "p90": percentile(samples, 90, method),
+        "p95": percentile(samples, 95, method),
+        "p99": percentile(samples, 99, method),
+    }
+
+
 def _distribution(
     *,
     name: str,
@@ -429,17 +434,11 @@ def _distribution(
     n_total: int,
     n_samples: int,
 ) -> dict[str, Any]:
-    if availability != "measured":
-        mean = minimum = maximum = None
-        p50 = p90 = p95 = p99 = None
-    else:
-        mean = sum(samples) / len(samples)
-        minimum = min(samples)
-        maximum = max(samples)
-        p50 = percentile(samples, 50, method)
-        p90 = percentile(samples, 90, method)
-        p95 = percentile(samples, 95, method)
-        p99 = percentile(samples, 99, method)
+    stats = (
+        _blank_stats()
+        if availability != "measured"
+        else _percentiles(samples, method)
+    )
     return {
         "name": name,
         "clock": clock,
@@ -449,17 +448,11 @@ def _distribution(
         "unit": unit,
         "percentile_method": method,
         "availability": availability,
-        "mean": mean,
-        "minimum": minimum,
-        "maximum": maximum,
-        "p50": p50,
-        "p90": p90,
-        "p95": p95,
-        "p99": p99,
+        **stats,
         "n_with_measure": n_with_measure,
         "n_total": n_total,
         "n_samples": n_samples,
-        "population_definition": POPULATION_DEFINITION,
+        "population_definition": d.POPULATION_DEFINITION,
     }
 
 
@@ -474,211 +467,152 @@ def _clocked_distribution(
     n_total: int,
 ) -> dict[str, Any]:
     clocks = {clock for _, clock, _ in entries}
+    samples = [value for value, _, _ in entries]
+    n_samples = len(entries)
     if len(clocks) > 1:
-        return _distribution(
-            name=name,
-            clock=None,
-            clock_attribution="mixed",
-            clock_matches_native=False,
-            definition=definition,
-            unit="s",
-            method=method,
-            availability="mixed_clocks",
-            samples=[],
-            n_with_measure=n_with_measure,
-            n_total=n_total,
-            n_samples=len(entries),
-        )
-    if not entries:
-        return _distribution(
-            name=name,
-            clock=native_clock,
-            clock_attribution="none",
-            clock_matches_native=False,
-            definition=definition,
-            unit="s",
-            method=method,
-            availability="no_samples",
-            samples=[],
-            n_with_measure=0,
-            n_total=n_total,
-            n_samples=0,
-        )
-    clock = next(iter(clocks))
-    if all(explicit for _, _, explicit in entries):
-        attribution = "outcome"
+        clock: str | None = None
+        attribution = "mixed"
+        matches = False
+        availability = "mixed_clocks"
+        samples = []
+    elif not entries:
+        clock = native_clock
+        attribution = "none"
+        matches = False
+        availability = "no_samples"
+        n_samples = 0
     else:
-        attribution = "native_default"
+        clock = next(iter(clocks))
+        explicit = all(flag for _, _, flag in entries)
+        attribution = "outcome" if explicit else "native_default"
+        matches = clock == native_clock
+        availability = "measured"
     return _distribution(
         name=name,
         clock=clock,
         clock_attribution=attribution,
-        clock_matches_native=clock == native_clock,
+        clock_matches_native=matches,
         definition=definition,
         unit="s",
         method=method,
-        availability="measured",
-        samples=[value for value, _, _ in entries],
+        availability=availability,
+        samples=samples,
         n_with_measure=n_with_measure,
         n_total=n_total,
-        n_samples=len(entries),
+        n_samples=n_samples,
     )
 
 
-def _latency(
+def _scalar_reader(value_name: str, clock_name: str, native: str) -> _Reader:
+    def read(outcome: SessionOutcome) -> tuple[list[float], str, bool]:
+        value = getattr(outcome, value_name)
+        if value is None:
+            return [], native, False
+        explicit = str(getattr(outcome, clock_name) or "")
+        return [float(value)], explicit or native, bool(explicit)
+
+    return read
+
+
+def _read_response(outcome: SessionOutcome) -> tuple[list[float], str, bool]:
+    if not outcome.response_latencies_s:
+        return [], d.RESPONSE_LATENCY_CLOCK, False
+    explicit = outcome.response_latency_clock or ""
+    clock = explicit or d.RESPONSE_LATENCY_CLOCK
+    values = [float(value) for value in outcome.response_latencies_s]
+    return values, clock, bool(explicit)
+
+
+def _measure(
     outcomes: list[SessionOutcome],
     *,
     name: str,
     native_clock: str,
     definition: str,
     method: str,
-    value_of: Any,
-    clock_of: Any,
     population: int,
-) -> dict[str, Any]:
+    read: _Reader,
+) -> tuple[dict[str, Any], list[float]]:
     entries: list[tuple[float, str, bool]] = []
+    sessions = 0
     for outcome in outcomes:
-        value = value_of(outcome)
-        if value is None:
+        values, clock, explicit = read(outcome)
+        if not values:
             continue
-        explicit = str(clock_of(outcome) or "")
-        entries.append((float(value), explicit or native_clock, bool(explicit)))
-    return _clocked_distribution(
+        sessions += 1
+        entries.extend((value, clock, explicit) for value in values)
+    block = _clocked_distribution(
         name=name,
         native_clock=native_clock,
         definition=definition,
         method=method,
         entries=entries,
-        n_with_measure=len(entries),
+        n_with_measure=sessions,
         n_total=population,
     )
+    return block, [value for value, _, _ in entries]
 
 
-def _response_latency(
-    outcomes: list[SessionOutcome], method: str
+def _row(
+    label: str,
+    *,
+    scored: bool,
+    reason: str | None,
+    wer: float | None = None,
+    cer: float | None = None,
+    substitutions: int = 0,
+    deletions: int = 0,
+    insertions: int = 0,
+    reference_tokens: int = 0,
+    missing: int | None = None,
 ) -> dict[str, Any]:
-    entries: list[tuple[float, str, bool]] = []
-    sessions = 0
-    for outcome in outcomes:
-        if not outcome.response_latencies_s:
-            continue
-        sessions += 1
-        explicit = outcome.response_latency_clock or ""
-        clock = explicit or RESPONSE_LATENCY_CLOCK
-        for sample in outcome.response_latencies_s:
-            entries.append((float(sample), clock, bool(explicit)))
-    return _clocked_distribution(
-        name="response_latency_s",
-        native_clock=RESPONSE_LATENCY_CLOCK,
-        definition=RESPONSE_LATENCY_DEFINITION,
-        method=method,
-        entries=entries,
-        n_with_measure=sessions,
-        n_total=len(outcomes),
-    )
+    row: dict[str, Any] = {
+        "label": label,
+        "scored": scored,
+        "reason": reason,
+        "wer": wer,
+        "cer": cer,
+        "substitutions": substitutions,
+        "deletions": deletions,
+        "insertions": insertions,
+        "reference_tokens": reference_tokens,
+    }
+    if missing is not None:
+        row["deletions_from_missing_transcript"] = missing
+    return row
 
 
-def _wer(
-    outcomes: list[SessionOutcome],
-    reference: str | None,
+def _wer_block(
+    *,
     policy: str,
+    availability: str,
+    reason: str | None,
+    micro_wer: float | None,
+    micro_cer: float | None,
+    substitutions: int,
+    deletions: int,
+    missing: int,
+    n_failed: int,
+    chars_missing: int,
+    insertions: int,
+    reference_tokens: int,
+    hypothesis_tokens: int,
+    reference_chars: int,
+    samples: list[float],
+    n_total: int,
     method: str,
+    utterances: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    utterances: list[dict[str, Any]] = []
-    substitutions = deletions = insertions = 0
-    reference_tokens = hypothesis_tokens = reference_chars = char_edits = 0
-    missing = chars_missing = n_failed = 0
-    samples: list[float] = []
-    if reference is None:
-        for outcome in outcomes:
-            utterances.append(
-                _unscored(outcome.label, "no_reference_transcript")
-            )
-        availability = "no_reference"
-        reason: str | None = "no_reference_transcript"
-        micro_wer = None
-        micro_cer = None
-    else:
-        for outcome in outcomes:
-            if outcome.transcript is None:
-                blank = score_texts(reference, "", policy)
-                n_failed += 1
-                missing += blank.reference_tokens
-                chars_missing += blank.reference_chars
-                reference_tokens += blank.reference_tokens
-                reference_chars += blank.reference_chars
-                utterances.append(
-                    {
-                        "label": outcome.label,
-                        "scored": False,
-                        "reason": "missing_transcript",
-                        "wer": None,
-                        "cer": None,
-                        "substitutions": 0,
-                        "deletions": 0,
-                        "insertions": 0,
-                        "reference_tokens": blank.reference_tokens,
-                        "deletions_from_missing_transcript": (
-                            blank.reference_tokens
-                        ),
-                    }
-                )
-                continue
-            scored = score_texts(reference, outcome.transcript, policy)
-            substitutions += scored.substitutions
-            deletions += scored.deletions
-            insertions += scored.insertions
-            reference_tokens += scored.reference_tokens
-            hypothesis_tokens += scored.hypothesis_tokens
-            reference_chars += scored.reference_chars
-            char_edits += scored.char_edits
-            reason_row = None if scored.wer is not None else "undefined_rate"
-            if scored.wer is not None:
-                samples.append(scored.wer)
-            utterances.append(
-                {
-                    "label": outcome.label,
-                    "scored": True,
-                    "reason": reason_row,
-                    "wer": scored.wer,
-                    "cer": scored.cer,
-                    "substitutions": scored.substitutions,
-                    "deletions": scored.deletions,
-                    "insertions": scored.insertions,
-                    "reference_tokens": scored.reference_tokens,
-                    "deletions_from_missing_transcript": 0,
-                }
-            )
-        micro_wer = _rate(
-            substitutions + deletions + insertions + missing, reference_tokens
-        )
-        micro_cer = _rate(char_edits + chars_missing, reference_chars)
-        if micro_wer is None and not outcomes:
-            availability = "no_samples"
-            reason = "no_measured_sessions"
-        elif micro_wer is None:
-            availability = "undefined"
-            reason = "reference_word_denominator_is_zero"
-        else:
-            availability = "measured"
-            reason = None
-    per = _rate_distribution(
-        name="per_utterance_wer",
-        definition=PER_UTTERANCE_WER_DEFINITION,
-        method=method,
-        samples=samples,
-        n_total=len(outcomes),
-    )
     return {
         "policy": policy,
-        "definition": WER_DEFINITION,
+        "definition": d.WER_DEFINITION,
         "normalization_definition": _NORM_TEXT[policy],
         "availability": availability,
         "reason": reason,
         "micro_wer": micro_wer,
         "micro_cer": micro_cer,
-        "cer_definition": CER_DEFINITION,
-        "sdi_definition": SDI_DEFINITION,
+        "cer_definition": d.CER_DEFINITION,
+        "sdi_definition": d.SDI_DEFINITION,
         "substitutions": substitutions,
         "deletions": deletions,
         "deletions_from_missing_transcript": missing,
@@ -689,24 +623,220 @@ def _wer(
         "hypothesis_tokens": hypothesis_tokens,
         "reference_chars": reference_chars,
         "n_with_measure": len(samples),
-        "n_total": len(outcomes),
-        "per_utterance_wer": per,
+        "n_total": n_total,
+        "per_utterance_wer": _rate_distribution(
+            name="per_utterance_wer",
+            definition=d.PER_UTTERANCE_WER_DEFINITION,
+            method=method,
+            samples=samples,
+            n_total=n_total,
+        ),
         "utterances": utterances,
     }
 
 
-def _unscored(label: str, reason: str) -> dict[str, Any]:
-    return {
-        "label": label,
-        "scored": False,
-        "reason": reason,
-        "wer": None,
-        "cer": None,
-        "substitutions": 0,
-        "deletions": 0,
-        "insertions": 0,
-        "reference_tokens": 0,
-    }
+def _wer(
+    outcomes: list[SessionOutcome],
+    reference: str | None,
+    policy: str,
+    method: str,
+) -> dict[str, Any]:
+    utterances: list[dict[str, Any]] = []
+    substitutions = deletions = insertions = 0
+    reference_tokens = hypothesis_tokens = reference_chars = 0
+    char_edits = missing = chars_missing = n_failed = 0
+    samples: list[float] = []
+    if reference is None:
+        for outcome in outcomes:
+            utterances.append(
+                _row(
+                    outcome.label,
+                    scored=False,
+                    reason="no_reference_transcript",
+                )
+            )
+        block = _wer_block(
+            policy=policy,
+            availability="no_reference",
+            reason="no_reference_transcript",
+            micro_wer=None,
+            micro_cer=None,
+            substitutions=0,
+            deletions=0,
+            missing=0,
+            n_failed=0,
+            chars_missing=0,
+            insertions=0,
+            reference_tokens=0,
+            hypothesis_tokens=0,
+            reference_chars=0,
+            samples=[],
+            n_total=len(outcomes),
+            method=method,
+            utterances=utterances,
+        )
+        block["_char_edits"] = 0
+        return block
+    for outcome in outcomes:
+        if outcome.transcript is None:
+            blank = score_texts(reference, "", policy)
+            n_failed += 1
+            missing += blank.reference_tokens
+            chars_missing += blank.reference_chars
+            reference_tokens += blank.reference_tokens
+            reference_chars += blank.reference_chars
+            utterances.append(
+                _row(
+                    outcome.label,
+                    scored=False,
+                    reason="missing_transcript",
+                    reference_tokens=blank.reference_tokens,
+                    missing=blank.reference_tokens,
+                )
+            )
+            continue
+        scored = score_texts(reference, outcome.transcript, policy)
+        substitutions += scored.substitutions
+        deletions += scored.deletions
+        insertions += scored.insertions
+        reference_tokens += scored.reference_tokens
+        hypothesis_tokens += scored.hypothesis_tokens
+        reference_chars += scored.reference_chars
+        char_edits += scored.char_edits
+        if scored.wer is not None:
+            samples.append(scored.wer)
+        utterances.append(
+            _row(
+                outcome.label,
+                scored=True,
+                reason=None if scored.wer is not None else "undefined_rate",
+                wer=scored.wer,
+                cer=scored.cer,
+                substitutions=scored.substitutions,
+                deletions=scored.deletions,
+                insertions=scored.insertions,
+                reference_tokens=scored.reference_tokens,
+                missing=0,
+            )
+        )
+    micro_wer = _rate(
+        substitutions + deletions + insertions + missing, reference_tokens
+    )
+    micro_cer = _rate(char_edits + chars_missing, reference_chars)
+    if micro_wer is None and not outcomes:
+        availability, reason = "no_samples", "no_measured_sessions"
+    elif micro_wer is None:
+        availability, reason = "undefined", "reference_word_denominator_is_zero"
+    else:
+        availability, reason = "measured", None
+    block = _wer_block(
+        policy=policy,
+        availability=availability,
+        reason=reason,
+        micro_wer=micro_wer,
+        micro_cer=micro_cer,
+        substitutions=substitutions,
+        deletions=deletions,
+        missing=missing,
+        n_failed=n_failed,
+        chars_missing=chars_missing,
+        insertions=insertions,
+        reference_tokens=reference_tokens,
+        hypothesis_tokens=hypothesis_tokens,
+        reference_chars=reference_chars,
+        samples=samples,
+        n_total=len(outcomes),
+        method=method,
+        utterances=utterances,
+    )
+    block["_char_edits"] = char_edits
+    return block
+
+
+def _pooled_wer(
+    reductions: list[dict[str, Any]],
+    reference: str | None,
+    pass_policy: PassPolicy,
+    method: str,
+) -> dict[str, Any]:
+    policy = pass_policy.normalization_policy
+    if not reductions:
+        block = _wer([], reference, policy, method)
+        block.pop("_char_edits", None)
+        return block
+    rows: list[dict[str, Any]] = []
+    sums = {name: 0 for name in _WER_SUMS}
+    char_edits = 0
+    for reduction in reductions:
+        block = reduction["wer"]
+        char_edits += int(block.pop("_char_edits"))
+        rows.extend(block["utterances"])
+        for name in _WER_SUMS:
+            sums[name] += int(block[name])
+    samples = [
+        float(row["wer"])
+        for row in rows
+        if isinstance(row["wer"], (int, float))
+        and not isinstance(row["wer"], bool)
+    ]
+    if reference is None:
+        return _wer_block(
+            policy=policy,
+            availability="no_reference",
+            reason="no_reference_transcript",
+            micro_wer=None,
+            micro_cer=None,
+            substitutions=0,
+            deletions=0,
+            missing=0,
+            n_failed=0,
+            chars_missing=0,
+            insertions=0,
+            reference_tokens=0,
+            hypothesis_tokens=0,
+            reference_chars=0,
+            samples=[],
+            n_total=len(rows),
+            method=method,
+            utterances=rows,
+        )
+    micro_wer = _rate(
+        sums["substitutions"]
+        + sums["deletions"]
+        + sums["insertions"]
+        + sums["deletions_from_missing_transcript"],
+        sums["reference_tokens"],
+    )
+    micro_cer = _rate(
+        char_edits + sums["chars_from_missing_transcript"],
+        sums["reference_chars"],
+    )
+    if micro_wer is None and not rows:
+        availability, reason = "no_samples", "no_measured_sessions"
+    elif micro_wer is None:
+        availability, reason = "undefined", "reference_word_denominator_is_zero"
+    else:
+        availability, reason = "measured", None
+    return _wer_block(
+        policy=policy,
+        availability=availability,
+        reason=reason,
+        micro_wer=micro_wer,
+        micro_cer=micro_cer,
+        substitutions=sums["substitutions"],
+        deletions=sums["deletions"],
+        missing=sums["deletions_from_missing_transcript"],
+        n_failed=sums["n_failed"],
+        chars_missing=sums["chars_from_missing_transcript"],
+        insertions=sums["insertions"],
+        reference_tokens=sums["reference_tokens"],
+        hypothesis_tokens=sums["hypothesis_tokens"],
+        reference_chars=sums["reference_chars"],
+        samples=samples,
+        n_total=len(rows),
+        method=method,
+        utterances=rows,
+    )
 
 
 def _rate(edits: int, denominator: int) -> float | None:
@@ -725,30 +855,49 @@ def _rate_distribution(
     samples: list[float],
     n_total: int,
 ) -> dict[str, Any]:
-    if not samples:
-        mean = p50 = p90 = p95 = p99 = None
-        availability = "no_samples"
-    else:
-        mean = sum(samples) / len(samples)
-        p50 = percentile(samples, 50, method)
-        p90 = percentile(samples, 90, method)
-        p95 = percentile(samples, 95, method)
-        p99 = percentile(samples, 99, method)
-        availability = "measured"
+    stats = _percentiles(samples, method) if samples else _blank_stats()
     return {
         "name": name,
         "definition": definition,
         "percentile_method": method,
-        "availability": availability,
-        "mean": mean,
-        "p50": p50,
-        "p90": p90,
-        "p95": p95,
-        "p99": p99,
+        "availability": "measured" if samples else "no_samples",
+        "mean": stats["mean"],
+        "p50": stats["p50"],
+        "p90": stats["p90"],
+        "p95": stats["p95"],
+        "p99": stats["p99"],
         "n_with_measure": len(samples),
         "n_total": n_total,
-        "population_definition": POPULATION_DEFINITION,
+        "population_definition": d.POPULATION_DEFINITION,
     }
+
+
+def _rtfx_blocks(
+    *,
+    mode: str,
+    pacing: bool,
+    attempted: float,
+    successful: float,
+    wall_span_s: float,
+    span_pooling: str,
+    simulated: bool,
+) -> dict[str, dict[str, Any]]:
+    built: dict[str, dict[str, Any]] = {}
+    for name, definition, applicable_mode, reason, offline in _RTFX:
+        built[name] = _rtfx(
+            name=name,
+            definition=definition,
+            applicable=mode == applicable_mode,
+            inapplicable_reason=reason,
+            pacing=pacing,
+            attempted=attempted,
+            successful=successful,
+            wall_span_s=wall_span_s,
+            span_pooling=span_pooling,
+            offline=offline,
+            simulated=simulated,
+        )
+    return built
 
 
 def _rtfx(
@@ -768,22 +917,22 @@ def _rtfx(
     availability = "unavailable"
     reason: str | None = inapplicable_reason
     value = None
-    validity = RTFX_VALIDITY_NOT_APPLICABLE
+    validity = d.RTFX_VALIDITY_NOT_APPLICABLE
     if applicable and wall_span_s <= 0:
         reason = "cell_wall_span_not_positive"
-        validity = RTFX_VALIDITY_UNQUALIFIED
+        validity = d.RTFX_VALIDITY_UNQUALIFIED
     elif applicable:
         availability = "measured"
         reason = None
         value = successful / wall_span_s
         if simulated:
-            validity = RTFX_VALIDITY_SIMULATED
+            validity = d.RTFX_VALIDITY_SIMULATED
         elif offline:
             validity = "offline_cell"
         elif not pacing:
-            validity = RTFX_VALIDITY_PACING_DISABLED
+            validity = d.RTFX_VALIDITY_PACING_DISABLED
         else:
-            validity = RTFX_VALIDITY_UNQUALIFIED
+            validity = d.RTFX_VALIDITY_UNQUALIFIED
     return {
         "name": name,
         "availability": availability,
@@ -793,7 +942,7 @@ def _rtfx(
         "attempted_audio_s": attempted,
         "cell_wall_span_s": wall_span_s,
         "span_pooling": span_pooling,
-        "clock": STREAMING_RTFX_CLOCK,
+        "clock": d.STREAMING_RTFX_CLOCK,
         "definition": definition,
         "pacing": pacing,
         "validity": validity,
@@ -809,7 +958,7 @@ def _prefix(outcomes: list[SessionOutcome]) -> dict[str, Any]:
             "count": None,
             "pairs_checked": 0,
             "final_checked": False,
-            "definition": PREFIX_VIOLATION_DEFINITION,
+            "definition": d.PREFIX_VIOLATION_DEFINITION,
         }
     count = 0
     pairs = 0
@@ -839,7 +988,7 @@ def _prefix(outcomes: list[SessionOutcome]) -> dict[str, Any]:
         "count": count,
         "pairs_checked": pairs,
         "final_checked": final_checked,
-        "definition": PREFIX_VIOLATION_DEFINITION,
+        "definition": d.PREFIX_VIOLATION_DEFINITION,
     }
 
 
@@ -851,7 +1000,7 @@ def _revision(outcomes: list[SessionOutcome]) -> dict[str, Any]:
             "rate": None,
             "revised_tokens": None,
             "emitted_tokens": None,
-            "definition": REVISION_RATE_DEFINITION,
+            "definition": d.REVISION_RATE_DEFINITION,
         }
     revised = 0
     emitted = 0
@@ -887,40 +1036,20 @@ def _revision(outcomes: list[SessionOutcome]) -> dict[str, Any]:
         "rate": rate,
         "revised_tokens": revised,
         "emitted_tokens": emitted,
-        "definition": REVISION_RATE_DEFINITION,
+        "definition": d.REVISION_RATE_DEFINITION,
     }
 
 
 def _unavailable() -> list[dict[str, Any]]:
     return [
         {
-            "name": "emission_lag",
+            "name": name,
             "availability": "unavailable",
-            "reason": EMISSION_LAG_UNAVAILABLE_REASON,
-            "clock": EMISSION_LAG_CLOCK,
-            "definition": EMISSION_LAG_DEFINITION,
-        },
-        {
-            "name": "lag_excess",
-            "availability": "unavailable",
-            "reason": LAG_EXCESS_UNAVAILABLE_REASON,
-            "clock": EMISSION_LAG_CLOCK,
-            "definition": LAG_EXCESS_DEFINITION,
-        },
-        {
-            "name": "pacing_fidelity",
-            "availability": "unavailable",
-            "reason": PACING_FIDELITY_UNAVAILABLE_REASON,
-            "clock": PACING_FIDELITY_CLOCK,
-            "definition": PACING_FIDELITY_DEFINITION,
-        },
-        {
-            "name": "interim_cadence_conformance",
-            "availability": "unavailable",
-            "reason": INTERIM_CADENCE_UNAVAILABLE_REASON,
-            "clock": INTERIM_CADENCE_CLOCK,
-            "definition": INTERIM_CADENCE_DEFINITION,
-        },
+            "reason": reason,
+            "clock": clock,
+            "definition": definition,
+        }
+        for name, reason, clock, definition in _UNAVAILABLE
     ]
 
 
@@ -928,8 +1057,7 @@ def _conjunction(
     outcomes: list[SessionOutcome],
     *,
     counts: dict[str, Any],
-    ttfs: dict[str, Any],
-    response: dict[str, Any],
+    metrics: dict[str, tuple[dict[str, Any], list[float]]],
     wer: dict[str, Any],
     reference: str | None,
     pass_policy: PassPolicy,
@@ -952,11 +1080,9 @@ def _conjunction(
             empty=total == 0,
         ),
         _latency_clause(
-            outcomes,
+            metrics,
             pass_policy=pass_policy,
             percentile_method=percentile_method,
-            ttfs=ttfs,
-            response=response,
         ),
         _sustainability_clause(counts, total, pass_policy),
         _accuracy_clause(wer, reference, pass_policy),
@@ -970,7 +1096,7 @@ def _conjunction(
         if clause["status"] == "unevaluable"
     ]
     return {
-        "definition": PASS_CONJUNCTION_DEFINITION,
+        "definition": d.PASS_CONJUNCTION_DEFINITION,
         "passed": bool(clauses) and not failed and not unevaluable,
         "failed_clauses": failed,
         "unevaluable_clauses": unevaluable,
@@ -983,11 +1109,7 @@ def _fraction_clause(
 ) -> dict[str, Any]:
     if empty or observed is None:
         return _clause(
-            name,
-            "unevaluable",
-            observed,
-            threshold,
-            "no measured sessions",
+            name, "unevaluable", observed, threshold, "no measured sessions"
         )
     status = "passed" if observed >= threshold else "failed"
     return _clause(
@@ -996,24 +1118,13 @@ def _fraction_clause(
 
 
 def _latency_clause(
-    outcomes: list[SessionOutcome],
+    metrics: dict[str, tuple[dict[str, Any], list[float]]],
     *,
     pass_policy: PassPolicy,
     percentile_method: str,
-    ttfs: dict[str, Any],
-    response: dict[str, Any],
 ) -> dict[str, Any]:
     metric = pass_policy.latency_metric
-    chosen = ttfs if metric == LATENCY_METRIC_TTFS else response
-    if metric not in {LATENCY_METRIC_TTFS, LATENCY_METRIC_RESPONSE}:
-        return _clause(
-            "latency_slo",
-            "unevaluable",
-            None,
-            pass_policy.latency_slo_s,
-            f"unknown latency metric {metric}",
-        )
-    samples = _latency_samples(outcomes, metric)
+    chosen, samples = metrics[metric]
     if chosen["availability"] != "measured":
         return _clause(
             "latency_slo",
@@ -1050,60 +1161,47 @@ def _latency_clause(
     )
 
 
-def _latency_samples(
-    outcomes: list[SessionOutcome], metric: str
-) -> list[float]:
-    if metric == LATENCY_METRIC_TTFS:
-        return [
-            float(item.ttfs_s) for item in outcomes if item.ttfs_s is not None
-        ]
-    samples: list[float] = []
-    for outcome in outcomes:
-        samples.extend(float(value) for value in outcome.response_latencies_s)
-    return samples
-
-
 def _sustainability_clause(
     counts: dict[str, Any], total: int, pass_policy: PassPolicy
 ) -> dict[str, Any]:
     policy = pass_policy.sustainability_policy
-    if policy == SUSTAINABILITY_STEADY_INTERVAL:
+
+    def steady() -> dict[str, Any]:
         return _clause(
             "sustainability",
             "unevaluable",
             None,
             pass_policy.sustainability_min,
-            STEADY_INTERVAL_DEFINITION
+            d.STEADY_INTERVAL_DEFINITION
             + " "
-            + STEADY_INTERVAL_UNAVAILABLE_REASON,
+            + d.STEADY_INTERVAL_UNAVAILABLE_REASON,
         )
-    if policy != SUSTAINABILITY_COMPLETION_FRACTION:
+
+    def completion() -> dict[str, Any]:
+        if total == 0:
+            return _clause(
+                "sustainability",
+                "unevaluable",
+                None,
+                pass_policy.sustainability_min,
+                "no measured sessions",
+            )
+        observed = counts["completed"] / total
+        status = (
+            "passed" if observed >= pass_policy.sustainability_min else "failed"
+        )
         return _clause(
             "sustainability",
-            "unevaluable",
-            None,
+            status,
+            observed,
             pass_policy.sustainability_min,
-            f"unknown sustainability policy {policy}",
+            d.COMPLETION_FRACTION_DEFINITION,
         )
-    if total == 0:
-        return _clause(
-            "sustainability",
-            "unevaluable",
-            None,
-            pass_policy.sustainability_min,
-            "no measured sessions",
-        )
-    observed = counts["completed"] / total
-    status = (
-        "passed" if observed >= pass_policy.sustainability_min else "failed"
-    )
-    return _clause(
-        "sustainability",
-        status,
-        observed,
-        pass_policy.sustainability_min,
-        COMPLETION_FRACTION_DEFINITION,
-    )
+
+    return {
+        d.SUSTAINABILITY_STEADY_INTERVAL: steady,
+        d.SUSTAINABILITY_COMPLETION_FRACTION: completion,
+    }[policy]()
 
 
 def _accuracy_clause(
@@ -1168,15 +1266,15 @@ def _goodput(
 ) -> dict[str, Any]:
     base = {
         "name": "goodput",
-        "definition": GOODPUT_DEFINITION,
+        "definition": d.GOODPUT_DEFINITION,
         "n_total": len(outcomes),
         "cell_wall_span_s": wall_span_s,
     }
-    if pass_policy.sustainability_policy == SUSTAINABILITY_STEADY_INTERVAL:
+    if pass_policy.sustainability_policy == d.SUSTAINABILITY_STEADY_INTERVAL:
         return {
             **base,
             "availability": "unavailable",
-            "reason": STEADY_INTERVAL_UNAVAILABLE_REASON,
+            "reason": d.STEADY_INTERVAL_UNAVAILABLE_REASON,
             "streams_meeting_slo": None,
             "per_second": None,
         }
@@ -1221,7 +1319,7 @@ def _session_meets(
         return False
     if not is_completed(outcome):
         return False
-    if pass_policy.latency_metric == LATENCY_METRIC_TTFS:
+    if pass_policy.latency_metric == d.LATENCY_METRIC_TTFS:
         if outcome.ttfs_s is None or outcome.ttfs_s > pass_policy.latency_slo_s:
             return False
     else:

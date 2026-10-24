@@ -360,6 +360,93 @@ def test_each_lane_runs_at_its_population_cadence(tmp_path: Path) -> None:
     assert resolved["workload"]["lookahead_frames"] is None
 
 
+def test_hang_guard_covers_two_timeouts_and_the_barrier() -> None:
+    from asrbench.definitions import RUNNER_HANG_GRACE_S
+    from asrbench.runner import hang_guard_s
+
+    assert hang_guard_s(1.0, 1.6, pacing=False) == 3.0 + RUNNER_HANG_GRACE_S
+    paced = hang_guard_s(1.0, 1.6, pacing=True)
+    assert paced == 3.0 + 1.6 + RUNNER_HANG_GRACE_S
+
+
+def test_barrier_wait_plus_later_work_keeps_the_outcome(tmp_path: Path) -> None:
+    class SlowBarrier:
+        name = "slow-barrier"
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del progress_callback
+            if admission_barrier is None:
+                return _success(request)
+            if "lane0" in request.label:
+                await asyncio.sleep(0.9 * request.timeout_s)
+                await admission_barrier.wait(request.label)
+                return _success(request)
+            await admission_barrier.wait(request.label)
+            await asyncio.sleep(0.5 * request.timeout_s)
+            outcome = _success(request)
+            outcome.ttfs_s = 0.5
+            outcome.interim_texts = ["kept"]
+            return outcome
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "timeout_s"): 1.0,
+            ("workload", "pacing"): False,
+            ("workload", "lanes"): 2,
+            ("workload", "iterations"): 1,
+            ("workload", "trials"): 1,
+            ("workload", "warmup"): 0,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    receipt = _drive(config, tmp_path, "hang", SlowBarrier())
+    outcomes = receipt["trials"][0]["outcomes"]
+    assert isinstance(outcomes, list)
+    waiting = next(item for item in outcomes if "lane1" in str(item["label"]))
+    assert isinstance(waiting, dict)
+    assert waiting["ttfs_s"] == 0.5
+    assert waiting["timed_out"] is False
+    assert waiting["interim_texts"] == ["kept"]
+
+
+def test_unsupported_workload_option_is_refused_before_the_run(
+    tmp_path: Path,
+) -> None:
+    class Closed:
+        name = "realtime-ws"
+        supported_workload_options: frozenset[str] = frozenset()
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del request, admission_barrier, progress_callback
+            raise AssertionError("unsupported option must be refused first")
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "language"): "fr",
+            ("workload", "lanes"): 1,
+            ("workload", "iterations"): 1,
+            ("workload", "trials"): 1,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    with pytest.raises(ConfigError, match="language"):
+        _drive(config, tmp_path, "refused", Closed())
+
+
 def test_adapter_timeout_does_not_replace_a_returned_outcome(
     tmp_path: Path,
 ) -> None:

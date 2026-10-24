@@ -34,14 +34,17 @@ not read as dropped audio. The spelling is `WER_DEFINITION` and
 `SDI_DEFINITION`. One aggregate number cannot distinguish a capacity bug from
 an acoustic one.
 
-**Normalization is part of the metric, not a preprocessing step.** Three comparisons
-exist and they must not share a normalizer:
+**Normalization is part of the metric, not a preprocessing step.** Named policies
+do not share a normalizer:
 
 1. **Engine vs its own reference oracle** — compare **raw**, no normalization.
    Normalizing here lets a real regression hide behind text cleanup.
 2. **Engine vs corpus reference** — full normalization: case-fold, strip punctuation,
    strip control tags, normalize numbers, collapse whitespace.
-3. **Engine vs another server** — full normalization plus a declared tolerance.
+
+A comparison against another server's hypothesis needs its own hypothesis source.
+Until that source exists, it is not a third policy: it would reuse the
+corpus-reference normalizer and the workload's corpus reference.
 
 On read speech, number-formatting differences dominate WER and will swamp the
 streaming behavior being measured. A word error rate published without its policy

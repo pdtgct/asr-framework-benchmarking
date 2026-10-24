@@ -16,10 +16,11 @@ from typing import Any
 
 from asrbench.canonical import CanonicalError
 from asrbench.clips import ClipError
-from asrbench.compare import compare_receipts, load_receipt
+from asrbench.compare import compare_receipts
 from asrbench.config import (
     ConfigError,
     add_override_arguments,
+    load_json_object,
     overrides_from_args,
     resolve,
 )
@@ -143,8 +144,8 @@ def _run(args: argparse.Namespace) -> int:
 
 def _compare(args: argparse.Namespace) -> int:
     result = compare_receipts(
-        load_receipt(args.left),
-        load_receipt(args.right),
+        load_json_object(args.left),
+        load_json_object(args.right),
         force=args.force,
         reason=args.reason,
     )
@@ -156,7 +157,7 @@ def _compare(args: argparse.Namespace) -> int:
 
 
 def _frontier(args: argparse.Namespace) -> int:
-    receipts = [load_receipt(path) for path in args.receipts]
+    receipts = [load_json_object(path) for path in args.receipts]
     sources = [path.name for path in args.receipts]
     report = frontier_report(receipts, sources)
     if args.out is not None:
@@ -166,7 +167,7 @@ def _frontier(args: argparse.Namespace) -> int:
 
 
 def _sustained(args: argparse.Namespace) -> int:
-    receipts = [load_receipt(path) for path in args.receipts]
+    receipts = [load_json_object(path) for path in args.receipts]
     sources = [path.name for path in args.receipts]
     report = sustained_streams_report(receipts, sources)
     json.dump(report, sys.stdout, indent=2)
@@ -175,7 +176,7 @@ def _sustained(args: argparse.Namespace) -> int:
 
 
 def _report(args: argparse.Namespace) -> int:
-    receipt = load_receipt(args.receipt)
+    receipt = load_json_object(args.receipt)
     if args.format == "console":
         text = console_report(receipt)
     elif args.format == "vllm":

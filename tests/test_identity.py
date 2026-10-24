@@ -2,7 +2,8 @@
 
 import subprocess
 
-from asrbench.fingerprint import hardware_identity
+from asrbench.config import resolve
+from asrbench.fingerprint import identity_blocks
 from asrbench.identity import (
     NVIDIA_SMI_ARGV,
     FixedProbe,
@@ -54,12 +55,30 @@ def test_missing_nvidia_smi_is_absent_not_fatal() -> None:
     assert record.gpu_count is None
     assert record.probe_status == "absent"
     assert record.hostname == "injected-host"
-    identity = hardware_identity(
-        gpu_name=record.gpu_name,
-        gpu_count=record.gpu_count,
-        gpu_memory_mib=record.gpu_memory_mib,
-        gpu_identity_source="client_probe",
-    )
+    identity = identity_blocks(
+        resolve(env={}),
+        {
+            "gpu_name": record.gpu_name,
+            "gpu_count": record.gpu_count,
+            "gpu_memory_mib": record.gpu_memory_mib,
+            "driver_version": record.driver_version,
+            "system": record.system,
+            "architecture": record.architecture,
+            "cpu_model": record.cpu_model,
+            "logical_cpu_count": record.logical_cpu_count,
+            "hostname": record.hostname,
+            "probe_status": record.probe_status,
+        },
+        {
+            "adapter": "mock",
+            "schema_version": "asrbench-receipt/1",
+            "measurement_semantics_version": "1",
+            "package_version": "0",
+            "python_version": "3.12.0",
+            "git_commit": "unknown",
+            "git_dirty": False,
+        },
+    )["hardware"]
     assert "hostname" not in identity
     assert "gpu_uuids" not in identity
     assert "driver_version" not in identity

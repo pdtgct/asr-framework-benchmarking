@@ -86,7 +86,10 @@ def clip_pcm(clip: ClipSpec) -> bytes:
     if clip.generator == "file":
         if not clip.path:
             raise ClipError("file clips require path")
-        return read_pcm16(Path(clip.path))
+        try:
+            return read_pcm16(Path(clip.path))
+        except OSError as error:
+            raise ClipError(f"{clip.path}: {error}") from error
     raise ClipError(f"unknown clip generator {clip.generator!r}")
 
 

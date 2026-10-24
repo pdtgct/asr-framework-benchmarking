@@ -110,21 +110,23 @@ def schema_markdown() -> str:
             "",
         ]
     )
+    lines.extend(["| Name | Value |", "| --- | --- |"])
     for name, value in emitted_definitions().items():
-        lines.append(f"### `{name}`")
-        lines.append("")
-        lines.append(f"> {value}")
-        lines.append("")
+        cell = value.replace("|", "\\|")
+        lines.append(f"| `{name}` | {cell} |")
     lines.extend(
         [
+            "",
             "## Mock preset receipt shape",
             "",
             "Types are taken from one run of `presets/mock-streaming.json`",
-            "with injected hardware and a scripted cell span.",
+            "with injected hardware and a scripted cell span. A repeated",
+            "object is named once and then cited by path.",
             "",
         ]
     )
-    lines.extend(_shape(receipt, 0))
+    seen: dict[tuple[Any, ...], str] = {}
+    lines.extend(_shape(receipt, 0, "", seen))
     lines.append("")
     return "\n".join(lines)
 
@@ -145,24 +147,44 @@ def write_schema_doc(path: Path | None = None) -> Path:
     return destination
 
 
-def _shape(value: object, indent: int) -> list[str]:
+_ALIAS_KEYS = 6
+
+
+def _shape(
+    value: object,
+    indent: int,
+    path: str,
+    seen: dict[tuple[Any, ...], str],
+) -> list[str]:
     if not isinstance(value, dict):
         return []
     pad = "  " * indent
     lines: list[str] = []
     for key, item in value.items():
-        lines.extend(_field(pad, str(key), item, indent))
+        child = f"{path}.{key}" if path else str(key)
+        lines.extend(_field(pad, str(key), item, indent, child, seen))
     return lines
 
 
-def _field(pad: str, key: str, item: object, indent: int) -> list[str]:
+def _field(
+    pad: str,
+    key: str,
+    item: object,
+    indent: int,
+    path: str,
+    seen: dict[tuple[Any, ...], str],
+) -> list[str]:
     if key == "definitions" and isinstance(item, dict):
         return [f"{pad}- `{key}`: object of emitted constants quoted above"]
     if key == "warmup_outcomes":
         return [f"{pad}- `{key}`: list[object] (same item shape as outcomes)"]
     if isinstance(item, dict):
+        alias = _alias(item, seen)
+        if alias is not None:
+            return [f"{pad}- `{key}`: same shape as `{alias}`"]
         lines = [f"{pad}- `{key}`: object"]
-        lines.extend(_shape(item, indent + 1))
+        lines.extend(_shape(item, indent + 1, path, seen))
+        _remember(item, path, seen)
         return lines
     if isinstance(item, list):
         if not item:
@@ -170,11 +192,45 @@ def _field(pad: str, key: str, item: object, indent: int) -> list[str]:
         head = item[0]
         if isinstance(head, dict):
             lines = [f"{pad}- `{key}`: list[object]"]
+            alias = _alias(head, seen)
+            item_path = path + "[]"
+            if alias is not None:
+                lines.append(f"{pad}  - item: same shape as `{alias}`")
+                return lines
             lines.append(f"{pad}  - item: object")
-            lines.extend(_shape(head, indent + 2))
+            lines.extend(_shape(head, indent + 2, item_path, seen))
+            _remember(head, item_path, seen)
             return lines
         return [f"{pad}- `{key}`: list[{_scalar(head)}]"]
     return [f"{pad}- `{key}`: {_scalar(item)}"]
+
+
+def _signature(value: object) -> tuple[Any, ...]:
+    if isinstance(value, dict):
+        return (
+            "dict",
+            tuple((str(key), _signature(item)) for key, item in value.items()),
+        )
+    if isinstance(value, list):
+        if not value:
+            return ("list", "empty")
+        return ("list", _signature(value[0]))
+    return ("scalar", _scalar(value))
+
+
+def _alias(
+    item: dict[str, Any], seen: dict[tuple[Any, ...], str]
+) -> str | None:
+    if len(item) < _ALIAS_KEYS:
+        return None
+    return seen.get(_signature(item))
+
+
+def _remember(
+    item: dict[str, Any], path: str, seen: dict[tuple[Any, ...], str]
+) -> None:
+    if len(item) >= _ALIAS_KEYS:
+        seen[_signature(item)] = path
 
 
 def _scalar(value: object) -> str:

@@ -10,24 +10,18 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from asrbench.canonical import CanonicalError
+from asrbench.canonical import CanonicalError, leaf_differences
 from asrbench.config import (
     ConfigError,
     config_from_mapping,
-    load_json_object,
     validate,
 )
 from asrbench.fingerprint import (
     COMPARISON_EXCLUSIONS,
     comparison_key,
-    driver_for_warn,
-    hard_hardware,
-    software_identity,
-    target_identity,
-    warn_identity,
+    identity_blocks,
     workload_fingerprint,
     workload_material,
 )
@@ -38,7 +32,6 @@ __all__ = [
     "CompareResult",
     "FieldDifference",
     "compare_receipts",
-    "load_receipt",
 ]
 
 
@@ -85,21 +78,6 @@ class CompareResult:
             ],
             "warnings": [_difference_dict(item) for item in self.warnings],
         }
-
-
-def load_receipt(path: Path) -> dict[str, Any]:
-    """Read a receipt object.
-
-    Args:
-        path: JSON file.
-
-    Returns:
-        The object.
-
-    Raises:
-        ConfigError: The file is not a JSON object.
-    """
-    return load_json_object(path)
 
 
 def compare_receipts(
@@ -168,9 +146,10 @@ def compare_receipts(
 
 def _view(receipt: dict[str, Any]) -> dict[str, Any]:
     config = _config(receipt)
-    software = _software(config, receipt)
-    hardware = _hardware(config, receipt)
-    target = target_identity(config.target)
+    blocks = _blocks(config, receipt)
+    target = blocks["target"]
+    software = blocks["software"]
+    hardware = blocks["hardware"]
     recomputed_fp = workload_fingerprint(config)
     key = comparison_key(
         workload_fp=recomputed_fp,
@@ -182,7 +161,7 @@ def _view(receipt: dict[str, Any]) -> dict[str, Any]:
         "config": config,
         "workload_fingerprint": recomputed_fp,
         "workload_material": workload_material(config.workload),
-        "stored_workload_fingerprint": _nested(
+        "stored_workload_fingerprint": _get(
             receipt, "fingerprints", "workload"
         ),
         "stored_comparison_key": receipt.get("comparison_key"),
@@ -190,13 +169,11 @@ def _view(receipt: dict[str, Any]) -> dict[str, Any]:
         "target": target,
         "software": software,
         "hardware": hardware,
-        "stored_target": _identity_block(receipt, "target"),
-        "stored_software": _identity_block(receipt, "software"),
-        "stored_hardware": _identity_block(receipt, "hardware"),
-        "warn": _warn(config, receipt),
-        "observation_fingerprint": _nested(
-            receipt, "fingerprints", "observation"
-        ),
+        "stored_target": _mapping(receipt, "identity", "target"),
+        "stored_software": _mapping(receipt, "identity", "software"),
+        "stored_hardware": _mapping(receipt, "identity", "hardware"),
+        "warn": blocks["warn"],
+        "observation_fingerprint": _get(receipt, "fingerprints", "observation"),
     }
 
 
@@ -262,72 +239,59 @@ def _integrity(view: dict[str, Any]) -> list[FieldDifference]:
     return found
 
 
-def _software(
+def _blocks(
     config: ResolvedConfig, receipt: dict[str, Any]
-) -> dict[str, Any]:
-    stored = _identity_block(receipt, "software")
-    schema = receipt.get("schema_version")
-    schema_text = schema if isinstance(schema, str) else ""
-    adapter = stored.get("adapter")
-    if isinstance(adapter, str) and adapter:
-        adapter_text = adapter
-    else:
-        adapter_text = config.target.transport
-    return software_identity(
-        adapter=adapter_text,
-        normalization_policy=config.run.pass_policy.normalization_policy,
-        percentile_method=config.run.percentile_method,
-        schema_version=schema_text,
-    )
+) -> dict[str, dict[str, Any]]:
+    """Recompute identity from the config and the stored probe.
 
-
-def _hardware(
-    config: ResolvedConfig, receipt: dict[str, Any]
-) -> dict[str, Any]:
-    probe = _probe_hardware(receipt)
-    return hard_hardware(
-        config.target,
-        client_gpu_name=_optional_str(probe.get("gpu_name")),
-        client_gpu_count=_optional_int(probe.get("gpu_count")),
-        client_gpu_memory_mib=_optional_int(probe.get("gpu_memory_mib")),
-    )
-
-
-def _warn(config: ResolvedConfig, receipt: dict[str, Any]) -> dict[str, Any]:
-    """Recompute warn-only fields from the config and the stored probe.
-
-    A hand edit of ``identity.warn`` that does not match this view is not
-    what is compared. The probe and the resolved config are.
+    Measurement semantics and schema version come from the receipt, not
+    from the installed package. A hand edit of ``identity.warn`` that
+    does not match the probe is not what is compared.
     """
-    probe = _probe_hardware(receipt)
-    software = _probe_software(receipt)
-    driver, source = driver_for_warn(
-        config.target, _optional_str(probe.get("driver_version"))
-    )
-    stored = _identity_block(receipt, "warn")
+    probe_hw = _mapping(receipt, "probe", "hardware")
+    probe_sw = _mapping(receipt, "probe", "software")
+    stored_warn = _mapping(receipt, "identity", "warn")
+    stored_software = _mapping(receipt, "identity", "software")
 
     def pick(primary: dict[str, Any], key: str, default: Any = None) -> Any:
         if key in primary:
             return primary[key]
-        return stored.get(key, default)
+        return stored_warn.get(key, default)
 
-    return warn_identity(
-        endpoint_url=config.target.endpoint_url,
-        tls_verify=config.target.tls_verify,
-        auth_env=config.target.auth_env,
-        lookahead_identity_policy=config.run.lookahead_identity_policy,
-        package_version=str(stored.get("package_version", "")),
-        python_version=str(stored.get("python_version", "")),
-        git_commit=str(pick(software, "git_commit", "unknown")),
-        git_dirty=bool(pick(software, "git_dirty", False)),
-        driver_version=driver,
-        driver_version_source=source,
-        system=str(pick(probe, "system", "")),
-        architecture=str(pick(probe, "architecture", "")),
-        cpu_model=_optional_str(pick(probe, "cpu_model")),
-        logical_cpu_count=_optional_int(pick(probe, "logical_cpu_count")),
-        hostname=_optional_str(pick(probe, "hostname")),
-        probe_status=_optional_str(pick(probe, "probe_status")),
+    adapter = stored_software.get("adapter")
+    schema = receipt.get("schema_version")
+    semantics = stored_software.get("measurement_semantics_version")
+    if isinstance(adapter, str) and adapter:
+        adapter_text = adapter
+    else:
+        adapter_text = config.target.transport
+    return identity_blocks(
+        config,
+        {
+            "architecture": str(pick(probe_hw, "architecture", "")),
+            "cpu_model": _optional_str(pick(probe_hw, "cpu_model")),
+            "driver_version": _optional_str(probe_hw.get("driver_version")),
+            "gpu_count": _optional_int(probe_hw.get("gpu_count")),
+            "gpu_memory_mib": _optional_int(probe_hw.get("gpu_memory_mib")),
+            "gpu_name": _optional_str(probe_hw.get("gpu_name")),
+            "hostname": _optional_str(pick(probe_hw, "hostname")),
+            "logical_cpu_count": _optional_int(
+                pick(probe_hw, "logical_cpu_count")
+            ),
+            "probe_status": _optional_str(pick(probe_hw, "probe_status")),
+            "system": str(pick(probe_hw, "system", "")),
+        },
+        {
+            "adapter": adapter_text,
+            "git_commit": str(pick(probe_sw, "git_commit", "unknown")),
+            "git_dirty": bool(pick(probe_sw, "git_dirty", False)),
+            "measurement_semantics_version": (
+                semantics if isinstance(semantics, str) else None
+            ),
+            "package_version": str(stored_warn.get("package_version", "")),
+            "python_version": str(stored_warn.get("python_version", "")),
+            "schema_version": schema if isinstance(schema, str) else "",
+        },
     )
 
 
@@ -347,44 +311,10 @@ def _config(receipt: dict[str, Any]) -> ResolvedConfig:
 def _leaf_diffs(
     component: str, left: Any, right: Any, prefix: str = ""
 ) -> list[FieldDifference]:
-    if isinstance(left, dict) and isinstance(right, dict):
-        found: list[FieldDifference] = []
-        for key in sorted(set(left) | set(right)):
-            path = f"{prefix}.{key}" if prefix else str(key)
-            if key not in left or key not in right:
-                found.append(
-                    FieldDifference(
-                        component,
-                        path,
-                        left.get(key),
-                        right.get(key),
-                    )
-                )
-            else:
-                found.extend(
-                    _leaf_diffs(component, left[key], right[key], path)
-                )
-        return found
-    if isinstance(left, list) and isinstance(right, list):
-        if len(left) != len(right):
-            return [
-                FieldDifference(component, prefix or component, left, right)
-            ]
-        found = []
-        pairs = zip(left, right, strict=True)
-        for index, (item_left, item_right) in enumerate(pairs):
-            found.extend(
-                _leaf_diffs(
-                    component,
-                    item_left,
-                    item_right,
-                    f"{prefix}[{index}]",
-                )
-            )
-        return found
-    if left != right:
-        return [FieldDifference(component, prefix or component, left, right)]
-    return []
+    return [
+        FieldDifference(component, path or component, item_left, item_right)
+        for path, item_left, item_right in leaf_differences(left, right, prefix)
+    ]
 
 
 def _summary(difference: FieldDifference) -> str:
@@ -409,7 +339,7 @@ def _difference_dict(item: FieldDifference) -> dict[str, Any]:
     }
 
 
-def _nested(payload: dict[str, Any], *names: str) -> Any:
+def _get(payload: dict[str, Any], *names: str) -> Any:
     current: Any = payload
     for name in names:
         if not isinstance(current, dict):
@@ -418,34 +348,11 @@ def _nested(payload: dict[str, Any], *names: str) -> Any:
     return current
 
 
-def _identity_block(receipt: dict[str, Any], name: str) -> dict[str, Any]:
-    identity = receipt.get("identity")
-    if not isinstance(identity, dict):
-        return {}
-    block = identity.get(name)
-    if not isinstance(block, dict):
-        return {}
-    return block
-
-
-def _probe_hardware(receipt: dict[str, Any]) -> dict[str, Any]:
-    probe = receipt.get("probe")
-    if not isinstance(probe, dict):
-        return {}
-    hardware = probe.get("hardware")
-    if not isinstance(hardware, dict):
-        return {}
-    return hardware
-
-
-def _probe_software(receipt: dict[str, Any]) -> dict[str, Any]:
-    probe = receipt.get("probe")
-    if not isinstance(probe, dict):
-        return {}
-    software = probe.get("software")
-    if not isinstance(software, dict):
-        return {}
-    return software
+def _mapping(payload: dict[str, Any], *names: str) -> dict[str, Any]:
+    found = _get(payload, *names)
+    if isinstance(found, dict):
+        return found
+    return {}
 
 
 def _optional_str(value: Any) -> str | None:

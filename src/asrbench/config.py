@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
+from asrbench.canonical import leaves
 from asrbench.clips import ClipError, pin_digest
 from asrbench.definitions import (
     LATENCY_METRIC_RESPONSE,
@@ -30,7 +31,6 @@ from asrbench.definitions import (
     MODE_OFFLINE,
     MODE_STREAMING,
     NORMALIZATION_CORPUS_REFERENCE,
-    NORMALIZATION_ENGINE_VS_OTHER_SERVER,
     NORMALIZATION_ENGINE_VS_OWN_ORACLE,
     SCHEMA_VERSION,
     SUSTAINABILITY_COMPLETION_FRACTION,
@@ -57,7 +57,6 @@ _LOOKAHEAD_POLICIES = {
 _NORMALIZATIONS = {
     NORMALIZATION_ENGINE_VS_OWN_ORACLE,
     NORMALIZATION_CORPUS_REFERENCE,
-    NORMALIZATION_ENGINE_VS_OTHER_SERVER,
 }
 _SUSTAINABILITY = {
     SUSTAINABILITY_STEADY_INTERVAL,
@@ -75,14 +74,14 @@ _SECTIONS = {
     "target": TargetSpec,
     "run": RunSpec,
 }
-_KINDS = {
-    "int": "int",
-    "int | None": "optional_int",
-    "float": "float",
-    "float | None": "optional_float",
-    "bool": "bool",
-    "str": "str",
-    "str | None": "optional_str",
+_FLAG_TYPE = {"int": int, "float": float, "str": str}
+_ENV_BOOL = {
+    "1": True,
+    "true": True,
+    "yes": True,
+    "0": False,
+    "false": False,
+    "no": False,
 }
 
 
@@ -97,7 +96,6 @@ class Binding:
     env: str
     flag: str
     path: tuple[str, ...]
-    kind: str
     help: str
 
 
@@ -216,9 +214,7 @@ def _bindings() -> tuple[Binding, ...]:
         elif path == ("workload", "clip", "path"):
             env_name = "ASRBENCH_CLIP_PATH"
             flag = "--clip-path"
-        built.append(
-            Binding(env_name, flag, path, _KINDS[_annotation(path)], help_text)
-        )
+        built.append(Binding(env_name, flag, path, help_text))
     return tuple(built)
 
 
@@ -270,18 +266,6 @@ def config_to_dict(config: ResolvedConfig) -> dict[str, Any]:
     encoded = {"workload": workload, "target": target, "run": run}
     decoded: dict[str, Any] = json.loads(json.dumps(encoded, allow_nan=False))
     return decoded
-
-
-def without_output_path(config: ResolvedConfig) -> ResolvedConfig:
-    """Drop the output path so two reproductions can be compared.
-
-    Args:
-        config: Resolved config.
-
-    Returns:
-        The same config with ``run.output_path`` cleared.
-    """
-    return replace(config, run=replace(config.run, output_path=None))
 
 
 def secret_records(
@@ -346,9 +330,8 @@ def resolve(
         resolved = payload.get("resolved_config")
         if not isinstance(resolved, dict):
             raise ConfigError("receipt has no resolved_config object")
-        config = without_output_path(
-            config_from_mapping(resolved, complete=True)
-        )
+        loaded = config_from_mapping(resolved, complete=True)
+        config = replace(loaded, run=replace(loaded.run, output_path=None))
         _reject_receipt_env(supplied, config.target.auth_env)
         base = config
     else:
@@ -358,15 +341,51 @@ def resolve(
         if len(config.workload.population) == 1:
             _check_population_agreement(config.workload)
         config, touched = _apply_env(config, supplied)
-    config, touched = _apply_overrides(config, overrides or {}, touched)
-    config = _derive_population(config, touched)
+    seen = set(touched)
+    for path, value in (overrides or {}).items():
+        config = _set_path(config, path, value)
+        seen.add(path)
+    config = _derive_population(config, seen)
     config = validate(config, pin=True)
     if base is not None:
-        pinned_base = validate(_derive_population(base, set()), pin=True)
+        # The receipt already stores the digest. Re-reading the original
+        # path would reject a machine where that path is gone and a
+        # ``--clip-path`` copy is the audio being pinned below.
+        pinned_base = validate(_derive_population(base, set()), pin=False)
         config = replace(
             config, reproduction_overrides=_diff(pinned_base, config)
         )
     return config
+
+
+def _merge_sections(
+    config: ResolvedConfig,
+    payload: Mapping[str, Any],
+    *,
+    complete: bool,
+    where: str,
+) -> ResolvedConfig:
+    _unknown(payload, set(_SECTIONS), where)
+    if complete:
+        missing = [name for name in _SECTIONS if name not in payload]
+        if missing:
+            raise ConfigError(f"{where} missing fields: " + ", ".join(missing))
+    updates: dict[str, Any] = {}
+    for name in _SECTIONS:
+        if name not in payload:
+            continue
+        updates[name] = _merge(
+            getattr(config, name),
+            _object(payload[name], name),
+            name,
+            complete=complete,
+        )
+    return replace(
+        config,
+        workload=updates.get("workload", config.workload),
+        target=updates.get("target", config.target),
+        run=updates.get("run", config.run),
+    )
 
 
 def apply_preset(
@@ -384,38 +403,7 @@ def apply_preset(
     Raises:
         ConfigError: The preset has an unknown field or a bad type.
     """
-    _unknown(payload, {"workload", "target", "run"}, "preset")
-    if "workload" in payload:
-        config = replace(
-            config,
-            workload=_merge(
-                config.workload,
-                _object(payload["workload"], "workload"),
-                "workload",
-                complete=False,
-            ),
-        )
-    if "target" in payload:
-        config = replace(
-            config,
-            target=_merge(
-                config.target,
-                _object(payload["target"], "target"),
-                "target",
-                complete=False,
-            ),
-        )
-    if "run" in payload:
-        config = replace(
-            config,
-            run=_merge(
-                config.run,
-                _object(payload["run"], "run"),
-                "run",
-                complete=False,
-            ),
-        )
-    return config
+    return _merge_sections(config, payload, complete=False, where="preset")
 
 
 def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
@@ -519,49 +507,12 @@ def config_from_mapping(
     Raises:
         ConfigError: The object is not shaped like a resolved config.
     """
-    _unknown(payload, {"workload", "target", "run"}, "resolved_config")
-    if complete:
-        missing = [
-            name
-            for name in ("workload", "target", "run")
-            if name not in payload
-        ]
-        if missing:
-            raise ConfigError(
-                "resolved_config missing fields: " + ", ".join(missing)
-            )
-    config = default_config()
-    if "workload" in payload:
-        config = replace(
-            config,
-            workload=_merge(
-                config.workload,
-                _object(payload["workload"], "workload"),
-                "workload",
-                complete=complete,
-            ),
-        )
-    if "target" in payload:
-        config = replace(
-            config,
-            target=_merge(
-                config.target,
-                _object(payload["target"], "target"),
-                "target",
-                complete=complete,
-            ),
-        )
-    if "run" in payload:
-        config = replace(
-            config,
-            run=_merge(
-                config.run,
-                _object(payload["run"], "run"),
-                "run",
-                complete=complete,
-            ),
-        )
-    return config
+    return _merge_sections(
+        default_config(),
+        payload,
+        complete=complete,
+        where="resolved_config",
+    )
 
 
 def add_override_arguments(parser: argparse.ArgumentParser) -> None:
@@ -571,8 +522,9 @@ def add_override_arguments(parser: argparse.ArgumentParser) -> None:
         parser: The ``run`` subparser.
     """
     for binding in BINDINGS:
-        dest = binding.flag.lstrip("-").replace("-", "_")
-        if binding.kind == "bool":
+        dest = _dest(binding.flag)
+        base = _base_type(_annotation(binding.path))
+        if base == "bool":
             parser.add_argument(
                 binding.flag,
                 dest=dest,
@@ -585,7 +537,7 @@ def add_override_arguments(parser: argparse.ArgumentParser) -> None:
                 binding.flag,
                 dest=dest,
                 default=None,
-                type=_FLAG_TYPES[binding.kind],
+                type=_FLAG_TYPE[base],
                 help=binding.help,
             )
 
@@ -601,24 +553,13 @@ def overrides_from_args(args: argparse.Namespace) -> dict[tuple[str, ...], Any]:
     """
     found: dict[tuple[str, ...], Any] = {}
     for binding in BINDINGS:
-        dest = binding.flag.lstrip("-").replace("-", "_")
-        value = getattr(args, dest)
+        value = getattr(args, _dest(binding.flag))
         if value is None:
             continue
-        if binding.kind == "optional_str" and value == "":
+        if _annotation(binding.path) == "str | None" and value == "":
             value = None
         found[binding.path] = value
     return found
-
-
-_FLAG_TYPES: dict[str, type[Any]] = {
-    "int": int,
-    "optional_int": int,
-    "float": float,
-    "optional_float": float,
-    "str": str,
-    "optional_str": str,
-}
 
 
 def _reject_receipt_env(env: Mapping[str, str], auth_name: str | None) -> None:
@@ -633,6 +574,14 @@ def _reject_receipt_env(env: Mapping[str, str], auth_name: str | None) -> None:
         )
 
 
+def _dest(flag: str) -> str:
+    return flag.lstrip("-").replace("-", "_")
+
+
+def _base_type(annotation: str) -> str:
+    return annotation.removesuffix(" | None")
+
+
 def _apply_env(
     config: ResolvedConfig, env: Mapping[str, str]
 ) -> tuple[ResolvedConfig, set[tuple[str, ...]]]:
@@ -644,7 +593,7 @@ def _apply_env(
             config,
             auth_binding.path,
             _parse_env(
-                auth_binding.kind,
+                _annotation(auth_binding.path),
                 env[auth_binding.env],
                 auth_binding.env,
             ),
@@ -662,78 +611,51 @@ def _apply_env(
                 f"unknown environment variable {key}; "
                 "auth secrets are read only when target.auth_env names them"
             )
-        parsed = _parse_env(binding.kind, raw, key)
+        parsed = _parse_env(_annotation(binding.path), raw, key)
         config = _set_path(config, binding.path, parsed)
         touched.add(binding.path)
     return config, touched
 
 
-def _apply_overrides(
-    config: ResolvedConfig,
-    overrides: Mapping[tuple[str, ...], Any],
-    touched: set[tuple[str, ...]],
-) -> tuple[ResolvedConfig, set[tuple[str, ...]]]:
-    seen = set(touched)
-    for path, value in overrides.items():
-        config = _set_path(config, path, value)
-        seen.add(path)
-    return config, seen
-
-
-def _parse_env(kind: str, raw: str, where: str) -> Any:
+def _parse_env(annotation: str, raw: str, where: str) -> Any:
     if raw == "":
         raise ConfigError(f"{where} is empty")
-    if kind == "bool":
-        folded = raw.casefold()
-        if folded in {"1", "true", "yes"}:
-            return True
-        if folded in {"0", "false", "no"}:
-            return False
-        raise ConfigError(f"{where} must be true or false")
-    if kind in {"int", "optional_int"}:
+    base = _base_type(annotation)
+    if base == "bool":
         try:
-            return int(raw)
+            return _ENV_BOOL[raw.casefold()]
+        except KeyError as error:
+            raise ConfigError(f"{where} must be true or false") from error
+    if base == "int":
+        try:
+            parsed: Any = int(raw)
         except ValueError as error:
             raise ConfigError(f"{where} must be an int") from error
-    if kind in {"float", "optional_float"}:
+    elif base == "float":
         try:
-            number = float(raw)
+            parsed = float(raw)
         except ValueError as error:
             raise ConfigError(f"{where} must be a number") from error
-        if not math.isfinite(number):
-            raise ConfigError(f"{where} must be finite")
-        return number
-    if kind in {"str", "optional_str"}:
-        return raw
-    raise ConfigError(f"unknown binding kind {kind}")
+    else:
+        parsed = raw
+    return _coerce(parsed, annotation, where)
+
+
+def _nest(path: tuple[str, ...], value: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    cursor = payload
+    for key in path[:-1]:
+        child: dict[str, Any] = {}
+        cursor[key] = child
+        cursor = child
+    cursor[path[-1]] = value
+    return payload
 
 
 def _set_path(
     config: ResolvedConfig, path: tuple[str, ...], value: Any
 ) -> ResolvedConfig:
-    if path[:2] == ("workload", "clip") and len(path) == 3:
-        clip = config.workload.clip
-        coerced = _coerce(value, _annotation(path), path[2])
-        updated = replace(clip, **{path[2]: coerced})
-        return replace(config, workload=replace(config.workload, clip=updated))
-    if path[:2] == ("run", "pass_policy") and len(path) == 3:
-        policy = config.run.pass_policy
-        coerced = _coerce(value, _annotation(path), path[2])
-        return replace(
-            config,
-            run=replace(
-                config.run,
-                pass_policy=replace(policy, **{path[2]: coerced}),
-            ),
-        )
-    if len(path) != 2 or path[0] not in _SECTIONS:
-        raise ConfigError(f"cannot set {'/'.join(path)}")
-    section = getattr(config, path[0])
-    known = {item.name for item in fields(section)}
-    if path[1] not in known:
-        raise ConfigError(f"cannot set {'/'.join(path)}")
-    coerced = _coerce(value, _annotation(path), path[1])
-    return replace(config, **{path[0]: replace(section, **{path[1]: coerced})})
+    return apply_preset(config, _nest(path, value))
 
 
 def _merge(
@@ -784,20 +706,24 @@ def _population(value: object) -> tuple[PopulationEntry, ...]:
         )
         if "lanes" not in payload:
             raise ConfigError(f"population[{index}] requires lanes")
+        where = f"population[{index}]"
         entries.append(
             PopulationEntry(
-                lanes=_as_int(payload["lanes"], f"population[{index}].lanes"),
-                cadence_ms=_as_optional_int(
+                lanes=_coerce(payload["lanes"], "int", f"{where}.lanes"),
+                cadence_ms=_coerce(
                     payload.get("cadence_ms"),
-                    f"population[{index}].cadence_ms",
+                    "int | None",
+                    f"{where}.cadence_ms",
                 ),
-                lookahead_frames=_as_optional_int(
+                lookahead_frames=_coerce(
                     payload.get("lookahead_frames"),
-                    f"population[{index}].lookahead_frames",
+                    "int | None",
+                    f"{where}.lookahead_frames",
                 ),
-                lookahead_ms_label=_as_optional_float(
+                lookahead_ms_label=_coerce(
                     payload.get("lookahead_ms_label"),
-                    f"population[{index}].lookahead_ms_label",
+                    "float | None",
+                    f"{where}.lookahead_ms_label",
                 ),
             )
         )
@@ -897,8 +823,8 @@ def _validate_server(target: TargetSpec) -> None:
 def _diff(
     before: ResolvedConfig, after: ResolvedConfig
 ) -> tuple[ReproductionOverride, ...]:
-    left = _leaves(config_to_dict(before))
-    right = _leaves(config_to_dict(after))
+    left = leaves(config_to_dict(before))
+    right = leaves(config_to_dict(after))
     found: list[ReproductionOverride] = []
     for key in sorted(set(left) | set(right)):
         if key == "run.output_path":
@@ -912,21 +838,6 @@ def _diff(
                 )
             )
     return tuple(found)
-
-
-def _leaves(value: Any, prefix: str = "") -> dict[str, Any]:
-    if isinstance(value, dict):
-        found: dict[str, Any] = {}
-        for key in sorted(value):
-            path = f"{prefix}.{key}" if prefix else str(key)
-            found.update(_leaves(value[key], path))
-        return found
-    if isinstance(value, list):
-        found = {}
-        for index, item in enumerate(value):
-            found.update(_leaves(item, f"{prefix}[{index}]"))
-        return found
-    return {prefix: value}
 
 
 def _agree(top: Any, seen: set[Any], name: str) -> None:
@@ -951,37 +862,13 @@ def _object(value: object, where: str) -> Mapping[str, Any]:
     return value
 
 
-def _coerce(value: object, annotation: str, where: str) -> Any:
-    if annotation == "int":
-        return _as_int(value, where)
-    if annotation == "int | None":
-        return _as_optional_int(value, where)
-    if annotation == "float":
-        return _as_float(value, where)
-    if annotation == "float | None":
-        return _as_optional_float(value, where)
-    if annotation == "bool":
-        return _as_bool(value, where)
-    if annotation == "str":
-        return _as_str(value, where)
-    if annotation == "str | None":
-        return _as_optional_str(value, where)
-    raise ConfigError(f"{where} has unsupported type {annotation}")
-
-
-def _as_int(value: object, where: str) -> int:
+def _check_int(value: object, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{where} must be an int")
     return value
 
 
-def _as_optional_int(value: object, where: str) -> int | None:
-    if value is None:
-        return None
-    return _as_int(value, where)
-
-
-def _as_float(value: object, where: str) -> float:
+def _check_float(value: object, where: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{where} must be a number")
     number = float(value)
@@ -990,30 +877,42 @@ def _as_float(value: object, where: str) -> float:
     return number
 
 
-def _as_optional_float(value: object, where: str) -> float | None:
-    if value is None:
-        return None
-    return _as_float(value, where)
+def _check_bool(value: object, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{where} must be a bool")
+    return value
 
 
-def _as_str(value: object, where: str) -> str:
+def _check_str(value: object, where: str) -> str:
     if not isinstance(value, str) or value == "":
         raise ConfigError(f"{where} must be a non-empty string")
     return value
 
 
-def _as_optional_str(value: object, where: str) -> str | None:
-    if value is None:
+_CHECKS = {
+    "int": _check_int,
+    "float": _check_float,
+    "bool": _check_bool,
+    "str": _check_str,
+}
+
+
+def _coerce(value: object, annotation: str, where: str) -> Any:
+    optional = annotation.endswith(" | None")
+    base = _base_type(annotation)
+    if optional and value is None:
         return None
-    if not isinstance(value, str):
-        raise ConfigError(f"{where} must be a string or null")
-    return value
-
-
-def _as_bool(value: object, where: str) -> bool:
-    if not isinstance(value, bool):
-        raise ConfigError(f"{where} must be a bool")
-    return value
+    if base == "str" and optional:
+        if not isinstance(value, str):
+            raise ConfigError(f"{where} must be a string or null")
+        return value
+    try:
+        checker = _CHECKS[base]
+    except KeyError as error:
+        raise ConfigError(
+            f"{where} has unsupported type {annotation}"
+        ) from error
+    return checker(value, where)
 
 
 def _require_positive(name: str, value: int, *, minimum: int) -> None:

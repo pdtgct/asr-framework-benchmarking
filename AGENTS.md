@@ -86,9 +86,10 @@ soften, merge, or "simplify" any of them.
 - **Client and server clocks are different clocks.** Correlate by request; never
   subtract one from the other.
 - **WER is comparable only within one named normalization policy.**
-  Engine-vs-oracle, engine-vs-corpus-reference, and engine-vs-other-server are three
-  different comparisons and must not share a normalizer. Engine-vs-own-oracle is
-  compared raw — normalizing there lets a real regression hide behind text cleanup.
+  Engine-vs-own-oracle is compared raw — normalizing there lets a real regression
+  hide behind text cleanup. Engine-vs-corpus-reference is the full-normalization
+  policy. Another accuracy policy needs its own hypothesis source; a second name
+  on the corpus-reference normalizer is a relabel.
 - **Cadence is an accuracy dial, not just a latency knob.** For cache-aware streaming
   models the service cadence sets the encoder's lookahead, so a longer cadence
   produces a *different and generally more accurate* transcript. Cross-cadence

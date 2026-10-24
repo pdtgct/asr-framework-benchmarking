@@ -4,13 +4,12 @@ from pathlib import Path
 
 from asrbench.canonical import CanonicalError, fingerprint, format_float
 from asrbench.config import resolve
+from asrbench.definitions import MEASUREMENT_SEMANTICS_VERSION, SCHEMA_VERSION
 from asrbench.fingerprint import (
     comparison_key,
-    hardware_identity,
+    identity_blocks,
     observation_fingerprint,
     reference_sha256,
-    software_identity,
-    target_identity,
     workload_fingerprint,
     workload_material,
 )
@@ -20,22 +19,35 @@ _PRESET = Path("presets/mock-streaming.json")
 
 
 def _key(config: ResolvedConfig) -> str:
-    software = software_identity(
-        adapter="mock",
-        normalization_policy=config.run.pass_policy.normalization_policy,
-        percentile_method=config.run.percentile_method,
-    )
-    hardware = hardware_identity(
-        gpu_name=None,
-        gpu_count=None,
-        gpu_memory_mib=None,
-        gpu_identity_source="client_probe",
+    blocks = identity_blocks(
+        config,
+        {
+            "gpu_name": None,
+            "gpu_count": None,
+            "gpu_memory_mib": None,
+            "driver_version": None,
+            "system": "",
+            "architecture": "",
+            "cpu_model": None,
+            "logical_cpu_count": None,
+            "hostname": None,
+            "probe_status": None,
+        },
+        {
+            "adapter": "mock",
+            "schema_version": SCHEMA_VERSION,
+            "measurement_semantics_version": MEASUREMENT_SEMANTICS_VERSION,
+            "package_version": "0",
+            "python_version": "3.12.0",
+            "git_commit": "unknown",
+            "git_dirty": False,
+        },
     )
     return comparison_key(
         workload_fp=workload_fingerprint(config),
-        target=target_identity(config.target),
-        software=software,
-        hardware=hardware,
+        target=blocks["target"],
+        software=blocks["software"],
+        hardware=blocks["hardware"],
     )
 
 

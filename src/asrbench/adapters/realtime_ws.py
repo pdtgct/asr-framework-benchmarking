@@ -79,6 +79,10 @@ class RealtimeWebSocketAdapter:
     """Drives one ``/v1/realtime`` session over an aiohttp WebSocket."""
 
     name = "realtime-ws"
+    #: Workload fields this dialect does not put on ``session.update``.
+    #: Cadence is sent. The runner refuses a non-default value outside
+    #: this set before the session starts.
+    supported_workload_options: frozenset[str] = frozenset()
 
     def __init__(self, session: aiohttp.ClientSession) -> None:
         """Bind the adapter to a client session owned by the caller."""
@@ -276,9 +280,20 @@ class RealtimeWebSocketAdapter:
                     return outcome
                 if admission_barrier is not None:
                     _progress(progress_callback, label, "barrier.waiting")
-                    extras.setdefault("markers", {}).update(
-                        await admission_barrier.wait(label)
-                    )
+                    try:
+                        released = await admission_barrier.wait(label)
+                    except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
+                        extras["timed_out"] = True
+                        extras["exception"] = "TimeoutError: cohort barrier"
+                        _progress(
+                            progress_callback,
+                            label,
+                            "barrier.timeout",
+                            timeout_s=request.timeout_s,
+                        )
+                        _mirror_failure(outcome)
+                        return outcome
+                    extras.setdefault("markers", {}).update(released)
                     _progress(progress_callback, label, "barrier.released")
 
                 if request.mode in ("full", "disconnect", "abort"):

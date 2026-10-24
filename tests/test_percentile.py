@@ -65,7 +65,8 @@ def test_numpy_linear_matches_statistics_quantiles() -> None:
     import random
     import statistics
 
-    samples = [random.Random(0).random() for _ in range(40)]
+    rng = random.Random(0)
+    samples = [rng.random() for _ in range(40)]
     cuts = statistics.quantiles(samples, n=100, method="inclusive")
     for q in range(1, 100):
         assert percentile(samples, q) == pytest.approx(cuts[q - 1])

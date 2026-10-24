@@ -4,7 +4,6 @@ import pytest
 
 from asrbench.definitions import (
     NORMALIZATION_CORPUS_REFERENCE,
-    NORMALIZATION_ENGINE_VS_OTHER_SERVER,
     NORMALIZATION_ENGINE_VS_OWN_ORACLE,
 )
 from asrbench.wer import (
@@ -27,10 +26,8 @@ def test_oracle_keeps_case_and_corpus_folds_it() -> None:
 def test_cardinals_apply_only_under_full_normalization() -> None:
     oracle = score_texts("1", "one", NORMALIZATION_ENGINE_VS_OWN_ORACLE)
     corpus = score_texts("1", "one", NORMALIZATION_CORPUS_REFERENCE)
-    other = score_texts("1", "one", NORMALIZATION_ENGINE_VS_OTHER_SERVER)
     assert oracle.wer == 1.0
     assert corpus.wer == 0.0
-    assert other.wer == 0.0
     assert normalize("one hundred and one", NORMALIZATION_CORPUS_REFERENCE) == [
         "101"
     ]
@@ -38,7 +35,7 @@ def test_cardinals_apply_only_under_full_normalization() -> None:
 
 def test_tags_are_stripped_only_by_full_normalization() -> None:
     assert normalize("<unk> hello", NORMALIZATION_CORPUS_REFERENCE) == ["hello"]
-    assert normalize("[noise] hello", NORMALIZATION_ENGINE_VS_OTHER_SERVER) == [
+    assert normalize("[noise] hello", NORMALIZATION_CORPUS_REFERENCE) == [
         "hello"
     ]
     assert normalize("<unk> hello", NORMALIZATION_ENGINE_VS_OWN_ORACLE) == [
@@ -101,7 +98,9 @@ def test_insertion_and_mid_sentence_deletion_are_separate() -> None:
         score.deletions,
         score.insertions,
     ) == edit_counts(reference, hypothesis)
-    assert score.cer == pytest.approx(score.char_edits / score.reference_chars)
+    assert score.reference_chars == 16
+    assert score.char_edits == 8
+    assert score.cer == 0.5
 
 
 def test_tie_break_prefers_substitution_then_deletion() -> None:

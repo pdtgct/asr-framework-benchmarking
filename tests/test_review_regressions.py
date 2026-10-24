@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from asrbench.clips import pcm16_wav, silence_pcm16
 from asrbench.compare import compare_receipts
-from asrbench.config import resolve
+from asrbench.config import ConfigError, resolve
+from asrbench.definitions import MEASUREMENT_SEMANTICS_VERSION
 from asrbench.identity import (
     FixedProbe,
     GitState,
@@ -63,26 +66,26 @@ def _run(
     return receipt
 
 
-def test_golden_receipt_matches_the_fixture() -> None:
-    try:
-        receipt = _run(
-            Path("."),
-            run_id="golden",
-            overrides={
-                (
-                    "run",
-                    "pass_policy",
-                    "sustainability_policy",
-                ): "completion_fraction",
-            },
-            materialize_dir=_CLIP,
-        )
-        text = json.dumps(receipt, indent=2, allow_nan=False) + "\n"
-        assert _FIXTURE.read_text(encoding="utf-8") == text
-        assert "golden-clip/" in text
-        assert "/workspace" not in text
-    finally:
-        shutil.rmtree(_CLIP, ignore_errors=True)
+def test_golden_receipt_matches_the_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    receipt = _run(
+        tmp_path,
+        run_id="golden",
+        overrides={
+            (
+                "run",
+                "pass_policy",
+                "sustainability_policy",
+            ): "completion_fraction",
+        },
+        materialize_dir=_CLIP,
+    )
+    text = json.dumps(receipt, indent=2, allow_nan=False) + "\n"
+    assert _FIXTURE.read_text(encoding="utf-8") == text
+    assert "golden-clip/" in text
+    assert "/workspace" not in text
 
 
 def test_a_language_change_names_the_field(tmp_path: Path) -> None:
@@ -223,3 +226,118 @@ def test_schema_version_tamper_refuses(tmp_path: Path) -> None:
     result = compare_receipts(left, right)
     assert result.status == "refused"
     assert any("schema_version" in item.field for item in result.differences)
+
+
+def _file_receipt(tmp_path: Path, wav: Path) -> dict[str, Any]:
+    preset = tmp_path / "file-clip.json"
+    preset.write_text(
+        json.dumps(
+            {
+                "workload": {
+                    "clip": {
+                        "id": "moved-clip",
+                        "generator": "file",
+                        "path": str(wav),
+                        "duration_s": 0.2,
+                        "licence": "CC0-1.0",
+                        "attribution": "synthetic file clip",
+                        "note": "file clip for reproduction",
+                    },
+                    "pacing": False,
+                    "lanes": 1,
+                    "iterations": 1,
+                    "trials": 1,
+                    "warmup": 0,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = resolve(
+        preset_path=preset,
+        env={},
+        overrides={("run", "output_path"): "receipt.json"},
+    )
+    receipt: dict[str, Any] = asyncio.run(
+        run_benchmark(
+            config,
+            clock=AdvancingClock(1.0),
+            hardware=_hardware(),
+            git_state=GitState(commit="unknown", dirty=False, available=False),
+            package_version="0.0.1",
+            python_version="3.12.0",
+            run_id="file-clip",
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            materialize_dir=tmp_path / "materialized",
+            env={},
+        )
+    )
+    return receipt
+
+
+def test_from_receipt_file_clip_follows_clip_path(tmp_path: Path) -> None:
+    original = tmp_path / "original.wav"
+    original.write_bytes(pcm16_wav(silence_pcm16(0.2)))
+    receipt = _file_receipt(tmp_path, original)
+    stored = tmp_path / "receipt.json"
+    stored.write_text(json.dumps(receipt), encoding="utf-8")
+    copy = tmp_path / "copy.wav"
+    copy.write_bytes(original.read_bytes())
+    original.unlink()
+    with pytest.raises(ConfigError):
+        resolve(
+            from_receipt=stored,
+            env={},
+            overrides={("run", "output_path"): "again.json"},
+        )
+    reproduced = resolve(
+        from_receipt=stored,
+        env={},
+        overrides={
+            ("run", "output_path"): "again.json",
+            ("workload", "clip", "path"): str(copy),
+        },
+    )
+    assert reproduced.workload.clip.path == str(copy)
+    assert any(
+        item.path == "workload.clip.path"
+        for item in reproduced.reproduction_overrides
+    )
+
+
+def test_compare_does_not_open_a_missing_file_clip(tmp_path: Path) -> None:
+    from asrbench.reporters import frontier_report, vendor_tsv
+
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(pcm16_wav(silence_pcm16(0.2)))
+    receipt = _file_receipt(tmp_path, wav)
+    wav.unlink()
+    copy = json.loads(json.dumps(receipt))
+    assert compare_receipts(receipt, copy).status == "comparable"
+    assert frontier_report([receipt], ["missing.wav"])["series"]
+    assert vendor_tsv(receipt).endswith("\n")
+
+
+def test_semantics_version_is_read_from_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    left = _run(tmp_path)
+    right = json.loads(json.dumps(left))
+    monkeypatch.setattr(
+        "asrbench.definitions.MEASUREMENT_SEMANTICS_VERSION", "2"
+    )
+    monkeypatch.setattr("asrbench.receipt.MEASUREMENT_SEMANTICS_VERSION", "2")
+    assert compare_receipts(left, right).status == "comparable"
+    newer = _run(tmp_path / "bumped", run_id="bumped")
+    result = compare_receipts(left, newer)
+    assert result.status == "refused"
+    assert any(
+        item.field == "measurement_semantics_version"
+        for item in result.differences
+    )
+    assert (
+        left["identity"]["software"]["measurement_semantics_version"]
+        == MEASUREMENT_SEMANTICS_VERSION
+    )
+    assert newer["identity"]["software"]["measurement_semantics_version"] == "2"
