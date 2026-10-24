@@ -61,7 +61,10 @@ def test_preset_names_the_published_streaming_cell() -> None:
     assert "nvapi-" not in text
 
 
-def test_run_emits_three_trials_and_a_perf_tsv(tmp_path: Path) -> None:
+def test_run_emits_three_trials_and_a_perf_tsv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     payload = json.loads(_PRESET.read_text(encoding="utf-8"))
     reference = payload["workload"]["reference_transcript"]
     server = RunningFake(FakeRiva(transcript=reference))

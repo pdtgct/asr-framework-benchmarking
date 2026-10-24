@@ -11,6 +11,14 @@ asks for real time.
 token, on the auth object. This adapter builds metadata for the RPC and
 does not assign the token to itself, the request, or the outcome.
 
+``target.tls_verify`` selects the channel. ``use_ssl`` with verification
+uses ``grpc.ssl_channel_credentials``, which always checks the peer.
+grpcio exposes no public way to leave TLS on and skip that check, so
+``use_ssl`` true and ``tls_verify`` false is refused rather than verified
+while the receipt says otherwise. Plaintext is both flags false. A bearer
+token is not put on that channel unless ``allow_insecure_auth`` is set.
+Loopback is not an implicit allow.
+
 An unreachable server, or ``UNAUTHENTICATED`` / ``PERMISSION_DENIED``, is
 a ``lane_unavailable`` outcome. It is not a crash and it does not invent a
 latency. A deadline after audio has started is a timeout. ``UNAVAILABLE``
@@ -58,6 +66,7 @@ _TRANSPORT_KEYS = frozenset(
         "enable_word_time_offsets",
         "custom_configuration",
         "max_speaker_count",
+        "allow_insecure_auth",
     }
 )
 _CHANNEL_FIELDS = {
@@ -171,10 +180,14 @@ class RivaGrpcAdapter:
         max_speaker_count: int,
         auth_env: str | None,
         channel_args: tuple[tuple[str, int], ...],
+        tls_verify: bool,
+        allow_insecure_auth: bool,
     ) -> None:
         """Store endpoint and identity options. Not a token."""
         self._endpoint = endpoint
         self._use_ssl = use_ssl
+        self._tls_verify = tls_verify
+        self._allow_insecure_auth = allow_insecure_auth
         self._function_id = function_id
         self._function_version_id = function_version_id
         self._max_alternatives = max_alternatives
@@ -197,8 +210,10 @@ class RivaGrpcAdapter:
             An adapter that has not opened a channel.
 
         Raises:
-            ConfigError: An option has the wrong type, or the riva extra
-                is not installed.
+            ConfigError: An option has the wrong type, TLS flags
+                disagree, a bearer would cross plaintext without
+                ``allow_insecure_auth``, or the riva extra is not
+                installed.
         """
         options = dict(target.transport_options)
         unknown = sorted(set(options) - _TRANSPORT_KEYS)
@@ -222,9 +237,13 @@ class RivaGrpcAdapter:
             default=_DEFAULT_MAX_SPEAKERS,
             minimum=1,
         )
+        allow_insecure_auth = _bool_option(
+            options, "allow_insecure_auth", default=False
+        )
+        _require_tls_mode(use_ssl=use_ssl, tls_verify=target.tls_verify)
         channel_args = _channel_args(target.channel_options)
         _import_riva()
-        return cls(
+        adapter = cls(
             target.endpoint_url,
             use_ssl=use_ssl,
             function_id=function_id,
@@ -235,7 +254,11 @@ class RivaGrpcAdapter:
             max_speaker_count=max_speakers,
             auth_env=target.auth_env,
             channel_args=channel_args,
+            tls_verify=target.tls_verify,
+            allow_insecure_auth=allow_insecure_auth,
         )
+        adapter._refuse_plaintext_bearer()
+        return adapter
 
     async def run(
         self,
@@ -267,6 +290,7 @@ class RivaGrpcAdapter:
             )
             outcome.terminal_status = "errored"
             return outcome
+        self._refuse_plaintext_bearer()
         holder: dict[str, Any] = {}
         try:
             await self._drive(
@@ -329,6 +353,7 @@ class RivaGrpcAdapter:
             await _close_channel(channel)
 
     def _open_channel(self, grpc: Any) -> Any:
+        _require_tls_mode(use_ssl=self._use_ssl, tls_verify=self._tls_verify)
         options = list(self._channel_args) or None
         if self._use_ssl:
             return grpc.aio.secure_channel(
@@ -502,6 +527,7 @@ class RivaGrpcAdapter:
 
     def _metadata(self) -> list[tuple[str, str]]:
         """Build RPC metadata. The token is not stored on this adapter."""
+        self._refuse_plaintext_bearer()
         pairs: list[tuple[str, str]] = []
         if self._function_id:
             pairs.append(("function-id", self._function_id))
@@ -514,6 +540,30 @@ class RivaGrpcAdapter:
                 pairs.append(("authorization", "Bearer " + token))
             del token
         return pairs
+
+    def _refuse_plaintext_bearer(self) -> None:
+        """Refuse to attach a bearer token to a plaintext channel.
+
+        Raises:
+            ConfigError: ``auth_env`` names a non-empty variable,
+                ``use_ssl`` is false, and ``allow_insecure_auth`` is
+                false. The message does not contain the token.
+        """
+        if self._use_ssl or self._allow_insecure_auth:
+            return
+        env_name = self._auth_env
+        if not env_name:
+            return
+        token = os.environ.get(env_name) or ""
+        try:
+            if token:
+                raise ConfigError(
+                    "refusing to send a bearer token over plaintext; "
+                    "set transport_options.allow_insecure_auth true "
+                    "to allow it"
+                )
+        finally:
+            del token
 
     def _fail_setup(
         self,
@@ -784,6 +834,35 @@ def _remaining(deadline: float) -> float:
     if left <= 0:
         raise TimeoutError
     return left
+
+
+def _require_tls_mode(*, use_ssl: bool, tls_verify: bool) -> None:
+    """Refuse a TLS combination this process cannot perform honestly.
+
+    ``grpc.ssl_channel_credentials`` always verifies the peer. Leaving
+    TLS on while ``tls_verify`` is false would either skip a check the
+    library will not skip, or verify and record that it did not. Neither
+    is done. Plaintext with ``tls_verify`` true would record a check
+    that did not happen.
+
+    Args:
+        use_ssl: Open a TLS channel.
+        tls_verify: Require peer-certificate verification.
+
+    Raises:
+        ConfigError: The two flags disagree.
+    """
+    if use_ssl == tls_verify:
+        return
+    if use_ssl:
+        raise ConfigError(
+            "tls_verify is false and use_ssl is true; grpcio verifies "
+            "every SSL peer, so set tls_verify true or use_ssl false"
+        )
+    raise ConfigError(
+        "tls_verify is true and use_ssl is false; plaintext has no "
+        "certificate to verify"
+    )
 
 
 def _bool_option(

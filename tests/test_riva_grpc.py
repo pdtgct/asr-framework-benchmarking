@@ -67,21 +67,26 @@ def _adapter(
     auth_env: str | None = None,
     function_id: str | None = None,
     channel_options: dict[str, int] | None = None,
+    use_ssl: bool = False,
+    tls_verify: bool = False,
+    allow_insecure_auth: bool = False,
 ) -> RivaGrpcAdapter:
     options: dict[str, object] = {
-        "use_ssl": False,
+        "use_ssl": use_ssl,
         "max_alternatives": 1,
         "enable_word_time_offsets": False,
         "custom_configuration": {},
     }
     if function_id is not None:
         options["function_id"] = function_id
+    if allow_insecure_auth:
+        options["allow_insecure_auth"] = True
     target = TargetSpec(
         endpoint_url=endpoint,
         transport="riva-grpc",
         model="fake-model",
         auth_env=auth_env,
-        tls_verify=False,
+        tls_verify=tls_verify,
         transport_options=options,
         channel_options=channel_options or {},
     )
@@ -111,6 +116,77 @@ def test_channel_options_are_keepalive_and_message_size() -> None:
         _adapter("127.0.0.1:1", channel_options={"nope": 1})
 
 
+def test_tls_verify_selects_verifying_or_plaintext_channel() -> None:
+    class _Grpc:
+        def ssl_channel_credentials(self) -> str:
+            return "verified-roots"
+
+        class aio:
+            @staticmethod
+            def secure_channel(
+                endpoint: str, creds: str, options: object = None
+            ) -> tuple[object, ...]:
+                return ("secure", endpoint, creds, options)
+
+            @staticmethod
+            def insecure_channel(
+                endpoint: str, options: object = None
+            ) -> tuple[object, ...]:
+                return ("insecure", endpoint, options)
+
+    secure = _adapter("example:443", use_ssl=True, tls_verify=True)
+    opened = secure._open_channel(_Grpc())
+    assert opened[0] == "secure"
+    assert opened[2] == "verified-roots"
+    plain = _adapter("127.0.0.1:1")
+    opened = plain._open_channel(_Grpc())
+    assert opened[0] == "insecure"
+
+
+def test_mismatched_tls_verify_is_refused() -> None:
+    with pytest.raises(ConfigError, match="tls_verify"):
+        _adapter("example:443", use_ssl=True, tls_verify=False)
+    with pytest.raises(ConfigError, match="tls_verify"):
+        _adapter("127.0.0.1:1", use_ssl=False, tls_verify=True)
+
+
+def test_plaintext_bearer_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ASRBENCH_RIVA_TOKEN", _MARKER)
+    with pytest.raises(ConfigError, match="plaintext") as caught:
+        _adapter("127.0.0.1:1", auth_env="ASRBENCH_RIVA_TOKEN")
+    assert _MARKER not in str(caught.value)
+    allowed = _adapter(
+        "127.0.0.1:1",
+        auth_env="ASRBENCH_RIVA_TOKEN",
+        allow_insecure_auth=True,
+    )
+    assert _MARKER not in repr(vars(allowed))
+    monkeypatch.delenv("ASRBENCH_RIVA_TOKEN", raising=False)
+    built = _adapter("127.0.0.1:1", auth_env="ASRBENCH_RIVA_TOKEN")
+    monkeypatch.setenv("ASRBENCH_RIVA_TOKEN", _MARKER)
+    with pytest.raises(ConfigError, match="plaintext") as caught:
+        asyncio.run(built.run(_request(Path("missing.wav"), timeout_s=0.2)))
+    assert _MARKER not in str(caught.value)
+
+
+def test_tls_bearer_does_not_need_allow_insecure_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ASRBENCH_RIVA_TOKEN", _MARKER)
+    adapter = _adapter(
+        "example:443",
+        auth_env="ASRBENCH_RIVA_TOKEN",
+        use_ssl=True,
+        tls_verify=True,
+    )
+    assert adapter._use_ssl is True
+    assert adapter._tls_verify is True
+    assert adapter._allow_insecure_auth is False
+    assert _MARKER not in repr(vars(adapter))
+
+
 def test_offline_recognize_is_not_implemented(tmp_path: Path) -> None:
     adapter = _adapter("127.0.0.1:1")
     outcome = asyncio.run(
@@ -126,7 +202,11 @@ def test_token_is_not_stored_on_the_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ASRBENCH_RIVA_TOKEN", _MARKER)
-    adapter = _adapter("127.0.0.1:1", auth_env="ASRBENCH_RIVA_TOKEN")
+    adapter = _adapter(
+        "127.0.0.1:1",
+        auth_env="ASRBENCH_RIVA_TOKEN",
+        allow_insecure_auth=True,
+    )
     assert _MARKER not in repr(vars(adapter))
     assert adapter._auth_env == "ASRBENCH_RIVA_TOKEN"
 
@@ -322,9 +402,11 @@ def test_auth_and_permission_failures_are_lane_unavailable(
         server = RunningFake(FakeRiva(mode=mode))
         try:
             outcome = asyncio.run(
-                _adapter(server.endpoint, auth_env="ASRBENCH_RIVA_TOKEN").run(
-                    _request(path)
-                )
+                _adapter(
+                    server.endpoint,
+                    auth_env="ASRBENCH_RIVA_TOKEN",
+                    allow_insecure_auth=True,
+                ).run(_request(path))
             )
         finally:
             server.stop()
@@ -346,9 +428,11 @@ def test_echoed_token_is_redacted(
     server = RunningFake(FakeRiva(mode="echo-auth"))
     try:
         outcome = asyncio.run(
-            _adapter(server.endpoint, auth_env="ASRBENCH_RIVA_TOKEN").run(
-                _request(_wav(tmp_path, 0.02))
-            )
+            _adapter(
+                server.endpoint,
+                auth_env="ASRBENCH_RIVA_TOKEN",
+                allow_insecure_auth=True,
+            ).run(_request(_wav(tmp_path, 0.02)))
         )
     finally:
         server.stop()
