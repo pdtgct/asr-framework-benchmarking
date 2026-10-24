@@ -594,13 +594,19 @@ def _consume(
 ) -> None:
     """Map one streaming response onto the outcome clocks.
 
-    Final transcripts are concatenated as the server sent them, with no
-    extra space. TTFS and response latency count non-empty interims only.
-    A final that arrives before any audio does not invent a latency.
+    One ``StreamingRecognizeResponse`` is one interim, even when it
+    carries several non-final results. Those transcripts are
+    concatenated with no added separator, matching the public client's
+    partial join. Final transcripts are concatenated the same way, with
+    no extra space. TTFS and response latency count a non-empty interim
+    once per response. ``stability`` is not a latency. A result that
+    arrives before any audio does not invent a latency.
     """
     parts: list[str] = []
     if outcome.transcript is not None:
         parts.append(outcome.transcript)
+    interim_parts: list[str] = []
+    saw_interim = False
     for result in response.results:
         text = ""
         if result.alternatives:
@@ -616,19 +622,24 @@ def _consume(
                     outcome.final_latency_clock = FINALIZATION_CLOCK
             _progress(progress_callback, request.label, "final.received")
             continue
-        if outcome.interim_texts is None:
-            outcome.interim_texts = []
-        outcome.interim_texts.append(text)
-        outcome.interim_count += 1
-        if not text:
-            continue
-        now = time.monotonic()
-        first = marks["first"]
-        latest = marks["latest"]
-        if isinstance(first, float) and outcome.ttfs_s is None:
-            outcome.ttfs_s = now - first
-        if isinstance(latest, float):
-            outcome.response_latencies_s.append(now - latest)
+        saw_interim = True
+        interim_parts.append(text)
+    if not saw_interim:
+        return
+    joined = "".join(interim_parts)
+    if outcome.interim_texts is None:
+        outcome.interim_texts = []
+    outcome.interim_texts.append(joined)
+    outcome.interim_count += 1
+    if not joined:
+        return
+    now = time.monotonic()
+    first = marks["first"]
+    latest = marks["latest"]
+    if isinstance(first, float) and outcome.ttfs_s is None:
+        outcome.ttfs_s = now - first
+    if isinstance(latest, float):
+        outcome.response_latencies_s.append(now - latest)
 
 
 def _record_config_probe(

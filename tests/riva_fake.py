@@ -117,6 +117,12 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
                 ]
                 if len(audio_seen) == 1:
                     yield _response("", final=False)
+            if self.mode == "multi-result" and kind == "audio_content":
+                audio_seen = [
+                    item for item in sequence if item[0] == "audio_content"
+                ]
+                if len(audio_seen) == 1:
+                    yield _results_response([("STA", False), ("BLE", False)])
         if self.mode == "hang":
             self._wait_until_inactive(context)
             return
@@ -134,6 +140,8 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             yield _response("C", final=True)
         elif self.mode == "empty-final":
             yield _response("", final=True)
+        elif self.mode == "multi-result":
+            yield _results_response([("AB", True), ("C", True)])
 
     def _status(
         self,
@@ -162,12 +170,21 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
 
 
 def _response(text: str, *, final: bool) -> Any:
-    alternative = riva_asr_pb2.SpeechRecognitionAlternative(transcript=text)
-    result = riva_asr_pb2.StreamingRecognitionResult(
-        alternatives=[alternative],
-        is_final=final,
-    )
-    return riva_asr_pb2.StreamingRecognizeResponse(results=[result])
+    return _results_response([(text, final)])
+
+
+def _results_response(parts: list[tuple[str, bool]]) -> Any:
+    """One response. Several results stay in that one message."""
+    results = []
+    for text, final in parts:
+        alternative = riva_asr_pb2.SpeechRecognitionAlternative(transcript=text)
+        results.append(
+            riva_asr_pb2.StreamingRecognitionResult(
+                alternatives=[alternative],
+                is_final=final,
+            )
+        )
+    return riva_asr_pb2.StreamingRecognizeResponse(results=results)
 
 
 class RunningFake:

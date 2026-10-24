@@ -215,6 +215,26 @@ def test_finals_are_concatenated_and_empty_interims_have_no_latency(
     assert outcome.transcript == "HELLO"
 
 
+def test_one_response_with_several_results_is_one_interim(
+    tmp_path: Path,
+) -> None:
+    server = RunningFake(FakeRiva(mode="multi-result"))
+    try:
+        outcome = asyncio.run(
+            _adapter(server.endpoint).run(
+                _request(_wav(tmp_path, 0.02), interim_results=True)
+            )
+        )
+    finally:
+        server.stop()
+    assert outcome.terminal_status == "completed"
+    assert outcome.interim_texts == ["STABLE"]
+    assert outcome.interim_count == 1
+    assert len(outcome.response_latencies_s) == 1
+    assert outcome.ttfs_s is not None
+    assert outcome.transcript == "ABC"
+
+
 def test_barrier_releases_before_audio(tmp_path: Path) -> None:
     server = RunningFake(FakeRiva())
     barrier = CohortBarrier(2, timeout_s=2)
