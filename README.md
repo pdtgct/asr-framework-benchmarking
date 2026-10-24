@@ -18,8 +18,10 @@ server speaks the protocol, it can be measured.
 
 The measurement core is in the tree: a frozen workload, one receipt per run, reducers
 that keep failures in the denominator, and reporters that read only that receipt.
-`presets/mock-streaming.json` runs with no server and no network. The next step is a
-second public transport. See [`docs/roadmap.md`](docs/roadmap.md).
+`presets/mock-streaming.json` runs with no server and no network. `riva-grpc` speaks
+NVIDIA's public StreamingRecognize protocol, and `presets/nim-compat-streaming.json`
+is the vendor-compatibility cell. Offline Recognize is not implemented, so roadmap
+step 3 is not closed. See [`docs/roadmap.md`](docs/roadmap.md).
 
 Version 1.0 is when the receipt schema and the adapter interface take semantic
 versioning.

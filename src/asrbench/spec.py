@@ -107,6 +107,14 @@ class WorkloadSpec:
     interim_results: bool = True
     transcript_policy: str = "final-and-interims"
     population: tuple[PopulationEntry, ...] = ()
+    #: When set, and the user did not pass ``--iterations``, measured
+    #: iterations become this many per lane. The resolved ``iterations``
+    #: value is what the workload fingerprint records.
+    iterations_per_stream: int | None = None
+    #: Published correctness grid. Recorded, not executed, and not identity.
+    correctness_streams: tuple[int, ...] = ()
+    #: Published performance grid. Recorded, not executed, and not identity.
+    performance_streams: tuple[int, ...] = ()
 
 
 def _default_transport_options() -> Mapping[str, Any]:
@@ -185,6 +193,9 @@ class RunSpec:
     percentile_method: str = DEFAULT_PERCENTILE_METHOD
     lookahead_identity_policy: str = DEFAULT_LOOKAHEAD_IDENTITY_POLICY
     pass_policy: PassPolicy = field(default_factory=PassPolicy)
+    #: Write the perf-table TSV beside the receipt. Not offered work and
+    #: not part of the observation fingerprint.
+    emit_tsv: bool = False
 
 
 @dataclass(frozen=True)

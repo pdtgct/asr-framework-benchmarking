@@ -24,7 +24,7 @@ from asrbench.outcome import (
 # reader does not have to know the outcome field's historical name.
 TTFS_CLOCK = NATIVE_LATENCY_CLOCK
 
-SCHEMA_VERSION = "asrbench-receipt/2"
+SCHEMA_VERSION = "asrbench-receipt/3"
 
 #: Bumped when reducer or comparison-key semantics change. Replaces the
 #: git commit in the hard comparison key, so a docs-only commit does not

@@ -12,7 +12,9 @@ from typing import Any
 
 from asrbench.config import ConfigError, config_from_mapping, validate
 from asrbench.definitions import (
+    FINALIZATION_CLOCK,
     FRONTIER_DEFINITION,
+    NATIVE_LATENCY_CLOCK,
     SUSTAINED_STREAMS_DEFINITION,
     VLLM_FORMAT_NOTE,
 )
@@ -248,6 +250,76 @@ def vendor_tsv(receipt: dict[str, Any]) -> str:
     header = "\t".join(name for name, _value in columns)
     row = "\t".join(_cell(value) for _name, value in columns)
     return comment + "\n" + header + "\n" + row + "\n"
+
+
+def perf_table_tsv(receipt: dict[str, Any]) -> str:
+    """Project one homogeneous receipt into NVIDIA's perf-table column order.
+
+    The columns are a three-trial mean of per-trial finalization stats
+    and streaming RTFX, in the published order: stream count, mean, p50,
+    p90, p95, p99, throughput. Values are seconds and asrbench's
+    streaming RTFX. A trial that lacks the measure stays in ``n_trials``
+    and out of that column's mean. The comment quotes the TTFS clock so
+    the row cannot be read as that clock or as a vendor millisecond
+    latency.
+
+    Args:
+        receipt: A receipt object.
+
+    Returns:
+        A comment, a header, and one data row.
+
+    Raises:
+        NotHomogeneousError: The population mixes cadence or lookahead.
+    """
+    _require_homogeneous(receipt)
+    trials = receipt["trials"]
+    workload = receipt["resolved_config"]["workload"]
+    pooled = receipt["summary"]["pooled"]["finalization_s"]
+    final_mean = _trial_mean(trials, "finalization_s", "mean")
+    final_p50 = _trial_mean(trials, "finalization_s", "p50")
+    final_p90 = _trial_mean(trials, "finalization_s", "p90")
+    final_p95 = _trial_mean(trials, "finalization_s", "p95")
+    final_p99 = _trial_mean(trials, "finalization_s", "p99")
+    rtfx = _trial_mean(trials, "streaming_rtfx", "value")
+    columns: tuple[tuple[str, object], ...] = (
+        ("num_streams", workload["lanes"]),
+        ("finalization_mean_s", final_mean[0]),
+        ("finalization_p50_s", final_p50[0]),
+        ("finalization_p90_s", final_p90[0]),
+        ("finalization_p95_s", final_p95[0]),
+        ("finalization_p99_s", final_p99[0]),
+        ("streaming_rtfx", rtfx[0]),
+    )
+    comment = (
+        "# columns are three-trial means of per-trial finalization_s on "
+        f"{FINALIZATION_CLOCK} and of streaming_rtfx. Not TTFS. Not a "
+        "vendor millisecond latency. "
+        f"ttfs_clock {NATIVE_LATENCY_CLOCK} "
+        f"n_trials={len(trials)} "
+        f"n_trials_with_finalization={final_p50[1]} "
+        f"n_trials_with_streaming_rtfx={rtfx[1]} "
+        f"finalization_n_with_measure={pooled['n_with_measure']} "
+        f"finalization_n_total={pooled['n_total']}"
+    )
+    header = "\t".join(name for name, _value in columns)
+    row = "\t".join(_cell(value) for _name, value in columns)
+    return comment + "\n" + header + "\n" + row + "\n"
+
+
+def _trial_mean(
+    trials: list[dict[str, Any]], section: str, field: str
+) -> tuple[float | None, int]:
+    """Return the mean of one per-trial scalar and how many trials had it."""
+    values: list[float] = []
+    for trial in trials:
+        value = trial["reduction"][section][field]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        values.append(float(value))
+    if not values:
+        return None, 0
+    return sum(values) / len(values), len(values)
 
 
 def frontier_report(

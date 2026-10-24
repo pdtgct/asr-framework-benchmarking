@@ -47,6 +47,10 @@ COMPARISON_EXCLUSIONS: tuple[str, ...] = (
     "workload.clip.licence",
     "workload.clip.attribution",
     "workload.clip.note",
+    "workload.iterations_per_stream",
+    "workload.correctness_streams",
+    "workload.performance_streams",
+    "run.emit_tsv",
     "identity.warn.driver_version",
     "identity.warn.python_version",
     "identity.warn.git_commit",
@@ -124,7 +128,9 @@ def workload_material(
             offered-load sweep can share a capacity series.
 
     Returns:
-        A JSON-ish dict. Millisecond labels and paths are absent.
+        A JSON-ish dict. Millisecond labels, paths, the per-stream
+        iteration factor, and the published stream grids are absent.
+        Resolved ``iterations`` and ``lanes`` stay.
     """
     frames = None if blank_operating_point else workload.lookahead_frames
     cadence = None if blank_operating_point else workload.cadence_ms
@@ -189,7 +195,8 @@ def observation_material(run: RunSpec) -> dict[str, Any]:
         run: The run spec.
 
     Returns:
-        A JSON-ish dict.
+        A JSON-ish dict. ``emit_tsv`` is absent: it chooses an extra
+        file and does not change the observation.
     """
     policy = run.pass_policy
     return {

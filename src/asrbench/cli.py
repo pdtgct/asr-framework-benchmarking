@@ -30,6 +30,7 @@ from asrbench.reporters import (
     console_report,
     frontier_report,
     frontier_text,
+    perf_table_tsv,
     sustained_streams_report,
     vendor_tsv,
     vllm_report,
@@ -138,6 +139,10 @@ def _run(args: argparse.Namespace) -> int:
     receipt = asyncio.run(run_benchmark(config, env=env))
     destination = Path(config.run.output_path)
     _write_json(destination, receipt)
+    if config.run.emit_tsv:
+        destination.with_suffix(".tsv").write_text(
+            perf_table_tsv(receipt), encoding="utf-8"
+        )
     sys.stdout.write(console_report(receipt))
     return 0
 

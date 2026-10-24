@@ -347,6 +347,7 @@ def resolve(
         config = _set_path(config, path, value)
         seen.add(path)
     config = _derive_population(config, seen)
+    config = _scale_iterations(config, seen, base)
     config = validate(config, pin=True)
     if base is not None:
         # The receipt already stores the digest. Re-reading the original
@@ -440,6 +441,15 @@ def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
         raise ConfigError("cadence_ms must be positive when set")
     if workload.lookahead_frames is not None and workload.lookahead_frames < 0:
         raise ConfigError("lookahead_frames must be zero or positive")
+    if workload.iterations_per_stream is not None:
+        _require_positive(
+            "iterations_per_stream",
+            workload.iterations_per_stream,
+            minimum=1,
+        )
+    for name in ("correctness_streams", "performance_streams"):
+        for index, item in enumerate(getattr(workload, name)):
+            _require_positive(f"{name}[{index}]", item, minimum=1)
     if workload.lookahead_ms_label is not None:
         _require_finite("lookahead_ms_label", workload.lookahead_ms_label)
     if not workload.language or not workload.transcript_policy:
@@ -685,6 +695,8 @@ def _merge(
             updates[name] = _population(value)
         elif name in {"transport_options", "channel_options"}:
             updates[name] = _options(value, name)
+        elif name in {"correctness_streams", "performance_streams"}:
+            updates[name] = _int_tuple(value, f"{where}.{name}")
         else:
             updates[name] = _coerce(
                 value, str(known[name].type), f"{where}.{name}"
@@ -738,6 +750,54 @@ def _options(value: object, where: str) -> dict[str, Any]:
         if not isinstance(key, str):
             raise ConfigError(f"{where} keys must be strings")
     return dict(value)
+
+
+def _int_tuple(value: object, where: str) -> tuple[int, ...]:
+    """Return a tuple of positive ints from a JSON list."""
+    if not isinstance(value, list):
+        raise ConfigError(f"{where} must be a list")
+    items: list[int] = []
+    for index, item in enumerate(value):
+        number = _check_int(item, f"{where}[{index}]")
+        if number < 1:
+            raise ConfigError(f"{where}[{index}] must be >= 1")
+        items.append(number)
+    return tuple(items)
+
+
+def _scale_iterations(
+    config: ResolvedConfig,
+    seen: set[tuple[str, ...]],
+    base: ResolvedConfig | None,
+) -> ResolvedConfig:
+    """Apply ``iterations_per_stream * lanes`` when the user did not.
+
+    A preset's own ``iterations`` value is replaced, because the factor
+    is the recipe. ``--iterations`` and ``ASRBENCH_ITERATIONS`` win.
+    Reproducing a receipt keeps the stored iteration count unless lanes
+    or the factor changed on this invocation.
+
+    Args:
+        config: Config after population derivation.
+        seen: Env and CLI paths the user set.
+        base: The receipt config when reproducing, else ``None``.
+
+    Returns:
+        The config, with ``iterations`` possibly replaced.
+    """
+    factor = config.workload.iterations_per_stream
+    if factor is None:
+        return config
+    if ("workload", "iterations") in seen:
+        return config
+    lanes_changed = ("workload", "lanes") in seen
+    factor_changed = ("workload", "iterations_per_stream") in seen
+    if base is not None and not lanes_changed and not factor_changed:
+        return config
+    iterations = factor * config.workload.lanes
+    return replace(
+        config, workload=replace(config.workload, iterations=iterations)
+    )
 
 
 def _derive_population(

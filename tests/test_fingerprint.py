@@ -1,5 +1,6 @@
 """Fingerprints cover offered work and ignore observation choices."""
 
+from dataclasses import replace
 from pathlib import Path
 
 from asrbench.canonical import CanonicalError, fingerprint, format_float
@@ -145,5 +146,15 @@ def test_preset_path_and_licence_are_not_offered_work() -> None:
         "note",
         "lookahead_ms_label",
         "lookahead_frames_source",
+        "iterations_per_stream",
+        "correctness_streams",
+        "performance_streams",
     ):
         assert absent not in material
+
+
+def test_emit_tsv_does_not_change_the_observation_fingerprint() -> None:
+    base = resolve(env={})
+    other = replace(base, run=replace(base.run, emit_tsv=True))
+    assert observation_fingerprint(base) == observation_fingerprint(other)
+    assert workload_fingerprint(base) == workload_fingerprint(other)

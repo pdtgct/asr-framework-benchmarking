@@ -3,7 +3,7 @@
 Generated from `asrbench.schema_doc`. Do not edit by hand.
 Regenerate with `uv run python -m asrbench.schema_doc`.
 
-Schema version: `asrbench-receipt/2`
+Schema version: `asrbench-receipt/3`
 
 Clock and definition strings below are the constants the receipt
 writes. Where `docs/metrics.md` and a constant disagree, the
@@ -34,6 +34,10 @@ compared and reported; a mismatch does not refuse:
 - `workload.clip.licence`
 - `workload.clip.attribution`
 - `workload.clip.note`
+- `workload.iterations_per_stream`
+- `workload.correctness_streams`
+- `workload.performance_streams`
+- `run.emit_tsv`
 - `identity.warn.driver_version`
 - `identity.warn.python_version`
 - `identity.warn.git_commit`
@@ -120,7 +124,7 @@ compared and reported; a mismatch does not refuse:
 | `RTFX_VALIDITY_SIMULATED` | simulated |
 | `RTFX_VALIDITY_UNQUALIFIED` | pacing_fidelity_unavailable |
 | `RUNNER_HANG_GUARD_DEFINITION` | The runner hang guard waits twice timeout_s, plus one timeout_s for the cohort barrier, plus the clip duration when pacing, plus 0.25 seconds. realtime-ws may spend timeout_s waiting for session.updated and timeout_s again waiting for the final, and a peer may spend timeout_s at the barrier on the slowest handshake. The adapter owns each timeout_s and may return a partial outcome. The guard replaces the outcome only when the adapter does not return. |
-| `SCHEMA_VERSION` | asrbench-receipt/2 |
+| `SCHEMA_VERSION` | asrbench-receipt/3 |
 | `SDI_DEFINITION` | Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion. |
 | `STEADY_INTERVAL_DEFINITION` | Sustainability over a declared steady interval of the cell. Unevaluable until outcomes carry that interval. Fail-closed: the clause does not pass. |
 | `STEADY_INTERVAL_UNAVAILABLE_REASON` | steady_interval_not_in_outcome |
@@ -184,6 +188,9 @@ object is named once and then cited by path.
         - `cadence_ms`: int
         - `lookahead_frames`: int
         - `lookahead_ms_label`: float
+    - `iterations_per_stream`: null
+    - `correctness_streams`: list
+    - `performance_streams`: list
   - `target`: object
     - `endpoint_url`: string
     - `transport`: string
@@ -215,6 +222,7 @@ object is named once and then cited by path.
       - `sustainability_min`: float
       - `accuracy_tolerance`: float
       - `normalization_policy`: string
+    - `emit_tsv`: bool
 - `reproduction`: object
   - `overrides`: list
 - `secrets`: list[object]
