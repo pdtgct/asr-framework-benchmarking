@@ -581,3 +581,39 @@ def test_later_iterations_are_not_lockstep_waves(tmp_path: Path) -> None:
         item for item in events if item[0] == "t0-lane0-i0" and item[1] == "end"
     )
     assert start[2] < end[2]
+
+
+def test_iterations_per_stream_runs_factor_times_lanes_not_squared(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(_PRESET.read_text(encoding="utf-8"))
+    workload = payload["workload"]
+    workload["lanes"] = 4
+    workload["iterations"] = 99
+    workload["iterations_per_stream"] = 3
+    workload["warmup"] = 0
+    workload["trials"] = 1
+    workload["pacing"] = False
+    workload["population"] = [
+        {
+            "lanes": 4,
+            "cadence_ms": workload["cadence_ms"],
+            "lookahead_frames": workload["lookahead_frames"],
+            "lookahead_ms_label": workload["lookahead_ms_label"],
+        }
+    ]
+    preset = tmp_path / "factor.json"
+    preset.write_text(json.dumps(payload), encoding="utf-8")
+    config = resolve(
+        preset_path=preset,
+        env={},
+        overrides={("run", "output_path"): "receipt.json"},
+    )
+    assert config.workload.iterations == 3
+    assert config.workload.lanes == 4
+    receipt = _drive(config, tmp_path / "run", "factor-lanes")
+    trial = receipt["trials"][0]
+    assert len(trial["outcomes"]) == 12
+    counts = receipt["summary"]["pooled"]["counts"]
+    assert counts["attempted"] == 12
+    assert counts["completed"] == 12

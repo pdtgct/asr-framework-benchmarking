@@ -107,9 +107,11 @@ class WorkloadSpec:
     interim_results: bool = True
     transcript_policy: str = "final-and-interims"
     population: tuple[PopulationEntry, ...] = ()
-    #: When set, and the user did not pass ``--iterations``, measured
-    #: iterations become this many per lane. The resolved ``iterations``
-    #: value is what the workload fingerprint records.
+    #: When set, and the user did not pass ``--iterations``, each lane
+    #: runs this many measured iterations. A trial is this value times
+    #: ``lanes`` sessions, not this value times ``lanes`` squared. The
+    #: resolved ``iterations`` value is what the workload fingerprint
+    #: records.
     iterations_per_stream: int | None = None
     #: Published correctness grid. Recorded, not executed, and not identity.
     correctness_streams: tuple[int, ...] = ()

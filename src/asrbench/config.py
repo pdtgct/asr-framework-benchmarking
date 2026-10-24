@@ -770,12 +770,17 @@ def _scale_iterations(
     seen: set[tuple[str, ...]],
     base: ResolvedConfig | None,
 ) -> ResolvedConfig:
-    """Apply ``iterations_per_stream * lanes`` when the user did not.
+    """Set measured iterations to ``iterations_per_stream``.
+
+    The runner already repeats that count on every lane, so one trial
+    is ``iterations_per_stream * lanes`` sessions. Multiplying by the
+    lane count here would run the square of the grid.
 
     A preset's own ``iterations`` value is replaced, because the factor
     is the recipe. ``--iterations`` and ``ASRBENCH_ITERATIONS`` win.
     Reproducing a receipt keeps the stored iteration count unless lanes
-    or the factor changed on this invocation.
+    or the factor changed on this invocation. A lane change recomputes
+    from the factor alone.
 
     Args:
         config: Config after population derivation.
@@ -794,10 +799,7 @@ def _scale_iterations(
     factor_changed = ("workload", "iterations_per_stream") in seen
     if base is not None and not lanes_changed and not factor_changed:
         return config
-    iterations = factor * config.workload.lanes
-    return replace(
-        config, workload=replace(config.workload, iterations=iterations)
-    )
+    return replace(config, workload=replace(config.workload, iterations=factor))
 
 
 def _derive_population(

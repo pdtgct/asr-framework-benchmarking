@@ -229,7 +229,8 @@ def test_iterations_per_stream_scales_unless_iterations_is_set(
         env={},
         overrides={("workload", "lanes"): 4},
     )
-    assert wider.workload.iterations == 12
+    assert wider.workload.iterations == 3
+    assert wider.workload.lanes == 4
     explicit = resolve(
         preset_path=preset,
         env={},
@@ -257,4 +258,5 @@ def test_iterations_per_stream_scales_unless_iterations_is_set(
         env={},
         overrides={("workload", "lanes"): 4},
     )
-    assert relaned.workload.iterations == 12
+    assert relaned.workload.iterations == 3
+    assert relaned.workload.lanes == 4
