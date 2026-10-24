@@ -180,9 +180,9 @@ def load_adapter(target: TargetSpec) -> TransportAdapter:
         An adapter the runner can call.
 
     Raises:
-        ConfigError: The transport is unknown, or it is the realtime
-            WebSocket adapter, which needs a caller-owned client session
-            and is not opened by this function.
+        ConfigError: The transport is unknown, the realtime WebSocket
+            adapter was asked to open its own client session, or the
+            riva extra is not installed.
     """
     if target.transport == "mock":
         from asrbench.adapters.mock import MockAdapter
@@ -203,6 +203,10 @@ def load_adapter(target: TargetSpec) -> TransportAdapter:
             "pass the adapter to run_benchmark instead of asking the CLI "
             "to open it"
         )
+    if target.transport == "riva-grpc":
+        from asrbench.adapters.riva_grpc import RivaGrpcAdapter
+
+        return RivaGrpcAdapter.from_target(target)
     raise ConfigError(
         f"unknown transport {target.transport!r}. A further protocol "
         "plugs in by handling its transport name in load_adapter. An "

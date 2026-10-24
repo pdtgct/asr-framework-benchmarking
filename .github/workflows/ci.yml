@@ -27,13 +27,14 @@ jobs:
         with:
           enable-cache: true
 
-      # Transport extras are installed so the adapters are type-checked. The
-      # tests themselves must still pass without them — that is what the
-      # boundary test enforces.
+      # Transport extras are installed so the adapters are type-checked and
+      # the in-process riva tests run. The core boundary still forbids those
+      # imports outside adapters. The riva tests skip when the extra is
+      # absent, and the default suite does not dial a hosted server.
       - name: Create the environment
         run: |
           uv venv --python ${{ matrix.python-version }}
-          uv pip install -e ".[dev,websocket]"
+          uv pip install -e ".[dev,websocket,riva]"
 
       - name: Lint
         run: uv run ruff check .
@@ -44,7 +45,8 @@ jobs:
       - name: Types
         run: uv run mypy
 
-      # No GPU, no server, no transport library. If this job ever needs one,
-      # the core has stopped being publicly runnable.
+      # No GPU and no hosted server. The riva extra supplies grpc so the
+      # fake servicer can run in-process. A missing extra skips those tests;
+      # it does not make the core import a transport library.
       - name: Tests
         run: uv run pytest -q

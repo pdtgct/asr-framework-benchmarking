@@ -35,7 +35,7 @@ _TRANSPORT_EXTRAS = {
 }
 
 #: Distribution name -> importable module, where they differ.
-_IMPORT_NAME = {"nvidia-riva-client": "riva"}
+_IMPORT_NAME = {"nvidia-riva-client": "riva", "grpcio": "grpc"}
 
 
 def _pyproject() -> dict[str, Any]:
