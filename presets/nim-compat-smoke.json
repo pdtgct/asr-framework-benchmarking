@@ -43,9 +43,9 @@
   "target": {
     "endpoint_url": "grpc.nvcf.nvidia.com:443",
     "transport": "riva-grpc",
-    "model": "server-reported-model-name",
+    "model": "nemotron-asr-streaming",
     "engine_name": "nim",
-    "checkpoint_id": "server-reported-model-name",
+    "checkpoint_id": "nemotron-asr-streaming",
     "checkpoint_source": "unverified",
     "auth_env": "NVIDIA_API_KEY",
     "tls_verify": true,

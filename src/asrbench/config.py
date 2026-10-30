@@ -87,6 +87,7 @@ _CLIENT_LOCATIONS = {
     CLIENT_LOCATION_WAN,
 }
 _PRECISION_TOKENS = {"FP32", "FP16", "FP8", "INT8"}
+_PLACEHOLDER_MODEL_NAME = "server-reported-model-name"
 _OWNED_BY_POPULATION = {
     ("workload", "lanes"),
     ("workload", "cadence_ms"),
@@ -1009,6 +1010,13 @@ def _validate_checkpoint(target: TargetSpec) -> None:
     _reject_blank("checkpoint_revision", target.checkpoint_revision)
     if target.transport != "mock" and not target.checkpoint_id:
         raise ConfigError("checkpoint_id is required unless transport is mock")
+    if target.transport != "mock" and (
+        target.checkpoint_id == _PLACEHOLDER_MODEL_NAME
+        or target.model == _PLACEHOLDER_MODEL_NAME
+    ):
+        raise ConfigError(
+            "server-reported-model-name is not a checkpoint or model identity"
+        )
     if (
         target.checkpoint_source != CHECKPOINT_SOURCE_UNVERIFIED
         and not target.checkpoint_revision

@@ -163,8 +163,8 @@ def test_smoke_preset_gates_ttfs_and_keeps_explicit_iterations(
     assert policy["accuracy_tolerance"] == 0.10
     assert policy["normalization_policy"] == "corpus_reference"
     assert policy["first_partial_presence_min"] == 1.0
-    assert payload["target"]["model"] == "server-reported-model-name"
-    assert payload["target"]["checkpoint_id"] == "server-reported-model-name"
+    assert payload["target"]["model"] == "nemotron-asr-streaming"
+    assert payload["target"]["checkpoint_id"] == "nemotron-asr-streaming"
     assert payload["target"]["checkpoint_source"] == "unverified"
     assert payload["target"]["tls_verify"] is True
     assert options["use_ssl"] is True

@@ -375,6 +375,23 @@ def test_non_mock_checkpoint_id_and_verified_revision() -> None:
     )
     assert resolved.target.checkpoint_id == "nemotron-asr-streaming"
     assert resolved.target.checkpoint_revision is None
+    with pytest.raises(ConfigError, match="server-reported-model-name"):
+        resolve(
+            env={},
+            overrides={
+                ("target", "transport"): "riva-grpc",
+                ("target", "checkpoint_id"): "server-reported-model-name",
+            },
+        )
+    with pytest.raises(ConfigError, match="server-reported-model-name"):
+        resolve(
+            env={},
+            overrides={
+                ("target", "transport"): "riva-grpc",
+                ("target", "checkpoint_id"): "nemotron-asr-streaming",
+                ("target", "model"): "server-reported-model-name",
+            },
+        )
 
 
 def test_mock_run_measures_e2e_rtfx(tmp_path: Path) -> None:
@@ -417,3 +434,16 @@ def test_finalization_uses_last_audio_and_keeps_a_negative() -> None:
     early.final_received_s = 1.5
     negative = _reduce([early])["finalization_s"]
     assert negative["mean"] == pytest.approx(-0.5)
+    failed = session(
+        label="fail",
+        transcript="early",
+        error_code="UNAVAILABLE",
+        terminal_status="errored",
+        final_latency_s=0.01,
+    )
+    failed.last_audio_sent_s = 1.0
+    failed.final_received_s = 0.5
+    pooled = _reduce([outcome, failed])["finalization_s"]
+    assert pooled["mean"] == pytest.approx(0.4)
+    assert pooled["n_with_measure"] == 1
+    assert pooled["n_total"] == 2

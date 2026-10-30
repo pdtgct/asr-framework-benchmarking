@@ -92,8 +92,10 @@ notes. Do not commit the audio.
 Set `target.model` to the `model_name` reported by
 `GetRivaSpeechRecognitionConfig` (`model_config[].model_name`), via `--model`
 or the preset field. The adapter sends that string as `RecognitionConfig.model`.
-An unknown name fails on Riva. The placeholder `server-reported-model-name` in
-`presets/nim-compat-smoke.json` is not a model identity.
+An unknown name fails on Riva. `presets/nim-compat-smoke.json` uses
+`nemotron-asr-streaming` for `target.model` and `checkpoint_id`, the same
+declared name as the streaming preset, with `checkpoint_source` unverified.
+The literal `server-reported-model-name` is rejected for a non-mock transport.
 
 ## AMI Meeting Corpus
 

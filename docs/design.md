@@ -126,12 +126,13 @@ score.
 ### Receipt and reporters
 
 The receipt is JSON, authoritative, and one per run. Schema
-`asrbench-receipt/5` and measurement semantics `3` replace schema 4 and
-semantics 2. Schema 5 records the adapter with the transport instead of
-hashing it. Semantics 3 keeps a failed or timed-out session out of E2E
-RTFx and reads finalization as final-receive minus last-audio-sent when
-both stamps exist. A consumer of schema 3, schema 4, semantics 1, or
-semantics 2 must re-run. The receipt carries
+`asrbench-receipt/5` and measurement semantics `4`. Schema 5 records the
+adapter with the transport instead of hashing it. Semantics 3 keeps a
+failed or timed-out session out of E2E RTFx and reads finalization as
+final-receive minus last-audio-sent when both stamps exist. Semantics 4
+also keeps a session that did not complete out of the finalization
+percentiles. A consumer of schema 3, schema 4, or semantics 1, 2, or 3
+must re-run. The receipt carries
 the schema version; the complete raw per-session outcomes; workload and
 observation fingerprints; the
 exact clock definitions as emitted constants; server, model, software, and hardware

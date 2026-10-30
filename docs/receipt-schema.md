@@ -110,7 +110,7 @@ compared and reported; a mismatch does not refuse:
 | `EMISSION_LAG_DEFINITION` | A word's audio ending to that word's first appearance in any output. Requires construction-time ground truth: silence of an exact frame count between known utterances. Not inferred by a forced aligner or a voice-activity detector. |
 | `EMISSION_LAG_UNAVAILABLE_REASON` | no_construction_ground_truth |
 | `FINALIZATION_CLOCK` | client_monotonic/last_audio_sample_sent_to_final_result_received |
-| `FINALIZATION_DEFINITION` | Seconds from the last audio sample sent to the final result received, on the client monotonic clock. |
+| `FINALIZATION_DEFINITION` | Seconds from the last audio sample sent to the final result received, on the client monotonic clock. A session that did not complete stays in n_total and contributes no sample. A negative on a completed session is kept. |
 | `FRONTIER_DEFINITION` | Accuracy against measured latency, one point per receipt, identified by lookahead frame count and the cadence that sets it. The millisecond label is carried beside the point and is not the identity. Latency is pooled TTFS p50 and accuracy is pooled micro WER, each under the clock and normalization policy the receipt already names. The Pareto edge is the set of points with no other point both faster and more accurate. A dominated point is a finding, not a pass failure. Cross-cadence transcript agreement is not computed. Points are grouped by comparison identity with lookahead frame count and cadence removed, so a lookahead sweep that also changes cadence is one series, and different hardware or checkpoints are not drawn on one edge. |
 | `FRONTIER_LAG_CLOCK` | client_monotonic/response_receive_minus_audio_sent |
 | `FRONTIER_LAG_DEFINITION` | For each audio_processed sample, client-monotonic receive time minus first-audio-sent plus the audio duration sent by that receive. Negatives are kept. Unavailable when audio_processed or the first-audio timestamp is absent. Not response latency and not the Riva 1:1 statistic. |
@@ -136,7 +136,7 @@ compared and reported; a mismatch does not refuse:
 | `LOOKAHEAD_IDENTITY_CLIENT_DECLARED` | client_declared |
 | `LOOKAHEAD_IDENTITY_DEFINITION` | An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is warn-only until an adapter reports a frame count, so naming the unused policy does not refuse a comparison. |
 | `LOOKAHEAD_IDENTITY_SERVER_REPORTED` | server_reported_when_present |
-| `MEASUREMENT_SEMANTICS_VERSION` | 3 |
+| `MEASUREMENT_SEMANTICS_VERSION` | 4 |
 | `MODE_OFFLINE` | offline |
 | `MODE_STREAMING` | streaming |
 | `NATIVE_LATENCY_CLOCK` | client_monotonic/first_audio_append_to_nonempty_transcription_delta |

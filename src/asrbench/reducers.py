@@ -515,6 +515,9 @@ def _finalization_seconds(outcome: SessionOutcome) -> float | None:
 def _read_finalization(
     outcome: SessionOutcome,
 ) -> tuple[list[float], str, bool]:
+    """Finalization for a completed session. Failures stay in n_total."""
+    if not is_completed(outcome):
+        return [], d.FINALIZATION_CLOCK, False
     value = _finalization_seconds(outcome)
     if value is None:
         return [], d.FINALIZATION_CLOCK, False

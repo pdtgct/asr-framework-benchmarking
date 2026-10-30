@@ -33,8 +33,10 @@ SCHEMA_VERSION = "asrbench-receipt/5"
 #: #177 headline ratios. ``3`` takes the adapter out of the hard key,
 #: keeps a failed or timed-out session out of E2E RTFx, and reads
 #: finalization as final-receive minus last-audio-sent when both stamps
-#: exist. A consumer of ``1`` or ``2`` must re-run.
-MEASUREMENT_SEMANTICS_VERSION = "3"
+#: exist. ``4`` keeps a session that did not complete out of the
+#: finalization percentiles. A consumer of ``1``, ``2``, or ``3`` must
+#: re-run.
+MEASUREMENT_SEMANTICS_VERSION = "4"
 
 GPU_IDENTITY_SERVER_DECLARED = "server_declared"
 GPU_IDENTITY_CLIENT_PROBE = "client_probe"
@@ -92,7 +94,9 @@ RESPONSE_LATENCY_DEFINITION = (
 )
 FINALIZATION_DEFINITION = (
     "Seconds from the last audio sample sent to the final result "
-    "received, on the client monotonic clock."
+    "received, on the client monotonic clock. A session that did not "
+    "complete stays in n_total and contributes no sample. A negative "
+    "on a completed session is kept."
 )
 POPULATION_DEFINITION = (
     "n_with_measure counts outcomes, or samples where the metric says "
