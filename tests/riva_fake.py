@@ -123,6 +123,16 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
                 ]
                 if len(audio_seen) == 1:
                     yield _results_response([("STA", False), ("BLE", False)])
+            if self.mode == "frontier" and kind == "audio_content":
+                audio_seen = [
+                    item for item in sequence if item[0] == "audio_content"
+                ]
+                if len(audio_seen) == 1:
+                    yield _frontier_response(
+                        [(0.0, False, "A"), (0.5, False, "B")]
+                    )
+                elif len(audio_seen) == 2:
+                    yield _frontier_response([(0.0, False, "")])
             if (
                 self.mode == "unavailable-after-audio"
                 and kind == "audio_content"
@@ -151,6 +161,8 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             yield _response("", final=True)
         elif self.mode == "multi-result":
             yield _results_response([("AB", True), ("C", True)])
+        elif self.mode == "frontier":
+            yield _frontier_response([(1.0, True, "HELLO")])
 
     def _status(
         self,
@@ -180,6 +192,21 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
 
 def _response(text: str, *, final: bool) -> Any:
     return _results_response([(text, final)])
+
+
+def _frontier_response(parts: list[tuple[float, bool, str]]) -> Any:
+    """One response. ``audio_processed`` is seconds on each result."""
+    results = []
+    for processed, final, text in parts:
+        alternative = riva_asr_pb2.SpeechRecognitionAlternative(transcript=text)
+        results.append(
+            riva_asr_pb2.StreamingRecognitionResult(
+                alternatives=[alternative],
+                is_final=final,
+                audio_processed=processed,
+            )
+        )
+    return riva_asr_pb2.StreamingRecognizeResponse(results=results)
 
 
 def _results_response(parts: list[tuple[str, bool]]) -> Any:

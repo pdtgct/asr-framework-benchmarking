@@ -246,14 +246,26 @@ def test_rate_rps_is_refused_rather_than_run_as_lanes() -> None:
 
 
 def test_unknown_transport_names_the_lane_unavailable_seam() -> None:
-    config = resolve(env={}, overrides={("target", "transport"): "future"})
+    config = resolve(
+        env={},
+        overrides={
+            ("target", "transport"): "future",
+            ("target", "checkpoint_id"): "declared-weights",
+        },
+    )
     with pytest.raises(ConfigError, match="lane_unavailable") as caught:
         load_adapter(config.target)
     assert "future" in str(caught.value)
 
 
 def test_realtime_ws_is_not_opened_by_the_runner() -> None:
-    config = resolve(env={}, overrides={("target", "transport"): "realtime-ws"})
+    config = resolve(
+        env={},
+        overrides={
+            ("target", "transport"): "realtime-ws",
+            ("target", "checkpoint_id"): "declared-weights",
+        },
+    )
     with pytest.raises(ConfigError, match="caller-owned"):
         load_adapter(config.target)
 

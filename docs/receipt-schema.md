@@ -3,7 +3,7 @@
 Generated from `asrbench.schema_doc`. Do not edit by hand.
 Regenerate with `uv run python -m asrbench.schema_doc`.
 
-Schema version: `asrbench-receipt/4`
+Schema version: `asrbench-receipt/5`
 
 Clock and definition strings below are the constants the receipt
 writes. Where `docs/metrics.md` and a constant disagree, the
@@ -25,6 +25,7 @@ Not in the hard comparison key.
 Record-only. Shown side by side. A mismatch does not warn
 and does not refuse:
 
+- `identity.recorded.adapter`
 - `identity.recorded.comparison_axis`
 - `identity.recorded.engine.name`
 - `identity.recorded.engine.version`
@@ -95,7 +96,7 @@ compared and reported; a mismatch does not refuse:
 | `CLIENT_LOCATION_SAME_REGION` | same-region |
 | `CLIENT_LOCATION_WAN` | wan |
 | `COMPARISON_AXIS` | engine |
-| `COMPARISON_KEY_DEFINITION` | sha256 of the canonical JSON texts of the workload fingerprint, the hard target identity, the hard software identity, and the hard hardware identity, in that order, joined by U+001F. The hard target identity is the checkpoint id, revision, and source. It is not target.model and not server_version. The comparison axis is engine: engine name, engine version, transport, and server_version are recorded beside the key and a mismatch does not refuse. chunk_ms, att_context_right, lookahead frame count, and cadence are inside the workload fingerprint. The millisecond label is not. Decode features in that fingerprint are language, punctuation, diarization, interim_results, decoder, language_model, and enable_word_time_offsets. Hard software identity includes normalization policy, percentile method, SCHEMA_VERSION, and MEASUREMENT_SEMANTICS_VERSION. Precision is recorded and is not this key. Warn-only mismatches are listed and do not refuse. |
+| `COMPARISON_KEY_DEFINITION` | sha256 of the canonical JSON texts of the workload fingerprint, the hard target identity, the hard software identity, and the hard hardware identity, in that order, joined by U+001F. The hard target identity is the checkpoint id, revision, and source. It is not target.model and not server_version. The comparison axis is engine: engine name, engine version, transport, and server_version are recorded beside the key and a mismatch does not refuse. The adapter name is recorded with the transport and is not hard software identity. chunk_ms, att_context_right, lookahead frame count, and cadence are inside the workload fingerprint. The millisecond label is not. Decode features in that fingerprint are language, punctuation, diarization, interim_results, decoder, language_model, and enable_word_time_offsets. Hard software identity includes normalization policy, percentile method, SCHEMA_VERSION, and MEASUREMENT_SEMANTICS_VERSION. Precision is recorded and is not this key. Warn-only mismatches are listed and do not refuse. |
 | `COMPLETION_FRACTION_DEFINITION` | Fraction of measured sessions that completed. A named policy a preset may select in place of the steady-interval condition. It is not that condition. |
 | `CORPUS_NORMALIZATION_DEFINITION` | corpus_reference applies full normalization: case-fold, strip control tags, strip punctuation, normalize English cardinals (en_cardinals_v1, 0 through 999, including the 'and' form), and collapse whitespace. |
 | `DEFAULT_LOOKAHEAD_IDENTITY_POLICY` | client_declared |
@@ -104,7 +105,7 @@ compared and reported; a mismatch does not refuse:
 | `DEFAULT_SUSTAINABILITY_POLICY` | steady_interval |
 | `DIGEST_COVERS_PCM16` | pcm16_payload |
 | `E2E_RTFX_CLOCK` | client_monotonic/first_audio_sent_to_final_received |
-| `E2E_RTFX_DEFINITION` | Per measured session, offered audio seconds divided by the client-monotonic interval from the first audio sample sent to the final result received. Real-time pacing caps this near 1. Read it as kept up, not as speed. A session missing either timestamp stays in n_total and is absent from n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency. |
+| `E2E_RTFX_DEFINITION` | Per measured session, offered audio seconds divided by the client-monotonic interval from the first audio sample sent to the final result received. Real-time pacing caps this near 1. Read it as kept up, not as speed. A session that did not complete, including a timeout, a protocol error, or an early final on a failed stream, stays in n_total and contributes no ratio. A completed session missing either timestamp stays in n_total and is absent from n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency. |
 | `EMISSION_LAG_CLOCK` | client_monotonic/word_audio_end_to_first_appearance |
 | `EMISSION_LAG_DEFINITION` | A word's audio ending to that word's first appearance in any output. Requires construction-time ground truth: silence of an exact frame count between known utterances. Not inferred by a forced aligner or a voice-activity detector. |
 | `EMISSION_LAG_UNAVAILABLE_REASON` | no_construction_ground_truth |
@@ -135,7 +136,7 @@ compared and reported; a mismatch does not refuse:
 | `LOOKAHEAD_IDENTITY_CLIENT_DECLARED` | client_declared |
 | `LOOKAHEAD_IDENTITY_DEFINITION` | An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is warn-only until an adapter reports a frame count, so naming the unused policy does not refuse a comparison. |
 | `LOOKAHEAD_IDENTITY_SERVER_REPORTED` | server_reported_when_present |
-| `MEASUREMENT_SEMANTICS_VERSION` | 2 |
+| `MEASUREMENT_SEMANTICS_VERSION` | 3 |
 | `MODE_OFFLINE` | offline |
 | `MODE_STREAMING` | streaming |
 | `NATIVE_LATENCY_CLOCK` | client_monotonic/first_audio_append_to_nonempty_transcription_delta |
@@ -172,7 +173,7 @@ compared and reported; a mismatch does not refuse:
 | `RTFX_VALIDITY_SIMULATED` | simulated |
 | `RTFX_VALIDITY_UNQUALIFIED` | pacing_fidelity_unavailable |
 | `RUNNER_HANG_GUARD_DEFINITION` | The runner hang guard waits twice timeout_s, plus one timeout_s for the cohort barrier, plus the clip duration when pacing, plus 0.25 seconds. realtime-ws may spend timeout_s waiting for session.updated and timeout_s again waiting for the final, and a peer may spend timeout_s at the barrier on the slowest handshake. The adapter owns each timeout_s and may return a partial outcome. The guard replaces the outcome only when the adapter does not return. |
-| `SCHEMA_VERSION` | asrbench-receipt/4 |
+| `SCHEMA_VERSION` | asrbench-receipt/5 |
 | `SDI_DEFINITION` | Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion. |
 | `STEADY_INTERVAL_DEFINITION` | Sustainability over a declared steady interval of the cell. Unevaluable until outcomes carry that interval. Fail-closed: the clause does not pass. |
 | `STEADY_INTERVAL_UNAVAILABLE_REASON` | steady_interval_not_in_outcome |
@@ -308,7 +309,6 @@ object is named once and then cited by path.
       - `revision`: null
       - `source`: string
   - `software`: object
-    - `adapter`: string
     - `measurement_semantics_version`: string
     - `normalization_policy`: string
     - `package`: string
@@ -348,6 +348,7 @@ object is named once and then cited by path.
     - `system`: string
     - `tls_verify`: bool
   - `recorded`: object
+    - `adapter`: string
     - `comparison_axis`: string
     - `engine`: object
       - `name`: null
@@ -436,9 +437,9 @@ object is named once and then cited by path.
         - `entry_index`: int
         - `cadence_ms`: int
         - `lookahead_frames`: int
-        - `first_audio_sent_s`: null
-        - `last_audio_sent_s`: null
-        - `final_received_s`: null
+        - `first_audio_sent_s`: float
+        - `last_audio_sent_s`: float
+        - `final_received_s`: float
         - `audio_progress`: null
         - `word_timings`: null
         - `chunk_send_times_s`: null
@@ -478,26 +479,7 @@ object is named once and then cited by path.
         - `population_definition`: string
       - `response_latency_s`: same shape as `trials[].reduction.ttfs_s`
       - `finalization_s`: same shape as `trials[].reduction.ttfs_s`
-      - `e2e_rtfx`: object
-        - `name`: string
-        - `clock`: string
-        - `clock_attribution`: string
-        - `clock_matches_native`: bool
-        - `definition`: string
-        - `unit`: string
-        - `percentile_method`: string
-        - `availability`: string
-        - `mean`: null
-        - `minimum`: null
-        - `maximum`: null
-        - `p50`: null
-        - `p90`: null
-        - `p95`: null
-        - `p99`: null
-        - `n_with_measure`: int
-        - `n_total`: int
-        - `n_samples`: int
-        - `population_definition`: string
+      - `e2e_rtfx`: same shape as `trials[].reduction.ttfs_s`
       - `frontier_rtfx`: object
         - `name`: string
         - `clock`: string
@@ -720,16 +702,16 @@ object is named once and then cited by path.
     - `response_latency_p50_s`: same shape as `summary.across_trials.ttfs_p50_s`
     - `response_latency_p99_s`: same shape as `summary.across_trials.ttfs_p50_s`
     - `finalization_p50_s`: same shape as `summary.across_trials.ttfs_p50_s`
-    - `e2e_rtfx_mean`: object
+    - `e2e_rtfx_mean`: same shape as `summary.across_trials.ttfs_p50_s`
+    - `aggregate_rtfx`: same shape as `summary.across_trials.ttfs_p50_s`
+    - `micro_wer`: same shape as `summary.across_trials.ttfs_p50_s`
+    - `streaming_rtfx`: same shape as `summary.across_trials.ttfs_p50_s`
+    - `offline_rtfx`: object
       - `values`: list[null]
       - `mean`: null
       - `minimum`: null
       - `maximum`: null
       - `n_trials`: int
       - `n_trials_with_measure`: int
-    - `aggregate_rtfx`: same shape as `summary.across_trials.ttfs_p50_s`
-    - `micro_wer`: same shape as `summary.across_trials.ttfs_p50_s`
-    - `streaming_rtfx`: same shape as `summary.across_trials.ttfs_p50_s`
-    - `offline_rtfx`: same shape as `summary.across_trials.e2e_rtfx_mean`
     - `goodput_per_second`: same shape as `summary.across_trials.ttfs_p50_s`
   - `pooled`: same shape as `trials[].reduction`

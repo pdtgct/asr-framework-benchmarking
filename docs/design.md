@@ -126,10 +126,12 @@ score.
 ### Receipt and reporters
 
 The receipt is JSON, authoritative, and one per run. Schema
-`asrbench-receipt/4` and measurement semantics `2` replace schema 3 and
-semantics 1. A schema 3 receipt does not load: resolved config now requires
-the checkpoint and the added workload fields, and the reducer formulas
-changed. A consumer of either old version must re-run. The receipt carries
+`asrbench-receipt/5` and measurement semantics `3` replace schema 4 and
+semantics 2. Schema 5 records the adapter with the transport instead of
+hashing it. Semantics 3 keeps a failed or timed-out session out of E2E
+RTFx and reads finalization as final-receive minus last-audio-sent when
+both stamps exist. A consumer of schema 3, schema 4, semantics 1, or
+semantics 2 must re-run. The receipt carries
 the schema version; the complete raw per-session outcomes; workload and
 observation fingerprints; the
 exact clock definitions as emitted constants; server, model, software, and hardware
@@ -156,13 +158,16 @@ comparison_key = sha256(workload_fingerprint ‖ target_identity
 
 Hard target identity is the checkpoint: id, revision, and source. It is not
 `target.model` and not `server_version`. The comparison axis is the engine.
-Engine name, engine version, transport, and server version are recorded beside
-the key, and a mismatch does not refuse. Precision is recorded under the
-NVIDIA names and is not a key. `channel_options` — keepalive and maximum
-message size — are warn-only, as are `target.model`, `transport_options`,
-batch size, `max_num_seqs`, CUDA, torch, driver, and client location.
-Hard software identity is the adapter, the normalization policy,
-the percentile method, `SCHEMA_VERSION`, and `MEASUREMENT_SEMANTICS_VERSION`.
+Engine name, engine version, transport, server version, and the adapter
+name are recorded beside the key, and a mismatch does not refuse.
+Precision is recorded under the NVIDIA names and is not a key.
+`channel_options` — keepalive and maximum message size — are warn-only,
+as are `target.model`, `transport_options`, batch size, `max_num_seqs`,
+CUDA, torch, driver, and client location. Hard software identity is the
+normalization policy, the percentile method, `SCHEMA_VERSION`, and
+`MEASUREMENT_SEMANTICS_VERSION`. The adapter is not part of it. A
+non-mock transport requires a checkpoint id. A source other than
+`unverified` also requires a revision.
 Hard hardware identity is GPU name, count, and memory, plus
 `gpu_identity_source`: `server_declared` when the target spec names a server
 GPU, otherwise `client_probe` from nvidia-smi. Those two sources are not mixed.

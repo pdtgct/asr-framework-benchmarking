@@ -1007,6 +1007,16 @@ def _validate_checkpoint(target: TargetSpec) -> None:
         )
     _reject_blank("checkpoint_id", target.checkpoint_id)
     _reject_blank("checkpoint_revision", target.checkpoint_revision)
+    if target.transport != "mock" and not target.checkpoint_id:
+        raise ConfigError("checkpoint_id is required unless transport is mock")
+    if (
+        target.checkpoint_source != CHECKPOINT_SOURCE_UNVERIFIED
+        and not target.checkpoint_revision
+    ):
+        raise ConfigError(
+            "checkpoint_revision is required when checkpoint_source "
+            "is not unverified"
+        )
     _reject_blank("engine_name", target.engine_name)
     _reject_blank("engine_version", target.engine_version)
     _reject_blank("cuda_version", target.cuda_version)

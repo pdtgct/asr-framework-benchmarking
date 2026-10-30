@@ -45,6 +45,7 @@
     "transport": "riva-grpc",
     "model": "server-reported-model-name",
     "engine_name": "nim",
+    "checkpoint_id": "server-reported-model-name",
     "checkpoint_source": "unverified",
     "auth_env": "NVIDIA_API_KEY",
     "tls_verify": true,

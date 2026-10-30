@@ -47,6 +47,7 @@
     "transport": "riva-grpc",
     "model": "nemotron-asr-streaming",
     "engine_name": "nim",
+    "checkpoint_id": "nemotron-asr-streaming",
     "checkpoint_source": "unverified",
     "auth_env": "NVIDIA_API_KEY",
     "tls_verify": true,

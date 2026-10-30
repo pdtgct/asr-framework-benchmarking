@@ -24,14 +24,17 @@ from asrbench.outcome import (
 # reader does not have to know the outcome field's historical name.
 TTFS_CLOCK = NATIVE_LATENCY_CLOCK
 
-SCHEMA_VERSION = "asrbench-receipt/4"
+SCHEMA_VERSION = "asrbench-receipt/5"
 
 #: Bumped when reducer or comparison-key semantics change. Replaces the
 #: git commit in the hard comparison key, so a docs-only commit does not
 #: refuse a comparison. Git commit stays on the receipt as warn-only.
 #: ``2`` adds the engine comparison axis, checkpoint identity, and the
-#: #177 headline ratios. A consumer of ``1`` must re-run.
-MEASUREMENT_SEMANTICS_VERSION = "2"
+#: #177 headline ratios. ``3`` takes the adapter out of the hard key,
+#: keeps a failed or timed-out session out of E2E RTFx, and reads
+#: finalization as final-receive minus last-audio-sent when both stamps
+#: exist. A consumer of ``1`` or ``2`` must re-run.
+MEASUREMENT_SEMANTICS_VERSION = "3"
 
 GPU_IDENTITY_SERVER_DECLARED = "server_declared"
 GPU_IDENTITY_CLIENT_PROBE = "client_probe"
@@ -304,6 +307,8 @@ COMPARISON_KEY_DEFINITION = (
     "not target.model and not server_version. The comparison axis is "
     "engine: engine name, engine version, transport, and server_version "
     "are recorded beside the key and a mismatch does not refuse. "
+    "The adapter name is recorded with the transport and is not hard "
+    "software identity. "
     "chunk_ms, att_context_right, lookahead frame count, and cadence "
     "are inside the workload fingerprint. The millisecond label is not. "
     "Decode features in that fingerprint are language, punctuation, "
@@ -383,9 +388,11 @@ E2E_RTFX_DEFINITION = (
     "Per measured session, offered audio seconds divided by the "
     "client-monotonic interval from the first audio sample sent to the "
     "final result received. Real-time pacing caps this near 1. Read it "
-    "as kept up, not as speed. A session missing either timestamp stays "
-    "in n_total and is absent from n_with_measure. Not streaming_rtfx "
-    "and not a vendor per-chunk latency."
+    "as kept up, not as speed. A session that did not complete, including "
+    "a timeout, a protocol error, or an early final on a failed stream, "
+    "stays in n_total and contributes no ratio. A completed session "
+    "missing either timestamp stays in n_total and is absent from "
+    "n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency."
 )
 FRONTIER_RTFX_CLOCK = (
     "client_monotonic/audio_processed_delta_over_receive_delta"

@@ -689,11 +689,11 @@ def _consume(
         parts.append(outcome.transcript)
     interim_parts: list[str] = []
     saw_interim = False
+    _note_response_frontier(outcome, response, now, audio_sent)
     for result in response.results:
         text = ""
         if result.alternatives:
             text = result.alternatives[0].transcript
-        _note_audio_processed(outcome, result, now, audio_sent)
         if result.is_final:
             parts.append(text)
             outcome.transcript = "".join(parts)
@@ -798,18 +798,38 @@ def _mark_protocol_error(
     outcome.protocol_errors.append({"code": code, "detail": detail})
 
 
-def _note_audio_processed(
-    outcome: SessionOutcome, result: Any, received_s: float, audio_sent_s: float
+def _note_response_frontier(
+    outcome: SessionOutcome,
+    response: Any,
+    received_s: float,
+    audio_sent_s: float,
 ) -> None:
-    """Record ``audio_processed`` when the installed proto has the field."""
-    descriptor = getattr(result, "DESCRIPTOR", None)
-    if descriptor is None or "audio_processed" not in descriptor.fields_by_name:
+    """Record one ``audio_processed`` sample for this response.
+
+    Proto3 stores a missing float as 0.0, so a 0.0 is not a sample.
+    Several results in one response share one receive time; the sample
+    is the maximum strictly positive value among them. A later 0.0,
+    including a missing interim after a real frontier, is ignored so it
+    does not look like the frontier went backwards. A later positive
+    value that is smaller is kept, and the reducer marks that decrease
+    invalid.
+    """
+    positive: list[float] = []
+    for result in response.results:
+        descriptor = getattr(result, "DESCRIPTOR", None)
+        fields = getattr(descriptor, "fields_by_name", None)
+        if not fields or "audio_processed" not in fields:
+            continue
+        value = float(result.audio_processed)
+        if value > 0.0:
+            positive.append(value)
+    if not positive:
         return
     if outcome.audio_progress is None:
         outcome.audio_progress = []
     outcome.audio_progress.append(
         {
-            "audio_processed_s": float(result.audio_processed),
+            "audio_processed_s": max(positive),
             "received_s": received_s,
             "audio_sent_s": audio_sent_s,
         }
@@ -837,7 +857,11 @@ def _note_words(
 
 
 def _drop_unset_frontier(outcome: SessionOutcome) -> None:
-    """Drop an all-zero frontier. Proto3 cannot tell unset from zero."""
+    """Drop an all-zero frontier. Proto3 cannot tell unset from zero.
+
+    ``_note_response_frontier`` already skips 0.0. This remains for a
+    series that is still all zeros.
+    """
     progress = outcome.audio_progress
     if not progress:
         outcome.audio_progress = None

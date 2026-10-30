@@ -39,6 +39,7 @@ from asrbench.audio import (
 )
 from asrbench.clock import utc_timestamp
 from asrbench.outcome import (
+    FINALIZATION_CLOCK,
     NATIVE_LATENCY_CLOCK,
     RESPONSE_LATENCY_CLOCK,
     SessionOutcome,
@@ -167,9 +168,21 @@ class RealtimeWebSocketAdapter:
                             elif kind == "transcription.done":
                                 outcome.transcript = event.get("text", "")
                                 extras["usage"] = event.get("usage")
-                                if final_commit_at is not None:
+                                received = time.monotonic()
+                                outcome.final_received_s = received
+                                if outcome.last_audio_sent_s is not None:
                                     outcome.final_latency_s = (
-                                        time.monotonic() - final_commit_at
+                                        received - outcome.last_audio_sent_s
+                                    )
+                                    outcome.final_latency_clock = (
+                                        FINALIZATION_CLOCK
+                                    )
+                                elif final_commit_at is not None:
+                                    outcome.final_latency_s = (
+                                        received - final_commit_at
+                                    )
+                                    outcome.final_latency_clock = (
+                                        FINALIZATION_CLOCK
                                     )
                                 done.set()
                                 _progress(
@@ -218,10 +231,12 @@ class RealtimeWebSocketAdapter:
                             # the first audio sample begins, before send can
                             # yield.
                             first_append_at = time.monotonic()
+                            outcome.first_audio_sent_s = first_append_at
                             extras.setdefault("markers", {})[
                                 "first_audio_at"
                             ] = utc_timestamp()
                         latest_append_at = time.monotonic()
+                        outcome.last_audio_sent_s = latest_append_at
                         await send(
                             {
                                 "type": "input_audio_buffer.append",

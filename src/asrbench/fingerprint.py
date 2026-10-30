@@ -8,7 +8,8 @@ text, and every run-observation field.
 
 The comparison key hashes four hard components. The hard target is the
 checkpoint. The engine — name, version, transport, and server version —
-is the comparison axis and is recorded, not hashed. ``target.model`` and
+is the comparison axis and is recorded, not hashed. The adapter name is
+recorded with the transport and is not hashed. ``target.model`` and
 ``transport_options`` are warn-only. ``channel_options`` are warn-only:
 keepalive and maximum message size do not refuse. Git commit is warn-only
 and is read from this package's repository, not the caller's directory.
@@ -36,6 +37,7 @@ from asrbench.spec import (
 
 #: Shown beside a comparison. A mismatch does not warn and does not refuse.
 RECORDED_COMPARISON_FIELDS: tuple[str, ...] = (
+    "identity.recorded.adapter",
     "identity.recorded.comparison_axis",
     "identity.recorded.engine.name",
     "identity.recorded.engine.version",
@@ -288,9 +290,10 @@ def _target_block(target: TargetSpec) -> dict[str, Any]:
     return {"checkpoint": _checkpoint_block(target)}
 
 
-def _recorded_block(target: TargetSpec) -> dict[str, Any]:
-    """Engine axis and precision. Shown beside a comparison, not hashed."""
+def _recorded_block(target: TargetSpec, adapter: str) -> dict[str, Any]:
+    """Engine axis, adapter, and precision. Shown, not hashed."""
     return {
+        "adapter": adapter,
         "comparison_axis": COMPARISON_AXIS,
         "engine": {
             "name": target.engine_name,
@@ -306,10 +309,9 @@ def _recorded_block(target: TargetSpec) -> dict[str, Any]:
 def _software_block(
     versions: Mapping[str, Any], policy: str, method: str
 ) -> dict[str, Any]:
-    """Hard software identity. Semantics version is the caller's string."""
+    """Hard software identity. The adapter is recorded, not hashed."""
     semantics = versions["measurement_semantics_version"]
     return {
-        "adapter": versions["adapter"],
         "measurement_semantics_version": semantics,
         "normalization_policy": policy,
         "package": "asrbench",
@@ -429,7 +431,7 @@ def identity_blocks(
         "software": _software_block(versions, policy, method),
         "hardware": _hard_hardware(config.target, probe),
         "warn": _warn_block(config, probe, versions),
-        "recorded": _recorded_block(config.target),
+        "recorded": _recorded_block(config.target, str(versions["adapter"])),
     }
 
 

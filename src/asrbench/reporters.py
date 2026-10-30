@@ -42,6 +42,8 @@ def console_report(receipt: dict[str, Any]) -> str:
     final = pooled["finalization_s"]
     e2e = pooled["e2e_rtfx"]
     frontier = pooled["frontier_rtfx"]
+    lag = pooled["frontier_lag_s"]
+    words = pooled["word_latency_s"]
     aggregate = pooled["aggregate_rtfx"]
     compat = pooled["riva_client_compat_s"]
     wer = pooled["wer"]
@@ -91,6 +93,16 @@ def console_report(receipt: dict[str, Any]) -> str:
             f"p50={frontier['p50']} n_invalid={frontier['n_invalid_sessions']} "
             f"n_unavailable={frontier['n_unavailable_sessions']} "
             f"n_total={frontier['n_total']}"
+        ),
+        (
+            f"frontier_lag_s p50={lag['p50']} "
+            f"n_with_measure={lag['n_with_measure']} "
+            f"n_total={lag['n_total']}"
+        ),
+        (
+            f"word_latency_s p50={words['p50']} "
+            f"n_with_measure={words['n_with_measure']} "
+            f"n_total={words['n_total']}"
         ),
         (
             f"aggregate_rtfx value={aggregate['value']} "
@@ -219,6 +231,14 @@ def vllm_report(receipt: dict[str, Any]) -> dict[str, Any]:
         "frontier_rtfx": _pick(
             pooled["frontier_rtfx"],
             ("availability", "reason", "p50", "n_total", "percentile_method"),
+        ),
+        "frontier_lag_s": _pick(
+            pooled["frontier_lag_s"],
+            ("p50", "n_with_measure", "n_total", "availability"),
+        ),
+        "word_latency_s": _pick(
+            pooled["word_latency_s"],
+            ("p50", "n_with_measure", "n_total", "availability"),
         ),
         "riva_client_compat_s": _pick(
             pooled["riva_client_compat_s"],

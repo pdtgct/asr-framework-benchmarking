@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from asrbench.adapters.mock import MOCK_E2E_CLOCK
 from asrbench.compare import compare_receipts
 from asrbench.config import ConfigError, resolve
 from asrbench.identity import FixedProbe, GitState, collect_hardware
@@ -146,7 +147,9 @@ def test_transport_is_recorded_with_the_engine(tmp_path: Path) -> None:
     left = _run(tmp_path, "mock", _checkpoint())
     right = json.loads(json.dumps(left))
     right["resolved_config"]["target"]["transport"] = "riva-grpc"
+    right["identity"]["recorded"]["adapter"] = "riva-grpc"
     right["identity"]["recorded"]["engine"]["transport"] = "riva-grpc"
+    right["identity"]["software"].pop("adapter", None)
     result = compare_receipts(left, right)
     assert result.status == "comparable"
     assert result.comparison_key_left == result.comparison_key_right
@@ -333,3 +336,84 @@ def test_frontier_lag_does_not_clamp() -> None:
     # 5.1 - (5.0 + 0.4) = -0.3
     assert lag["availability"] == "measured"
     assert lag["minimum"] == pytest.approx(-0.3)
+
+
+def test_adapter_and_transport_do_not_refuse(tmp_path: Path) -> None:
+    left = _run(tmp_path, "riva", _checkpoint())
+    right = json.loads(json.dumps(left))
+    right["resolved_config"]["target"]["transport"] = "realtime-ws"
+    right["identity"]["recorded"]["adapter"] = "realtime-ws"
+    right["identity"]["recorded"]["engine"]["transport"] = "realtime-ws"
+    right["identity"]["software"].pop("adapter", None)
+    result = compare_receipts(left, right)
+    assert result.status == "comparable"
+    assert result.comparison_key_left == result.comparison_key_right
+    assert not any(item.field == "adapter" for item in result.differences)
+    assert not any("transport" in item.field for item in result.differences)
+    adapter = next(item for item in result.recorded if item.field == "adapter")
+    assert adapter.left == "mock"
+    assert adapter.right == "realtime-ws"
+
+
+def test_non_mock_checkpoint_id_and_verified_revision() -> None:
+    with pytest.raises(ConfigError, match="checkpoint_id"):
+        resolve(env={}, overrides={("target", "transport"): "riva-grpc"})
+    with pytest.raises(ConfigError, match="checkpoint_revision"):
+        resolve(
+            env={},
+            overrides={
+                ("target", "checkpoint_id"): "org/model",
+                ("target", "checkpoint_source"): "huggingface",
+            },
+        )
+    resolved = resolve(
+        env={},
+        overrides={
+            ("target", "transport"): "realtime-ws",
+            ("target", "checkpoint_id"): "nemotron-asr-streaming",
+        },
+    )
+    assert resolved.target.checkpoint_id == "nemotron-asr-streaming"
+    assert resolved.target.checkpoint_revision is None
+
+
+def test_mock_run_measures_e2e_rtfx(tmp_path: Path) -> None:
+    receipt = _run(tmp_path, "e2e")
+    block = receipt["summary"]["pooled"]["e2e_rtfx"]
+    assert block["availability"] == "measured"
+    assert block["clock"] == MOCK_E2E_CLOCK
+    assert block["n_with_measure"] == block["n_total"]
+    assert block["n_total"] >= 1
+    assert block["mean"] > 0
+
+
+def test_e2e_rtfx_excludes_a_failed_early_final() -> None:
+    ok = session(label="ok", audio_duration_s=1.6)
+    ok.first_audio_sent_s = 0.0
+    ok.final_received_s = 2.0
+    failed = session(
+        label="fail",
+        transcript="early",
+        error_code="UNAVAILABLE",
+        terminal_status="errored",
+        audio_duration_s=1.6,
+    )
+    failed.first_audio_sent_s = 0.0
+    failed.final_received_s = 0.2
+    block = _reduce([ok, failed])["e2e_rtfx"]
+    assert block["mean"] == pytest.approx(1.6 / 2.0)
+    assert block["n_with_measure"] == 1
+    assert block["n_total"] == 2
+
+
+def test_finalization_uses_last_audio_and_keeps_a_negative() -> None:
+    outcome = session(final_latency_s=0.05)
+    outcome.last_audio_sent_s = 1.0
+    outcome.final_received_s = 1.4
+    measured = _reduce([outcome])["finalization_s"]
+    assert measured["mean"] == pytest.approx(0.4)
+    early = session(label="early", final_latency_s=0.05)
+    early.last_audio_sent_s = 2.0
+    early.final_received_s = 1.5
+    negative = _reduce([early])["finalization_s"]
+    assert negative["mean"] == pytest.approx(-0.5)

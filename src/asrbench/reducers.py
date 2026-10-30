@@ -194,9 +194,7 @@ def reduce_trial(
         definition=d.FINALIZATION_DEFINITION,
         method=percentile_method,
         population=population,
-        read=_scalar_reader(
-            "final_latency_s", "final_latency_clock", d.FINALIZATION_CLOCK
-        ),
+        read=_read_finalization,
     )
     if wer is None:
         wer = _wer(
@@ -477,15 +475,51 @@ def _check_trace(
         _finite(value, f"{outcome.label} {name}[{index}]")
 
 
+def _e2e_clock(outcome: SessionOutcome) -> str:
+    """Name the E2E clock. Mock stamps are simulated, not monotonic."""
+    if (outcome.latency_clock or "").startswith("mock/"):
+        return "mock/simulated_first_audio_sent_to_final_received"
+    return d.E2E_RTFX_CLOCK
+
+
 def _read_e2e(outcome: SessionOutcome) -> tuple[list[float], str, bool]:
+    """E2E RTFx for a completed session. Failures stay in n_total only."""
+    clock = _e2e_clock(outcome)
+    if not is_completed(outcome):
+        return [], clock, False
     start = outcome.first_audio_sent_s
     finish = outcome.final_received_s
     if start is None or finish is None:
-        return [], d.E2E_RTFX_CLOCK, False
+        return [], clock, False
     span = finish - start
     if span <= 0:
-        return [], d.E2E_RTFX_CLOCK, True
-    return [outcome.audio_duration_s / span], d.E2E_RTFX_CLOCK, True
+        return [], clock, False
+    return [outcome.audio_duration_s / span], clock, True
+
+
+def _finalization_seconds(outcome: SessionOutcome) -> float | None:
+    """Return t_f minus t_last when both stamps exist.
+
+    The legacy ``final_latency_s`` is the fallback. A negative value is
+    kept: the final arrived before the last audio sample.
+    """
+    last = outcome.last_audio_sent_s
+    final = outcome.final_received_s
+    if last is not None and final is not None:
+        return final - last
+    if outcome.final_latency_s is None:
+        return None
+    return float(outcome.final_latency_s)
+
+
+def _read_finalization(
+    outcome: SessionOutcome,
+) -> tuple[list[float], str, bool]:
+    value = _finalization_seconds(outcome)
+    if value is None:
+        return [], d.FINALIZATION_CLOCK, False
+    explicit = str(outcome.final_latency_clock or "")
+    return [value], explicit or d.FINALIZATION_CLOCK, bool(explicit)
 
 
 def _decreased(samples: list[float]) -> bool:
@@ -1727,7 +1761,7 @@ def _session_meets(
         if outcome.ttfs_s is None or outcome.ttfs_s > pass_policy.latency_slo_s:
             return False
     elif pass_policy.latency_metric == d.LATENCY_METRIC_FINALIZATION:
-        latency = outcome.final_latency_s
+        latency = _finalization_seconds(outcome)
         if latency is None or latency > pass_policy.latency_slo_s:
             return False
     elif pass_policy.latency_metric == d.LATENCY_METRIC_FRONTIER_LAG:

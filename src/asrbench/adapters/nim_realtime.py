@@ -633,7 +633,13 @@ class NimRealtimeAdapter:
             ):
                 return
             await self._send_audio(
-                socket, chunks, request, marks, finished, progress_callback
+                socket,
+                chunks,
+                request,
+                outcome,
+                marks,
+                finished,
+                progress_callback,
             )
             if finished.is_set() or outcome.terminal_status:
                 return
@@ -738,9 +744,12 @@ class NimRealtimeAdapter:
                 _note_partial(outcome, marks, text)
                 return
             outcome.transcript = text
+            received = time.monotonic()
+            outcome.final_received_s = received
             latest = marks["latest"]
             if isinstance(latest, float):
-                latency = time.monotonic() - latest
+                outcome.last_audio_sent_s = latest
+                latency = received - latest
                 if latency >= 0:
                     outcome.final_latency_s = latency
             _progress(progress_callback, request.label, "final.received")
@@ -776,6 +785,7 @@ class NimRealtimeAdapter:
         socket: Any,
         chunks: list[bytes],
         request: SessionRequest,
+        outcome: SessionOutcome,
         marks: dict[str, float | None],
         finished: asyncio.Event,
         progress_callback: SessionProgressCallback | None,
@@ -786,6 +796,7 @@ class NimRealtimeAdapter:
             now = time.monotonic()
             if marks["first"] is None:
                 marks["first"] = now
+                outcome.first_audio_sent_s = now
                 _progress(
                     progress_callback,
                     request.label,
@@ -793,6 +804,7 @@ class NimRealtimeAdapter:
                     bytes=len(chunk),
                 )
             marks["latest"] = now
+            outcome.last_audio_sent_s = now
             encoded = base64.b64encode(chunk).decode("ascii")
             await _send(
                 socket,
@@ -1019,6 +1031,9 @@ def _mark_lane_unavailable(
     outcome.ttfs_s = None
     outcome.final_latency_s = None
     outcome.response_latencies_s = []
+    outcome.first_audio_sent_s = None
+    outcome.last_audio_sent_s = None
+    outcome.final_received_s = None
     outcome.timed_out = False
     outcome.error_code = code
     outcome.error_detail = detail

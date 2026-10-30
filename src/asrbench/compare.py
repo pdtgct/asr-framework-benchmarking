@@ -269,13 +269,8 @@ def _blocks(
             return primary[key]
         return stored_warn.get(key, default)
 
-    adapter = stored_software.get("adapter")
     schema = receipt.get("schema_version")
     semantics = stored_software.get("measurement_semantics_version")
-    if isinstance(adapter, str) and adapter:
-        adapter_text = adapter
-    else:
-        adapter_text = config.target.transport
     return identity_blocks(
         config,
         {
@@ -293,7 +288,7 @@ def _blocks(
             "system": str(pick(probe_hw, "system", "")),
         },
         {
-            "adapter": adapter_text,
+            "adapter": config.target.transport,
             "git_commit": str(pick(probe_sw, "git_commit", "unknown")),
             "git_dirty": bool(pick(probe_sw, "git_dirty", False)),
             "measurement_semantics_version": (
@@ -333,6 +328,7 @@ def _recorded_rows(
 ) -> list[FieldDifference]:
     """Engine and precision, shown even when the two sides match."""
     fields = (
+        "adapter",
         "comparison_axis",
         "engine",
         "server_version",

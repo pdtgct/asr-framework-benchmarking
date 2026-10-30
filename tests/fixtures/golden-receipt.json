@@ -1,5 +1,5 @@
 {
-  "schema_version": "asrbench-receipt/4",
+  "schema_version": "asrbench-receipt/5",
   "run_id": "golden",
   "started_at": "2026-01-01T00:00:00Z",
   "finished_at": "2026-01-01T00:00:01Z",
@@ -15,7 +15,7 @@
     "CLIENT_LOCATION_SAME_REGION": "same-region",
     "CLIENT_LOCATION_WAN": "wan",
     "COMPARISON_AXIS": "engine",
-    "COMPARISON_KEY_DEFINITION": "sha256 of the canonical JSON texts of the workload fingerprint, the hard target identity, the hard software identity, and the hard hardware identity, in that order, joined by U+001F. The hard target identity is the checkpoint id, revision, and source. It is not target.model and not server_version. The comparison axis is engine: engine name, engine version, transport, and server_version are recorded beside the key and a mismatch does not refuse. chunk_ms, att_context_right, lookahead frame count, and cadence are inside the workload fingerprint. The millisecond label is not. Decode features in that fingerprint are language, punctuation, diarization, interim_results, decoder, language_model, and enable_word_time_offsets. Hard software identity includes normalization policy, percentile method, SCHEMA_VERSION, and MEASUREMENT_SEMANTICS_VERSION. Precision is recorded and is not this key. Warn-only mismatches are listed and do not refuse.",
+    "COMPARISON_KEY_DEFINITION": "sha256 of the canonical JSON texts of the workload fingerprint, the hard target identity, the hard software identity, and the hard hardware identity, in that order, joined by U+001F. The hard target identity is the checkpoint id, revision, and source. It is not target.model and not server_version. The comparison axis is engine: engine name, engine version, transport, and server_version are recorded beside the key and a mismatch does not refuse. The adapter name is recorded with the transport and is not hard software identity. chunk_ms, att_context_right, lookahead frame count, and cadence are inside the workload fingerprint. The millisecond label is not. Decode features in that fingerprint are language, punctuation, diarization, interim_results, decoder, language_model, and enable_word_time_offsets. Hard software identity includes normalization policy, percentile method, SCHEMA_VERSION, and MEASUREMENT_SEMANTICS_VERSION. Precision is recorded and is not this key. Warn-only mismatches are listed and do not refuse.",
     "COMPLETION_FRACTION_DEFINITION": "Fraction of measured sessions that completed. A named policy a preset may select in place of the steady-interval condition. It is not that condition.",
     "CORPUS_NORMALIZATION_DEFINITION": "corpus_reference applies full normalization: case-fold, strip control tags, strip punctuation, normalize English cardinals (en_cardinals_v1, 0 through 999, including the 'and' form), and collapse whitespace.",
     "DEFAULT_LOOKAHEAD_IDENTITY_POLICY": "client_declared",
@@ -24,7 +24,7 @@
     "DEFAULT_SUSTAINABILITY_POLICY": "steady_interval",
     "DIGEST_COVERS_PCM16": "pcm16_payload",
     "E2E_RTFX_CLOCK": "client_monotonic/first_audio_sent_to_final_received",
-    "E2E_RTFX_DEFINITION": "Per measured session, offered audio seconds divided by the client-monotonic interval from the first audio sample sent to the final result received. Real-time pacing caps this near 1. Read it as kept up, not as speed. A session missing either timestamp stays in n_total and is absent from n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency.",
+    "E2E_RTFX_DEFINITION": "Per measured session, offered audio seconds divided by the client-monotonic interval from the first audio sample sent to the final result received. Real-time pacing caps this near 1. Read it as kept up, not as speed. A session that did not complete, including a timeout, a protocol error, or an early final on a failed stream, stays in n_total and contributes no ratio. A completed session missing either timestamp stays in n_total and is absent from n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency.",
     "EMISSION_LAG_CLOCK": "client_monotonic/word_audio_end_to_first_appearance",
     "EMISSION_LAG_DEFINITION": "A word's audio ending to that word's first appearance in any output. Requires construction-time ground truth: silence of an exact frame count between known utterances. Not inferred by a forced aligner or a voice-activity detector.",
     "EMISSION_LAG_UNAVAILABLE_REASON": "no_construction_ground_truth",
@@ -55,7 +55,7 @@
     "LOOKAHEAD_IDENTITY_CLIENT_DECLARED": "client_declared",
     "LOOKAHEAD_IDENTITY_DEFINITION": "An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is warn-only until an adapter reports a frame count, so naming the unused policy does not refuse a comparison.",
     "LOOKAHEAD_IDENTITY_SERVER_REPORTED": "server_reported_when_present",
-    "MEASUREMENT_SEMANTICS_VERSION": "2",
+    "MEASUREMENT_SEMANTICS_VERSION": "3",
     "MODE_OFFLINE": "offline",
     "MODE_STREAMING": "streaming",
     "NATIVE_LATENCY_CLOCK": "client_monotonic/first_audio_append_to_nonempty_transcription_delta",
@@ -92,7 +92,7 @@
     "RTFX_VALIDITY_SIMULATED": "simulated",
     "RTFX_VALIDITY_UNQUALIFIED": "pacing_fidelity_unavailable",
     "RUNNER_HANG_GUARD_DEFINITION": "The runner hang guard waits twice timeout_s, plus one timeout_s for the cohort barrier, plus the clip duration when pacing, plus 0.25 seconds. realtime-ws may spend timeout_s waiting for session.updated and timeout_s again waiting for the final, and a peer may spend timeout_s at the barrier on the slowest handshake. The adapter owns each timeout_s and may return a partial outcome. The guard replaces the outcome only when the adapter does not return.",
-    "SCHEMA_VERSION": "asrbench-receipt/4",
+    "SCHEMA_VERSION": "asrbench-receipt/5",
     "SDI_DEFINITION": "Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion.",
     "STEADY_INTERVAL_DEFINITION": "Sustainability over a declared steady interval of the cell. Unevaluable until outcomes carry that interval. Fail-closed: the clause does not pass.",
     "STEADY_INTERVAL_UNAVAILABLE_REASON": "steady_interval_not_in_outcome",
@@ -227,12 +227,11 @@
       }
     },
     "software": {
-      "adapter": "mock",
-      "measurement_semantics_version": "2",
+      "measurement_semantics_version": "3",
       "normalization_policy": "engine_vs_own_oracle",
       "package": "asrbench",
       "percentile_method": "numpy_linear",
-      "schema_version": "asrbench-receipt/4"
+      "schema_version": "asrbench-receipt/5"
     },
     "hardware": {
       "gpu_count": null,
@@ -271,6 +270,7 @@
       "tls_verify": false
     },
     "recorded": {
+      "adapter": "mock",
       "comparison_axis": "engine",
       "engine": {
         "name": null,
@@ -304,7 +304,7 @@
       "git_dirty": false
     }
   },
-  "comparison_key": "sha256:77d42bad4e420342ecbc65efb32154490540078a64d48bd14781755aa6a14d7e",
+  "comparison_key": "sha256:e6f13d227edd9908bfe3be4f7d4b6d27eab5091634773a0455d033c66ea75e26",
   "dataset": {
     "clip_id": "mock-silence-1.6s",
     "clip_digest": "sha256:16fa66a7dc98d93f2a4c5d20baf5177f59c4c37fc62face65690c11c15fe6ff9",
@@ -382,9 +382,9 @@
           "entry_index": 0,
           "cadence_ms": 320,
           "lookahead_frames": 4,
-          "first_audio_sent_s": null,
-          "last_audio_sent_s": null,
-          "final_received_s": null,
+          "first_audio_sent_s": 0.0,
+          "last_audio_sent_s": 1.125,
+          "final_received_s": 1.1875,
           "audio_progress": null,
           "word_timings": null,
           "chunk_send_times_s": null,
@@ -470,23 +470,23 @@
         },
         "e2e_rtfx": {
           "name": "e2e_rtfx",
-          "clock": "client_monotonic/first_audio_sent_to_final_received",
-          "clock_attribution": "none",
+          "clock": "mock/simulated_first_audio_sent_to_final_received",
+          "clock_attribution": "outcome",
           "clock_matches_native": false,
-          "definition": "Per measured session, offered audio seconds divided by the client-monotonic interval from the first audio sample sent to the final result received. Real-time pacing caps this near 1. Read it as kept up, not as speed. A session missing either timestamp stays in n_total and is absent from n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency.",
+          "definition": "Per measured session, offered audio seconds divided by the client-monotonic interval from the first audio sample sent to the final result received. Real-time pacing caps this near 1. Read it as kept up, not as speed. A session that did not complete, including a timeout, a protocol error, or an early final on a failed stream, stays in n_total and contributes no ratio. A completed session missing either timestamp stays in n_total and is absent from n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency.",
           "unit": "ratio",
           "percentile_method": "numpy_linear",
-          "availability": "no_samples",
-          "mean": null,
-          "minimum": null,
-          "maximum": null,
-          "p50": null,
-          "p90": null,
-          "p95": null,
-          "p99": null,
-          "n_with_measure": 0,
+          "availability": "measured",
+          "mean": 1.3473684210526315,
+          "minimum": 1.3473684210526315,
+          "maximum": 1.3473684210526315,
+          "p50": 1.3473684210526315,
+          "p90": 1.3473684210526315,
+          "p95": 1.3473684210526315,
+          "p99": 1.3473684210526315,
+          "n_with_measure": 1,
           "n_total": 1,
-          "n_samples": 0,
+          "n_samples": 1,
           "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
         },
         "frontier_rtfx": {
@@ -847,13 +847,13 @@
       },
       "e2e_rtfx_mean": {
         "values": [
-          null
+          1.3473684210526315
         ],
-        "mean": null,
-        "minimum": null,
-        "maximum": null,
+        "mean": 1.3473684210526315,
+        "minimum": 1.3473684210526315,
+        "maximum": 1.3473684210526315,
         "n_trials": 1,
-        "n_trials_with_measure": 0
+        "n_trials_with_measure": 1
       },
       "aggregate_rtfx": {
         "values": [
@@ -984,23 +984,23 @@
       },
       "e2e_rtfx": {
         "name": "e2e_rtfx",
-        "clock": "client_monotonic/first_audio_sent_to_final_received",
-        "clock_attribution": "none",
+        "clock": "mock/simulated_first_audio_sent_to_final_received",
+        "clock_attribution": "outcome",
         "clock_matches_native": false,
-        "definition": "Per measured session, offered audio seconds divided by the client-monotonic interval from the first audio sample sent to the final result received. Real-time pacing caps this near 1. Read it as kept up, not as speed. A session missing either timestamp stays in n_total and is absent from n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency.",
+        "definition": "Per measured session, offered audio seconds divided by the client-monotonic interval from the first audio sample sent to the final result received. Real-time pacing caps this near 1. Read it as kept up, not as speed. A session that did not complete, including a timeout, a protocol error, or an early final on a failed stream, stays in n_total and contributes no ratio. A completed session missing either timestamp stays in n_total and is absent from n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency.",
         "unit": "ratio",
         "percentile_method": "numpy_linear",
-        "availability": "no_samples",
-        "mean": null,
-        "minimum": null,
-        "maximum": null,
-        "p50": null,
-        "p90": null,
-        "p95": null,
-        "p99": null,
-        "n_with_measure": 0,
+        "availability": "measured",
+        "mean": 1.3473684210526315,
+        "minimum": 1.3473684210526315,
+        "maximum": 1.3473684210526315,
+        "p50": 1.3473684210526315,
+        "p90": 1.3473684210526315,
+        "p95": 1.3473684210526315,
+        "p99": 1.3473684210526315,
+        "n_with_measure": 1,
         "n_total": 1,
-        "n_samples": 0,
+        "n_samples": 1,
         "population_definition": "n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted."
       },
       "frontier_rtfx": {
