@@ -313,8 +313,10 @@ def test_riva_client_compat_requires_matching_counts() -> None:
     extra.chunk_send_times_s = [1.0, 2.0]
     extra.response_receive_times_s = [1.1, 2.3, 3.0]
     plus_one = _reduce([extra])["riva_client_compat_s"]
-    assert plus_one["availability"] == "measured"
-    assert plus_one["n_samples"] == 2
+    assert plus_one["availability"] == "invalid"
+    assert plus_one["n_samples"] == 0
+    assert plus_one["n_with_measure"] == 0
+    assert plus_one["n_total"] == 1
 
     short = session(label="short")
     short.chunk_send_times_s = [1.0, 2.0]
@@ -328,14 +330,142 @@ def test_riva_client_compat_requires_matching_counts() -> None:
     assert absent["availability"] == "unavailable"
 
 
-def test_frontier_lag_does_not_clamp() -> None:
+def test_frontier_lag_uses_the_processed_frontier() -> None:
     outcome = session(label="lag")
     outcome.first_audio_sent_s = 5.0
     outcome.audio_progress = _progress([(0.2, 5.1, 0.4)])
     lag = _reduce([outcome])["frontier_lag_s"]
-    # 5.1 - (5.0 + 0.4) = -0.3
+    # 5.1 - (5.0 + 0.2). The sent duration 0.4 is not the frontier.
     assert lag["availability"] == "measured"
-    assert lag["minimum"] == pytest.approx(-0.3)
+    assert lag["minimum"] == pytest.approx(-0.1)
+    assert lag["clock"].endswith("response_receive_minus_audio_processed")
+
+    behind = session(label="behind")
+    behind.first_audio_sent_s = 0.0
+    behind.audio_progress = _progress([(0.2, 1.6, 1.6)])
+    lagged = _reduce([behind])["frontier_lag_s"]
+    assert lagged["minimum"] == pytest.approx(1.4)
+
+    decreased = session(label="drop")
+    decreased.first_audio_sent_s = 0.0
+    decreased.audio_progress = _progress([(1.0, 1.0, 0.2), (0.4, 1.5, 0.8)])
+    bad = _reduce([decreased])["frontier_lag_s"]
+    assert bad["availability"] == "invalid"
+    assert bad["reason"] == "audio_processed_decreased"
+    assert bad["p50"] is None
+    assert bad["n_with_measure"] == 0
+    assert bad["n_total"] == 1
+
+    other = session(label="ok")
+    other.first_audio_sent_s = 0.0
+    other.audio_progress = _progress([(0.2, 0.3, 0.2)])
+    poisoned = _reduce([decreased, other])["frontier_lag_s"]
+    assert poisoned["availability"] == "invalid"
+    assert poisoned["n_with_measure"] == 0
+    assert poisoned["n_total"] == 2
+    assert poisoned["p50"] is None
+
+    missing = _reduce([session(label="none")])["frontier_lag_s"]
+    assert missing["availability"] == "unavailable"
+    assert missing["reason"] == "audio_processed_or_first_audio_absent"
+    assert missing["n_total"] == 1
+    assert missing["n_with_measure"] == 0
+
+
+def test_frontier_rtfx_counts_a_session_only_when_it_has_a_ratio() -> None:
+    held = session(label="held")
+    held.audio_progress = _progress([(0.4, 1.0, 0.4)])
+    moved = session(label="moved")
+    moved.audio_progress = _progress([(0.0, 1.0, 0.2), (0.5, 2.0, 0.8)])
+    block = _reduce([held, moved, session(label="none")])["frontier_rtfx"]
+    assert block["n_total"] == 3
+    assert block["n_with_measure"] == 1
+    assert block["n_samples"] == 1
+    assert block["availability"] == "partial"
+    only = _reduce([held])["frontier_rtfx"]
+    assert only["n_total"] == 1
+    assert only["n_with_measure"] == 0
+    assert only["availability"] == "no_samples"
+    assert only["reason"] == "audio_processed_has_no_interval"
+
+
+def test_declared_but_unsent_word_offsets_do_not_compare(
+    tmp_path: Path,
+) -> None:
+    from asrbench.adapters.mock import MockAdapter
+    from asrbench.adapters.nim_realtime import NimRealtimeAdapter
+    from asrbench.adapters.riva_grpc import RivaGrpcAdapter
+    from asrbench.fingerprint import (
+        WORD_OFFSET_TRANSPORTS,
+        word_offsets_sent,
+        workload_fingerprint,
+    )
+
+    weights = "nvidia/nemotron-3.5-asr-streaming-0.6b"
+    shared: dict[tuple[str, ...], Any] = {
+        ("target", "checkpoint_id"): weights,
+        ("workload", "enable_word_time_offsets"): True,
+        ("target", "transport_options"): {"enable_word_time_offsets": True},
+    }
+    sent = resolve(
+        env={},
+        overrides={**shared, ("target", "transport"): "riva-grpc"},
+    )
+    unsent = resolve(
+        env={},
+        overrides={**shared, ("target", "transport"): "realtime-ws"},
+    )
+    assert word_offsets_sent(sent) is True
+    assert word_offsets_sent(unsent) is False
+    assert workload_fingerprint(sent) != workload_fingerprint(unsent)
+    off: dict[tuple[str, ...], Any] = {
+        ("target", "checkpoint_id"): weights,
+        ("workload", "enable_word_time_offsets"): False,
+        ("target", "transport_options"): {"enable_word_time_offsets": False},
+    }
+    riva_off = resolve(
+        env={},
+        overrides={**off, ("target", "transport"): "riva-grpc"},
+    )
+    socket_off = resolve(
+        env={},
+        overrides={**off, ("target", "transport"): "realtime-ws"},
+    )
+    assert workload_fingerprint(riva_off) == workload_fingerprint(socket_off)
+    assert frozenset({"nim-realtime", "riva-grpc"}) == WORD_OFFSET_TRANSPORTS
+    assert (
+        "enable_word_time_offsets" in RivaGrpcAdapter.supported_workload_options
+    )
+    assert (
+        "enable_word_time_offsets"
+        in NimRealtimeAdapter.supported_workload_options
+    )
+    assert (
+        "enable_word_time_offsets" not in MockAdapter.supported_workload_options
+    )
+
+    left = _run(tmp_path, "offsets-sent", _checkpoint())
+    right = json.loads(json.dumps(left))
+
+    def _declare(receipt: dict[str, Any], transport: str) -> None:
+        target = receipt["resolved_config"]["target"]
+        workload = receipt["resolved_config"]["workload"]
+        assert isinstance(target, dict)
+        assert isinstance(workload, dict)
+        target["transport"] = transport
+        target["checkpoint_id"] = weights
+        options = dict(target["transport_options"])
+        options["enable_word_time_offsets"] = True
+        target["transport_options"] = options
+        workload["enable_word_time_offsets"] = True
+
+    _declare(left, "riva-grpc")
+    _declare(right, "realtime-ws")
+    refused = compare_receipts(left, right)
+    assert refused.status == "refused"
+    assert any(
+        "word_time_offsets_sent" in item.field for item in refused.differences
+    )
 
 
 def test_adapter_and_transport_do_not_refuse(tmp_path: Path) -> None:

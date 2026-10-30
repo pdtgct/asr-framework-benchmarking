@@ -166,6 +166,7 @@ class RivaGrpcAdapter:
             "punctuation",
             "diarization",
             "interim_results",
+            "enable_word_time_offsets",
         }
     )
 

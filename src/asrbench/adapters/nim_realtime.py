@@ -182,7 +182,12 @@ class NimRealtimeAdapter:
 
     name = "nim-realtime"
     supported_workload_options = frozenset(
-        {"language", "punctuation", "diarization"}
+        {
+            "language",
+            "punctuation",
+            "diarization",
+            "enable_word_time_offsets",
+        }
     )
 
     def __init__(

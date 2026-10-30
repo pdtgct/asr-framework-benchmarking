@@ -387,6 +387,7 @@ _OPTION_NAMES = (
     "interim_results",
     "transcript_policy",
     "mode",
+    "enable_word_time_offsets",
 )
 _OPTION_DEFAULTS = WorkloadSpec()
 

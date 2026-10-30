@@ -23,6 +23,7 @@ from asrbench.fingerprint import (
     COMPARISON_EXCLUSIONS,
     comparison_key,
     identity_blocks,
+    word_offsets_sent,
     workload_fingerprint,
     workload_material,
 )
@@ -168,7 +169,10 @@ def _view(receipt: dict[str, Any]) -> dict[str, Any]:
     return {
         "config": config,
         "workload_fingerprint": recomputed_fp,
-        "workload_material": workload_material(config.workload),
+        "workload_material": workload_material(
+            config.workload,
+            word_offsets_sent=word_offsets_sent(config),
+        ),
         "stored_workload_fingerprint": _get(
             receipt, "fingerprints", "workload"
         ),
@@ -257,9 +261,12 @@ def _blocks(
 
     Measurement semantics and schema version come from the receipt, not
     from the installed package. A hand edit of ``identity.warn`` that
-    does not match the probe is not what is compared.
+    does not match the probe is not what is compared. The recorded
+    adapter is the injected name stored on the receipt, not
+    ``target.transport``.
     """
     probe_hw = _mapping(receipt, "probe", "hardware")
+    stored_recorded = _mapping(receipt, "identity", "recorded")
     probe_sw = _mapping(receipt, "probe", "software")
     stored_warn = _mapping(receipt, "identity", "warn")
     stored_software = _mapping(receipt, "identity", "software")
@@ -271,6 +278,9 @@ def _blocks(
 
     schema = receipt.get("schema_version")
     semantics = stored_software.get("measurement_semantics_version")
+    recorded_adapter = stored_recorded.get("adapter")
+    if not isinstance(recorded_adapter, str) or not recorded_adapter:
+        recorded_adapter = config.target.transport
     return identity_blocks(
         config,
         {
@@ -288,7 +298,7 @@ def _blocks(
             "system": str(pick(probe_hw, "system", "")),
         },
         {
-            "adapter": config.target.transport,
+            "adapter": recorded_adapter,
             "git_commit": str(pick(probe_sw, "git_commit", "unknown")),
             "git_dirty": bool(pick(probe_sw, "git_dirty", False)),
             "measurement_semantics_version": (

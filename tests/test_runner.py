@@ -442,6 +442,74 @@ def test_barrier_wait_plus_later_work_keeps_the_outcome(tmp_path: Path) -> None:
     assert waiting["interim_texts"] == ["kept"]
 
 
+def test_unsent_word_offsets_are_refused_before_the_run(
+    tmp_path: Path,
+) -> None:
+    class Closed:
+        name = "realtime-ws"
+        supported_workload_options: frozenset[str] = frozenset()
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del request, admission_barrier, progress_callback
+            raise AssertionError("unsent word offsets must be refused first")
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "enable_word_time_offsets"): True,
+            ("target", "transport_options"): {
+                "enable_word_time_offsets": True,
+            },
+            ("workload", "lanes"): 1,
+            ("workload", "iterations"): 1,
+            ("workload", "trials"): 1,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    with pytest.raises(ConfigError, match="enable_word_time_offsets"):
+        _drive(config, tmp_path, "offsets", Closed())
+
+
+def test_injected_adapter_name_compares_to_itself(tmp_path: Path) -> None:
+    from asrbench.compare import compare_receipts
+
+    class Named:
+        name = "custom-adapter"
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del admission_barrier, progress_callback
+            return _success(request)
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "lanes"): 1,
+            ("workload", "iterations"): 1,
+            ("workload", "trials"): 1,
+            ("workload", "warmup"): 0,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    receipt = _drive(config, tmp_path, "named", Named())
+    assert receipt["identity"]["recorded"]["adapter"] == "custom-adapter"
+    recorded = receipt["identity"]["recorded"]["engine"]
+    assert recorded["transport"] == "mock"
+    copy = json.loads(json.dumps(receipt))
+    assert compare_receipts(receipt, copy).status == "comparable"
+
+
 def test_unsupported_workload_option_is_refused_before_the_run(
     tmp_path: Path,
 ) -> None:

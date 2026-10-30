@@ -568,6 +568,8 @@ def _frontier_rtfx(
         if status == "unavailable":
             absent += 1
             continue
+        if not ratios:
+            continue
         measured_sessions += 1
         samples.extend(ratios)
     publish = invalid == 0
@@ -576,25 +578,29 @@ def _frontier_rtfx(
         reason: str | None = d.FRONTIER_RTFX_INVALID_REASON
         shown: list[float] = []
         with_measure = 0
-    elif measured_sessions == 0:
+    elif measured_sessions == 0 and absent == len(outcomes):
         availability = "unavailable"
         reason = d.FRONTIER_RTFX_UNAVAILABLE_REASON
         shown = []
         with_measure = 0
+    elif measured_sessions == 0:
+        availability = "no_samples"
+        reason = (
+            "audio_processed_absent_on_some_sessions"
+            if absent
+            else "audio_processed_has_no_interval"
+        )
+        shown = []
+        with_measure = 0
     elif absent:
-        availability = "partial" if samples else "no_samples"
+        availability = "partial"
         reason = "audio_processed_absent_on_some_sessions"
         shown = samples
         with_measure = measured_sessions
-    elif samples:
+    else:
         availability = "measured"
         reason = None
         shown = samples
-        with_measure = measured_sessions
-    else:
-        availability = "no_samples"
-        reason = "audio_processed_has_no_interval"
-        shown = []
         with_measure = measured_sessions
     stats = _percentiles(shown, method) if shown else _blank_stats()
     return {
@@ -616,22 +622,34 @@ def _frontier_rtfx(
     }
 
 
-def _lags_for(outcome: SessionOutcome) -> list[float] | None:
-    """Return frontier lags, or ``None`` when the clocks are absent."""
-    if outcome.audio_progress is None or outcome.first_audio_sent_s is None:
-        return None
+def _lags_for(outcome: SessionOutcome) -> tuple[str, list[float]]:
+    """Return ``invalid``, ``unavailable``, or ``measured`` and lags.
+
+    Lag is receive time minus the sum of first-audio-sent and
+    ``audio_processed``. A decrease is invalid. A missing frontier or
+    first-audio stamp is unavailable. The audio duration sent is not
+    this frontier.
+    """
+    progress = outcome.audio_progress
+    if progress is None:
+        return "unavailable", []
+    processed = [float(item["audio_processed_s"]) for item in progress]
+    if _decreased(processed):
+        return "invalid", []
+    if outcome.first_audio_sent_s is None:
+        return "unavailable", []
     origin = outcome.first_audio_sent_s
-    return [
-        float(item["received_s"]) - (origin + float(item["audio_sent_s"]))
-        for item in outcome.audio_progress
+    return "measured", [
+        float(item["received_s"]) - (origin + processed[index])
+        for index, item in enumerate(progress)
     ]
 
 
 def _lag_samples(outcomes: list[SessionOutcome]) -> list[float]:
     found: list[float] = []
     for outcome in outcomes:
-        lags = _lags_for(outcome)
-        if lags:
+        status, lags = _lags_for(outcome)
+        if status == "measured":
             found.extend(lags)
     return found
 
@@ -694,15 +712,66 @@ def _pooled_clock(
 def _frontier_lag(
     outcomes: list[SessionOutcome], method: str
 ) -> dict[str, Any]:
-    return _pooled_clock(
-        name="frontier_lag_s",
-        clock=d.FRONTIER_LAG_CLOCK,
-        definition=d.FRONTIER_LAG_DEFINITION,
-        method=method,
-        outcomes=outcomes,
-        read=_lags_for,
-        absent_reason="audio_processed_or_first_audio_absent",
-    )
+    """Pool frontier lag. One decreasing stream publishes nothing."""
+    invalid = 0
+    absent = 0
+    measured_sessions = 0
+    samples: list[float] = []
+    for outcome in outcomes:
+        status, lags = _lags_for(outcome)
+        if status == "invalid":
+            invalid += 1
+            continue
+        if status == "unavailable":
+            absent += 1
+            continue
+        if not lags:
+            continue
+        measured_sessions += 1
+        samples.extend(lags)
+    if invalid:
+        availability = "invalid"
+        reason: str | None = d.FRONTIER_LAG_INVALID_REASON
+        shown: list[float] = []
+        with_measure = 0
+    elif measured_sessions == 0 and absent == len(outcomes):
+        availability = "unavailable"
+        reason = d.FRONTIER_LAG_UNAVAILABLE_REASON
+        shown = []
+        with_measure = 0
+    elif measured_sessions == 0:
+        availability = "no_samples"
+        reason = d.FRONTIER_LAG_UNAVAILABLE_REASON if absent else None
+        shown = []
+        with_measure = 0
+    elif absent:
+        availability = "partial"
+        reason = d.FRONTIER_LAG_UNAVAILABLE_REASON
+        shown = samples
+        with_measure = measured_sessions
+    else:
+        availability = "measured"
+        reason = None
+        shown = samples
+        with_measure = measured_sessions
+    stats = _percentiles(shown, method) if shown else _blank_stats()
+    return {
+        "name": "frontier_lag_s",
+        "clock": d.FRONTIER_LAG_CLOCK,
+        "clock_attribution": "outcome" if shown else "none",
+        "clock_matches_native": bool(shown),
+        "definition": d.FRONTIER_LAG_DEFINITION,
+        "unit": "s",
+        "percentile_method": method,
+        "availability": availability,
+        "reason": reason,
+        **stats,
+        "n_with_measure": with_measure,
+        "n_total": len(outcomes),
+        "n_samples": len(shown),
+        "n_unavailable_sessions": absent,
+        "population_definition": d.POPULATION_DEFINITION,
+    }
 
 
 def _word_offsets(outcome: SessionOutcome) -> list[float] | None:
@@ -761,7 +830,7 @@ def _riva_pairs(outcome: SessionOutcome) -> tuple[str, list[float]]:
     receives = outcome.response_receive_times_s
     if sends is None or receives is None:
         return "unavailable", []
-    if len(receives) not in {len(sends), len(sends) + 1}:
+    if len(receives) != len(sends):
         return "invalid", []
     return "measured", [
         receives[index] - sends[index] for index in range(len(sends))
@@ -1768,8 +1837,8 @@ def _session_meets(
         if latency is None or latency > pass_policy.latency_slo_s:
             return False
     elif pass_policy.latency_metric == d.LATENCY_METRIC_FRONTIER_LAG:
-        lags = _lags_for(outcome)
-        if not lags:
+        status, lags = _lags_for(outcome)
+        if status != "measured" or not lags:
             return False
         observed = percentile(
             lags, pass_policy.latency_percentile, percentile_method

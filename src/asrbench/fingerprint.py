@@ -4,7 +4,9 @@ The workload fingerprint covers offered work. It includes the reference
 transcript's digest: a silent reference swap would otherwise compare as
 the same work and report a WER delta that is the reference, not the
 server. It excludes the lookahead millisecond label, clip path, licence
-text, and every run-observation field.
+text, and every run-observation field. ``word_time_offsets_sent`` is
+true only when the workload asks for word offsets and the transport
+sends them.
 
 The comparison key hashes four hard components. The hard target is the
 checkpoint. The engine — name, version, transport, and server version —
@@ -127,12 +129,35 @@ def _population_material(
     ]
 
 
+#: Transports that put ``enable_word_time_offsets`` on the wire.
+#: Declaring the flag on any other transport does not match a run that
+#: sent it.
+WORD_OFFSET_TRANSPORTS = frozenset({"nim-realtime", "riva-grpc"})
+
+
+def word_offsets_sent(config: ResolvedConfig) -> bool:
+    """Return whether this run both asks for word offsets and sends them.
+
+    Args:
+        config: A resolved config.
+
+    Returns:
+        True when the workload flag is set and ``target.transport`` puts
+        that flag on the wire.
+    """
+    return (
+        config.workload.enable_word_time_offsets
+        and config.target.transport in WORD_OFFSET_TRANSPORTS
+    )
+
+
 def workload_material(
     workload: WorkloadSpec,
     *,
     blank_operating_point: bool = False,
     blank_lanes: bool = False,
     blank_rate: bool = False,
+    word_offsets_sent: bool = False,
 ) -> dict[str, Any]:
     """Return the structure the workload fingerprint hashes.
 
@@ -150,6 +175,9 @@ def workload_material(
             streams projection groups on that fingerprint.
         blank_rate: When true, ``rate_rps`` is nulled so a later
             offered-load sweep can share a capacity series.
+        word_offsets_sent: Whether the transport puts word offsets on
+            the wire. The hashed field stays false unless the workload
+            also asks for them.
 
     Returns:
         A JSON-ish dict. Millisecond labels, paths, the per-stream
@@ -176,6 +204,9 @@ def workload_material(
         "chunk_ms": workload.chunk_ms,
         "decoder": workload.decoder,
         "enable_word_time_offsets": workload.enable_word_time_offsets,
+        "word_time_offsets_sent": (
+            word_offsets_sent and workload.enable_word_time_offsets
+        ),
         "clip_digest": workload.clip.digest,
         "clip_duration_s": workload.clip.duration_s,
         "clip_generator": workload.clip.generator,
@@ -211,7 +242,12 @@ def workload_fingerprint(config: ResolvedConfig) -> str:
     Returns:
         A prefixed sha256 digest.
     """
-    return fingerprint(workload_material(config.workload))
+    return fingerprint(
+        workload_material(
+            config.workload,
+            word_offsets_sent=word_offsets_sent(config),
+        )
+    )
 
 
 def observation_material(run: RunSpec) -> dict[str, Any]:
@@ -483,6 +519,7 @@ def group_key(
         blank_operating_point=blank_operating_point,
         blank_lanes=blank_lanes,
         blank_rate=blank_rate,
+        word_offsets_sent=word_offsets_sent(config),
     )
     return join_components(
         [

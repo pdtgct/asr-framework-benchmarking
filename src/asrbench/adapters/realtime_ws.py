@@ -80,9 +80,10 @@ class RealtimeWebSocketAdapter:
     """Drives one ``/v1/realtime`` session over an aiohttp WebSocket."""
 
     name = "realtime-ws"
-    #: Workload fields this dialect does not put on ``session.update``.
-    #: Cadence is sent. The runner refuses a non-default value outside
-    #: this set before the session starts.
+    #: Workload fields this dialect puts on ``session.update``. Cadence
+    #: is sent separately. Word time offsets are not a field of this
+    #: dialect. The runner refuses a non-default value outside this set
+    #: before the session starts.
     supported_workload_options: frozenset[str] = frozenset()
 
     def __init__(self, session: aiohttp.ClientSession) -> None:
