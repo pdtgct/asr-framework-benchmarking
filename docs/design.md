@@ -125,8 +125,13 @@ score.
 
 ### Receipt and reporters
 
-The receipt is JSON, authoritative, and one per run. It carries the schema version;
-the complete raw per-session outcomes; workload and observation fingerprints; the
+The receipt is JSON, authoritative, and one per run. Schema
+`asrbench-receipt/4` and measurement semantics `2` replace schema 3 and
+semantics 1. A schema 3 receipt does not load: resolved config now requires
+the checkpoint and the added workload fields, and the reducer formulas
+changed. A consumer of either old version must re-run. The receipt carries
+the schema version; the complete raw per-session outcomes; workload and
+observation fingerprints; the
 exact clock definitions as emitted constants; server, model, software, and hardware
 identity; attempted and successful audio denominators; trial identity with raw trial
 aggregates beside the cross-trial summary; and public dataset attribution with clip
@@ -149,21 +154,26 @@ comparison_key = sha256(workload_fingerprint ‖ target_identity
                         ‖ software_identity ‖ hardware_identity)
 ```
 
-Hard target identity is the model, the transport, `transport_options`, and the
-server version. `channel_options` — keepalive and maximum message size — are
-warn-only, so a channel tweak does not refuse a comparison. Hard software
-identity is the adapter, the normalization policy,
+Hard target identity is the checkpoint: id, revision, and source. It is not
+`target.model` and not `server_version`. The comparison axis is the engine.
+Engine name, engine version, transport, and server version are recorded beside
+the key, and a mismatch does not refuse. Precision is recorded under the
+NVIDIA names and is not a key. `channel_options` — keepalive and maximum
+message size — are warn-only, as are `target.model`, `transport_options`,
+batch size, `max_num_seqs`, CUDA, torch, driver, and client location.
+Hard software identity is the adapter, the normalization policy,
 the percentile method, `SCHEMA_VERSION`, and `MEASUREMENT_SEMANTICS_VERSION`.
 Hard hardware identity is GPU name, count, and memory, plus
 `gpu_identity_source`: `server_declared` when the target spec names a server
 GPU, otherwise `client_probe` from nvidia-smi. Those two sources are not mixed.
 
-Warn-only fields are stored and listed on a mismatch, and they do not refuse:
-driver version, Python version, this package's git commit and dirty bit,
-endpoint URL, TLS verification, the auth variable name, package version, the
-lookahead-identity policy, the client CPU and host, and `channel_options`.
-Git commit is read from asrbench's own checkout. `docs/receipt-schema.md` quotes
-`COMPARISON_KEY_DEFINITION` and `WARN_ONLY_COMPARISON_DEFINITION`.
+The workload fingerprint refuses on chunk size, NVIDIA right-context `r`
+(`att_context_right`), lookahead frame count, cadence, and the decode
+features: language, punctuation, diarization, interim results, decoder,
+language model, and word time offsets. Warn-only fields are stored and listed
+on a mismatch, and they do not refuse. Git commit is read from asrbench's own
+checkout. `docs/receipt-schema.md` quotes `COMPARISON_KEY_DEFINITION`,
+`WARN_ONLY_COMPARISON_DEFINITION`, and `PRECISION_RECORD_DEFINITION`.
 
 Comparison refuses when a hard field differs and names that field. Forcing a
 comparison requires an explicit reason, recorded only when the result is

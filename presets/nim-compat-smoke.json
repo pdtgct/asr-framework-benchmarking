@@ -17,6 +17,8 @@
     "cadence_ms": 160,
     "lookahead_frames": 2,
     "lookahead_ms_label": 160,
+    "att_context_right": 1,
+    "enable_word_time_offsets": false,
     "lanes": 1,
     "iterations": 3,
     "warmup": 1,
@@ -33,7 +35,8 @@
         "lanes": 1,
         "cadence_ms": 160,
         "lookahead_frames": 2,
-        "lookahead_ms_label": 160
+        "lookahead_ms_label": 160,
+        "att_context_right": 1
       }
     ]
   },
@@ -41,6 +44,8 @@
     "endpoint_url": "grpc.nvcf.nvidia.com:443",
     "transport": "riva-grpc",
     "model": "server-reported-model-name",
+    "engine_name": "nim",
+    "checkpoint_source": "unverified",
     "auth_env": "NVIDIA_API_KEY",
     "tls_verify": true,
     "transport_options": {

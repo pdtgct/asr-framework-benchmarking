@@ -50,6 +50,26 @@ On read speech, number-formatting differences dominate WER and will swamp the
 streaming behavior being measured. A word error rate published without its policy
 name is not a measurement.
 
+## Headline streaming measures
+
+The #177 headlines are emitted constants. This file names them. The receipt
+and [`receipt-schema.md`](receipt-schema.md) quote the spelling.
+
+| Measure | Constant |
+|---|---|
+| End-to-end RTFx | `E2E_RTFX_DEFINITION` |
+| Finalization latency | `FINALIZATION_DEFINITION` |
+| Processing-frontier RTFx | `FRONTIER_RTFX_DEFINITION` |
+| Audio frontier lag | `FRONTIER_LAG_DEFINITION` |
+| Word latency | `WORD_LATENCY_DEFINITION` |
+| Aggregate RTFx | `AGGREGATE_RTFX_DEFINITION` |
+| Riva 1:1 compat | `RIVA_CLIENT_COMPAT_DEFINITION` |
+
+Percentile tables name the method. `numpy_linear` is the default.
+`floor_index` is `PERCENTILE_FLOOR_INDEX_DEFINITION`, for a table placed
+next to Riva's numbers. WER stays micro-averaged under the named policy.
+`corpus_reference` is the corpus comparison.
+
 ## 2. Streaming latency
 
 | Metric | Clock and origin |

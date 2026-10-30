@@ -24,6 +24,14 @@ from typing import Any
 from asrbench.canonical import leaves
 from asrbench.clips import ClipError, pin_digest
 from asrbench.definitions import (
+    CHECKPOINT_SOURCE_HUGGINGFACE,
+    CHECKPOINT_SOURCE_NGC,
+    CHECKPOINT_SOURCE_UNVERIFIED,
+    CLIENT_LOCATION_LOOPBACK,
+    CLIENT_LOCATION_SAME_REGION,
+    CLIENT_LOCATION_WAN,
+    LATENCY_METRIC_FINALIZATION,
+    LATENCY_METRIC_FRONTIER_LAG,
     LATENCY_METRIC_RESPONSE,
     LATENCY_METRIC_TTFS,
     LOOKAHEAD_IDENTITY_CLIENT_DECLARED,
@@ -62,12 +70,29 @@ _SUSTAINABILITY = {
     SUSTAINABILITY_STEADY_INTERVAL,
     SUSTAINABILITY_COMPLETION_FRACTION,
 }
-_LATENCY_METRICS = {LATENCY_METRIC_TTFS, LATENCY_METRIC_RESPONSE}
+_LATENCY_METRICS = {
+    LATENCY_METRIC_TTFS,
+    LATENCY_METRIC_RESPONSE,
+    LATENCY_METRIC_FINALIZATION,
+    LATENCY_METRIC_FRONTIER_LAG,
+}
+_CHECKPOINT_SOURCES = {
+    CHECKPOINT_SOURCE_HUGGINGFACE,
+    CHECKPOINT_SOURCE_NGC,
+    CHECKPOINT_SOURCE_UNVERIFIED,
+}
+_CLIENT_LOCATIONS = {
+    CLIENT_LOCATION_LOOPBACK,
+    CLIENT_LOCATION_SAME_REGION,
+    CLIENT_LOCATION_WAN,
+}
+_PRECISION_TOKENS = {"FP32", "FP16", "FP8", "INT8"}
 _OWNED_BY_POPULATION = {
     ("workload", "lanes"),
     ("workload", "cadence_ms"),
     ("workload", "lookahead_frames"),
     ("workload", "lookahead_ms_label"),
+    ("workload", "att_context_right"),
 }
 _SECTIONS = {
     "workload": WorkloadSpec,
@@ -131,6 +156,22 @@ def _bindings() -> tuple[Binding, ...]:
             ("workload", "lookahead_ms_label"),
             "millisecond label carried beside the frame count; not identity",
         ),
+        (
+            ("workload", "att_context_right"),
+            "NVIDIA right-context frames r; hard operating point",
+        ),
+        (
+            ("workload", "decoder"),
+            "decoder name, such as greedy or beam; hard decode identity",
+        ),
+        (
+            ("workload", "language_model"),
+            "language model, such as none or n-gram; hard decode identity",
+        ),
+        (
+            ("workload", "enable_word_time_offsets"),
+            "request word end times; hard workload identity",
+        ),
         (("workload", "lanes"), "closed-loop parallel lanes"),
         (("workload", "iterations"), "measured iterations per lane"),
         (
@@ -174,7 +215,44 @@ def _bindings() -> tuple[Binding, ...]:
         (("target", "tls_verify"), "verify TLS certificates"),
         (
             ("target", "server_version"),
-            "server image or version; hard identity when set",
+            "server image or version; recorded on the engine axis",
+        ),
+        (
+            ("target", "checkpoint_id"),
+            "checkpoint id, HF repo or NGC model; hard identity",
+        ),
+        (
+            ("target", "checkpoint_revision"),
+            "HF revision or NGC version or archive digest; hard identity",
+        ),
+        (
+            ("target", "checkpoint_source"),
+            "huggingface, ngc, or unverified",
+        ),
+        (
+            ("target", "engine_name"),
+            "serving engine name; the comparison axis, not the hard key",
+        ),
+        (
+            ("target", "engine_version"),
+            "engine version or image digest; recorded, not the hard key",
+        ),
+        (
+            ("target", "precision"),
+            "NVIDIA precision names joined with +; recorded only",
+        ),
+        (("target", "tf32"), "optional TF32 flag; recorded only"),
+        (("target", "batch_size"), "server batch size; warn-only"),
+        (("target", "max_num_seqs"), "max_num_seqs; warn-only"),
+        (
+            ("target", "gpu_memory_utilization"),
+            "GPU memory utilization; warn-only",
+        ),
+        (("target", "cuda_version"), "CUDA version; warn-only"),
+        (("target", "torch_version"), "torch version; warn-only"),
+        (
+            ("target", "client_location"),
+            "loopback, same-region, or wan; warn-only",
         ),
         (
             ("target", "server_gpu_name"),
@@ -484,6 +562,9 @@ def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
     if run.verbosity < 0:
         raise ConfigError("verbosity must be zero or positive")
     _validate_policy(run.pass_policy)
+    _validate_operating_point(workload)
+    _validate_word_offsets(workload, config.target)
+    _validate_checkpoint(config.target)
     if not config.target.endpoint_url or not config.target.transport:
         raise ConfigError("endpoint_url and transport must be non-empty")
     if not config.target.model:
@@ -714,7 +795,13 @@ def _population(value: object) -> tuple[PopulationEntry, ...]:
         payload = _object(item, f"population[{index}]")
         _unknown(
             payload,
-            {"lanes", "cadence_ms", "lookahead_frames", "lookahead_ms_label"},
+            {
+                "lanes",
+                "cadence_ms",
+                "lookahead_frames",
+                "lookahead_ms_label",
+                "att_context_right",
+            },
             f"population[{index}]",
         )
         if "lanes" not in payload:
@@ -737,6 +824,11 @@ def _population(value: object) -> tuple[PopulationEntry, ...]:
                     payload.get("lookahead_ms_label"),
                     "float | None",
                     f"{where}.lookahead_ms_label",
+                ),
+                att_context_right=_coerce(
+                    payload.get("att_context_right"),
+                    "int | None",
+                    f"{where}.att_context_right",
                 ),
             )
         )
@@ -811,7 +903,7 @@ def _derive_population(
             raise ConfigError(
                 "a multi-entry population is explicit; edit its entries "
                 "instead of --lanes, --cadence-ms, --lookahead-frames, "
-                "or --lookahead-ms-label"
+                "--lookahead-ms-label, or --att-context-right"
             )
         return config
     entry = PopulationEntry(
@@ -819,6 +911,7 @@ def _derive_population(
         cadence_ms=workload.cadence_ms,
         lookahead_frames=workload.lookahead_frames,
         lookahead_ms_label=workload.lookahead_ms_label,
+        att_context_right=workload.att_context_right,
     )
     return replace(config, workload=replace(workload, population=(entry,)))
 
@@ -841,6 +934,11 @@ def _check_population_agreement(workload: WorkloadSpec) -> None:
         workload.lookahead_ms_label,
         {entry.lookahead_ms_label for entry in population},
         "lookahead_ms_label",
+    )
+    _agree(
+        workload.att_context_right,
+        {entry.att_context_right for entry in population},
+        "att_context_right",
     )
 
 
@@ -871,6 +969,82 @@ def _validate_policy(policy: PassPolicy) -> None:
     _require_finite("accuracy_tolerance", policy.accuracy_tolerance)
     if policy.latency_slo_s < 0 or policy.accuracy_tolerance < 0:
         raise ConfigError("latency SLO and accuracy tolerance must be >= 0")
+
+
+def _validate_operating_point(workload: WorkloadSpec) -> None:
+    """Reject a blank decode name or a negative right-context count."""
+    if (
+        workload.att_context_right is not None
+        and workload.att_context_right < 0
+    ):
+        raise ConfigError("att_context_right must be zero or positive")
+    _reject_blank("decoder", workload.decoder)
+    _reject_blank("language_model", workload.language_model)
+
+
+def _validate_word_offsets(workload: WorkloadSpec, target: TargetSpec) -> None:
+    """Keep the workload key equal to the flag the adapter sends.
+
+    A missing transport option means the adapter default, false.
+    """
+    sent = target.transport_options.get("enable_word_time_offsets", False)
+    if not isinstance(sent, bool):
+        raise ConfigError(
+            "transport_options.enable_word_time_offsets must be a bool"
+        )
+    if sent != workload.enable_word_time_offsets:
+        raise ConfigError(
+            "workload.enable_word_time_offsets and "
+            "transport_options.enable_word_time_offsets disagree"
+        )
+
+
+def _validate_checkpoint(target: TargetSpec) -> None:
+    """Reject an unknown checkpoint source, precision, or client location."""
+    if target.checkpoint_source not in _CHECKPOINT_SOURCES:
+        raise ConfigError(
+            f"unknown checkpoint_source {target.checkpoint_source!r}"
+        )
+    _reject_blank("checkpoint_id", target.checkpoint_id)
+    _reject_blank("checkpoint_revision", target.checkpoint_revision)
+    _reject_blank("engine_name", target.engine_name)
+    _reject_blank("engine_version", target.engine_version)
+    _reject_blank("cuda_version", target.cuda_version)
+    _reject_blank("torch_version", target.torch_version)
+    _validate_precision(target.precision)
+    if (
+        target.client_location is not None
+        and target.client_location not in _CLIENT_LOCATIONS
+    ):
+        raise ConfigError(f"unknown client_location {target.client_location!r}")
+    if target.batch_size is not None and target.batch_size < 1:
+        raise ConfigError("batch_size must be >= 1")
+    if target.max_num_seqs is not None and target.max_num_seqs < 1:
+        raise ConfigError("max_num_seqs must be >= 1")
+    if target.gpu_memory_utilization is not None:
+        _require_finite("gpu_memory_utilization", target.gpu_memory_utilization)
+        if (
+            target.gpu_memory_utilization <= 0
+            or target.gpu_memory_utilization > 1
+        ):
+            raise ConfigError("gpu_memory_utilization must be in (0, 1]")
+
+
+def _validate_precision(value: str | None) -> None:
+    """Accept NVIDIA precision names joined with ``+``, or null."""
+    if value is None:
+        return
+    parts = value.split("+")
+    if not parts or any(part not in _PRECISION_TOKENS for part in parts):
+        raise ConfigError(
+            "precision must use FP32, FP16, FP8, or INT8, "
+            "joined with + when mixed"
+        )
+
+
+def _reject_blank(name: str, value: str | None) -> None:
+    if value is not None and value.strip() == "":
+        raise ConfigError(f"{name} must be null or non-empty")
 
 
 def _validate_server(target: TargetSpec) -> None:

@@ -39,6 +39,11 @@ def console_report(receipt: dict[str, Any]) -> str:
     pooled = summary["pooled"]
     ttfs = pooled["ttfs_s"]
     response = pooled["response_latency_s"]
+    final = pooled["finalization_s"]
+    e2e = pooled["e2e_rtfx"]
+    frontier = pooled["frontier_rtfx"]
+    aggregate = pooled["aggregate_rtfx"]
+    compat = pooled["riva_client_compat_s"]
     wer = pooled["wer"]
     rtfx = pooled["streaming_rtfx"]
     counts = pooled["counts"]
@@ -46,6 +51,7 @@ def console_report(receipt: dict[str, Any]) -> str:
     lines = [
         f"schema {receipt['schema_version']}",
         f"comparison_key {receipt['comparison_key']}",
+        f"percentile_method {ttfs['percentile_method']}",
         "conjunction "
         + ("passed" if summary["conjunction_passed"] else "FAILED"),
         "failed " + ",".join(summary["failed_clauses"]),
@@ -71,9 +77,35 @@ def console_report(receipt: dict[str, Any]) -> str:
             f"n_with_measure={wer['n_with_measure']} n_total={wer['n_total']}"
         ),
         (
+            f"finalization_s p50={final['p50']} p99={final['p99']} "
+            f"n_with_measure={final['n_with_measure']} "
+            f"n_total={final['n_total']} clock={final['clock']}"
+        ),
+        (
+            f"e2e_rtfx mean={e2e['mean']} p50={e2e['p50']} "
+            f"availability={e2e['availability']} "
+            f"n_with_measure={e2e['n_with_measure']} n_total={e2e['n_total']}"
+        ),
+        (
+            f"frontier_rtfx availability={frontier['availability']} "
+            f"p50={frontier['p50']} n_invalid={frontier['n_invalid_sessions']} "
+            f"n_unavailable={frontier['n_unavailable_sessions']} "
+            f"n_total={frontier['n_total']}"
+        ),
+        (
+            f"aggregate_rtfx value={aggregate['value']} "
+            f"offered_audio_s={aggregate['offered_audio_s']} "
+            f"benchmark_span_s={aggregate['benchmark_span_s']}"
+        ),
+        (
             f"streaming_rtfx value={rtfx['value']} validity={rtfx['validity']} "
             f"successful_audio_s={rtfx['successful_audio_s']} "
             f"attempted_audio_s={rtfx['attempted_audio_s']}"
+        ),
+        (
+            f"riva_client_compat label={compat['label']} "
+            f"availability={compat['availability']} "
+            f"p50={compat['p50']} n_total={compat['n_total']}"
         ),
         (
             "outcomes "
@@ -162,6 +194,36 @@ def vllm_report(receipt: dict[str, Any]) -> dict[str, Any]:
                 "attempted_audio_s",
             ),
         ),
+        "finalization_s": _pick(
+            pooled["finalization_s"],
+            ("mean", "p50", "p90", "p95", "p99", "n_with_measure", "n_total"),
+        ),
+        "e2e_rtfx": _pick(
+            pooled["e2e_rtfx"],
+            (
+                "mean",
+                "p50",
+                "p90",
+                "p95",
+                "p99",
+                "availability",
+                "n_with_measure",
+                "n_total",
+                "percentile_method",
+            ),
+        ),
+        "aggregate_rtfx": _pick(
+            pooled["aggregate_rtfx"],
+            ("value", "offered_audio_s", "successful_audio_s", "availability"),
+        ),
+        "frontier_rtfx": _pick(
+            pooled["frontier_rtfx"],
+            ("availability", "reason", "p50", "n_total", "percentile_method"),
+        ),
+        "riva_client_compat_s": _pick(
+            pooled["riva_client_compat_s"],
+            ("label", "availability", "reason", "percentile_method"),
+        ),
     }
 
 
@@ -170,7 +232,9 @@ def vendor_tsv(receipt: dict[str, Any]) -> str:
 
     Pooled columns describe every measured session. ``across_mean``
     columns are the mean of the per-trial scalars, which is what a
-    three-trial vendor sheet averages.
+    three-trial vendor sheet averages. ``model`` is the warn-only routing
+    name. Checkpoint, engine, and precision are the columns that name
+    the weights and the engine axis.
 
     Args:
         receipt: A receipt object.
@@ -190,8 +254,16 @@ def vendor_tsv(receipt: dict[str, Any]) -> str:
         admission: float | None = counts["admitted"] / counts["attempted"]
     else:
         admission = None
+    checkpoint = receipt["identity"]["target"]["checkpoint"]
+    engine = receipt["identity"]["recorded"]["engine"]
     columns: tuple[tuple[str, object], ...] = (
-        ("model", receipt["identity"]["target"]["model"]),
+        ("model", receipt["identity"]["warn"]["model"]),
+        ("checkpoint_id", checkpoint["id"]),
+        ("checkpoint_revision", checkpoint["revision"]),
+        ("checkpoint_source", checkpoint["source"]),
+        ("engine_name", engine["name"]),
+        ("engine_transport", engine["transport"]),
+        ("precision", receipt["identity"]["recorded"]["precision"]),
         ("lookahead_frames", workload["lookahead_frames"]),
         ("lookahead_ms_label", workload["lookahead_ms_label"]),
         ("lanes", workload["lanes"]),

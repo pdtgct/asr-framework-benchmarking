@@ -107,9 +107,10 @@ the frontier reporter:
 1. **The lookahead frame count is inside the comparison key**, not merely
    reported beside it. Two receipts at different lookaheads measure different
    operating points of the model, so pooling them is as wrong as pooling across
-   hardware. The cadence that sets that lookahead is in the key as well. The
-   frontier removes both when it groups a sweep. `chunk_ms` stays: it is
-   transmit size.
+   hardware. The cadence that sets that lookahead is in the key as well, as is
+   NVIDIA right-context `att_context_right`. The frontier removes those when it
+   groups a sweep. `chunk_ms` stays: it is transmit size. The hard model
+   identity is the checkpoint. The engine is recorded and is not the key.
 2. **The frontier is the primary panel** — accuracy against measured latency,
    one point per lookahead and cadence, Pareto edge marked — rather than a
    cadence-by-concurrency matrix. The matrix was designed on the assumption that

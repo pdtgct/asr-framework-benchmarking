@@ -82,6 +82,26 @@ def test_observation_choices_do_not_change_the_workload_fingerprint() -> None:
     assert _key(base) == _key(same_observation)
 
 
+def test_right_context_and_decoder_change_the_workload_fingerprint() -> None:
+    base = resolve(env={})
+    right = resolve(env={}, overrides={("workload", "att_context_right"): 1})
+    decoder = resolve(env={}, overrides={("workload", "decoder"): "greedy"})
+    offsets = resolve(
+        env={},
+        overrides={
+            ("workload", "enable_word_time_offsets"): True,
+            ("target", "transport_options"): {
+                "interim_every_chunks": 2,
+                "transcript": "the birch canoe slid on the smooth planks",
+                "enable_word_time_offsets": True,
+            },
+        },
+    )
+    assert workload_fingerprint(base) != workload_fingerprint(right)
+    assert workload_fingerprint(base) != workload_fingerprint(decoder)
+    assert _key(base) != _key(offsets)
+
+
 def test_chunk_and_lookahead_frames_change_the_workload_fingerprint() -> None:
     base = resolve(env={})
     chunk = resolve(env={"ASRBENCH_CHUNK_MS": "80"})

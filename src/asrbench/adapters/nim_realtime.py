@@ -175,7 +175,7 @@ class NimRealtimeAdapter:
     """Drive one NIM transcription session over a WebSocket.
 
     Channel message sizes are read from ``channel_options``. Everything
-    in ``transport_options`` is sent and is hard target identity. The
+    in ``transport_options`` is sent and is warn-only identity. The
     auth field stored here is the environment variable name for the
     mint request. gRPC keepalive is not a field of this protocol.
     """

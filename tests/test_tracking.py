@@ -16,7 +16,15 @@ def _receipt(path: Path, key: str, gpu: str) -> None:
         "summary": {"conjunction_passed": True},
         "identity": {
             "hardware": {"gpu_name": gpu},
-            "target": {"model": "mock-asr", "transport": "mock"},
+            "target": {
+                "checkpoint": {
+                    "id": "mock",
+                    "revision": "rev",
+                    "source": "unverified",
+                }
+            },
+            "warn": {"model": "mock-asr"},
+            "recorded": {"engine": {"transport": "mock"}},
             "software": {"normalization_policy": "engine_vs_own_oracle"},
         },
         "fingerprints": {

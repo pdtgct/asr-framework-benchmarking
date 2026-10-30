@@ -39,6 +39,8 @@ def test_preset_names_the_published_streaming_cell() -> None:
     assert workload["interim_results"] is True
     assert workload["lookahead_frames"] == 2
     assert workload["lookahead_ms_label"] == 160
+    assert workload["att_context_right"] == 1
+    assert workload["enable_word_time_offsets"] is False
     assert workload["language"] == "en-US"
     assert workload["iterations_per_stream"] == 3
     assert workload["trials"] == 3
@@ -58,6 +60,7 @@ def test_preset_names_the_published_streaming_cell() -> None:
         == "corpus_reference"
     )
     assert payload["run"]["pass_policy"]["first_partial_presence_min"] == 0.0
+    assert payload["run"]["pass_policy"]["latency_metric"] == "finalization"
     assert "Bearer" not in text
     assert "bb0837de" not in text
     assert "nvapi-" not in text

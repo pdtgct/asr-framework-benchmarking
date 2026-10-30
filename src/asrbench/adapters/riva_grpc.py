@@ -153,8 +153,10 @@ class RivaGrpcAdapter:
     """Drive one ``StreamingRecognize`` session over gRPC.
 
     Channel tuning is read from ``channel_options``. Everything else in
-    ``transport_options`` is sent and is hard target identity. The auth
-    field stored here is the environment variable name.
+    ``transport_options`` is sent. Those options are warn-only identity.
+    Decode features that must match, including word time offsets, are
+    workload fields. The auth field stored here is the environment
+    variable name.
     """
 
     name = "riva-grpc"
@@ -203,7 +205,7 @@ class RivaGrpcAdapter:
 
         Args:
             target: Endpoint, model, auth variable name, and options.
-                ``transport_options`` are identity. ``channel_options``
+                ``transport_options`` are warn-only. ``channel_options``
                 are keepalive and maximum message size.
 
         Returns:
@@ -444,7 +446,13 @@ class RivaGrpcAdapter:
         progress_callback: SessionProgressCallback | None,
         holder: dict[str, Any],
     ) -> None:
-        marks: dict[str, float | None] = {"first": None, "latest": None}
+        marks: dict[str, float | None] = {
+            "first": None,
+            "latest": None,
+            "audio_sent_s": 0.0,
+        }
+        outcome.chunk_send_times_s = []
+        outcome.response_receive_times_s = []
         streaming = _streaming_config(self, request, rasr, raudio)
         outcome.protocol_extras["recognition_request"] = _recognition_echo(
             self, request
@@ -485,6 +493,7 @@ class RivaGrpcAdapter:
                 now = time.monotonic()
                 if marks["first"] is None:
                     marks["first"] = now
+                    outcome.first_audio_sent_s = now
                     _progress(
                         progress_callback,
                         request.label,
@@ -492,6 +501,12 @@ class RivaGrpcAdapter:
                         bytes=len(chunk),
                     )
                 marks["latest"] = now
+                outcome.last_audio_sent_s = now
+                if outcome.chunk_send_times_s is not None:
+                    outcome.chunk_send_times_s.append(now)
+                sent = float(marks["audio_sent_s"] or 0.0)
+                sent += len(chunk) / BYTES_PER_SAMPLE / SAMPLE_RATE
+                marks["audio_sent_s"] = sent
                 yield rasr.StreamingRecognizeRequest(audio_content=chunk)
                 if request.pace and index + 1 < len(chunks):
                     await asyncio.sleep(request.chunk_ms / 1000)
@@ -509,9 +524,12 @@ class RivaGrpcAdapter:
             raise
         except Exception as error:  # noqa: BLE001 - the lane stays data
             if outcome.timed_out:
+                _drop_unset_frontier(outcome)
                 return
             self._fail_stream(outcome, error, marks, request, progress_callback)
+            _drop_unset_frontier(outcome)
             return
+        _drop_unset_frontier(outcome)
         if outcome.timed_out:
             return
         outcome.configured = True
@@ -661,6 +679,11 @@ def _consume(
     response. ``stability`` is not a latency. A result that arrives
     before any audio does not invent a latency.
     """
+    now = time.monotonic()
+    if outcome.response_receive_times_s is not None:
+        outcome.response_receive_times_s.append(now)
+    sent = marks.get("audio_sent_s")
+    audio_sent = float(sent) if isinstance(sent, float) else 0.0
     parts: list[str] = []
     if outcome.transcript is not None:
         parts.append(outcome.transcript)
@@ -670,9 +693,12 @@ def _consume(
         text = ""
         if result.alternatives:
             text = result.alternatives[0].transcript
+        _note_audio_processed(outcome, result, now, audio_sent)
         if result.is_final:
             parts.append(text)
             outcome.transcript = "".join(parts)
+            outcome.final_received_s = now
+            _note_words(outcome, result, now)
             latest = marks["latest"]
             if isinstance(latest, float):
                 latency = time.monotonic() - latest
@@ -749,6 +775,13 @@ def _mark_lane_unavailable(
     outcome.ttfs_s = None
     outcome.final_latency_s = None
     outcome.response_latencies_s = []
+    outcome.first_audio_sent_s = None
+    outcome.last_audio_sent_s = None
+    outcome.final_received_s = None
+    outcome.audio_progress = None
+    outcome.word_timings = None
+    outcome.chunk_send_times_s = None
+    outcome.response_receive_times_s = None
     outcome.timed_out = False
     outcome.error_code = code
     outcome.error_detail = detail
@@ -763,6 +796,54 @@ def _mark_protocol_error(
     outcome.error_code = code
     outcome.error_detail = detail
     outcome.protocol_errors.append({"code": code, "detail": detail})
+
+
+def _note_audio_processed(
+    outcome: SessionOutcome, result: Any, received_s: float, audio_sent_s: float
+) -> None:
+    """Record ``audio_processed`` when the installed proto has the field."""
+    descriptor = getattr(result, "DESCRIPTOR", None)
+    if descriptor is None or "audio_processed" not in descriptor.fields_by_name:
+        return
+    if outcome.audio_progress is None:
+        outcome.audio_progress = []
+    outcome.audio_progress.append(
+        {
+            "audio_processed_s": float(result.audio_processed),
+            "received_s": received_s,
+            "audio_sent_s": audio_sent_s,
+        }
+    )
+
+
+def _note_words(
+    outcome: SessionOutcome, result: Any, received_s: float
+) -> None:
+    """Record word ends. Proto ``end_time`` is milliseconds."""
+    if not result.alternatives:
+        return
+    words = getattr(result.alternatives[0], "words", None)
+    if not words:
+        return
+    if outcome.word_timings is None:
+        outcome.word_timings = []
+    for word in words:
+        outcome.word_timings.append(
+            {
+                "end_time_s": float(word.end_time) / 1000.0,
+                "final_received_s": received_s,
+            }
+        )
+
+
+def _drop_unset_frontier(outcome: SessionOutcome) -> None:
+    """Drop an all-zero frontier. Proto3 cannot tell unset from zero."""
+    progress = outcome.audio_progress
+    if not progress:
+        outcome.audio_progress = None
+        return
+    if all(item["audio_processed_s"] == 0.0 for item in progress):
+        outcome.audio_progress = None
 
 
 def _server_identity(response: Any) -> dict[str, Any]:

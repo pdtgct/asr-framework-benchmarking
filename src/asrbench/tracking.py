@@ -43,7 +43,7 @@ def build_index(paths: list[Path]) -> str:
                 "gpu_name": payload["identity"]["hardware"]["gpu_name"],
                 "lookahead_frames": workload["lookahead_frames"],
                 "lookahead_ms_label": workload["lookahead_ms_label"],
-                "model": payload["identity"]["target"]["model"],
+                "model": payload["identity"]["warn"]["model"],
                 "normalization_policy": payload["identity"]["software"][
                     "normalization_policy"
                 ],
@@ -52,7 +52,9 @@ def build_index(paths: list[Path]) -> str:
                 ],
                 "path": path.name,
                 "schema_version": payload["schema_version"],
-                "transport": payload["identity"]["target"]["transport"],
+                "transport": payload["identity"]["recorded"]["engine"][
+                    "transport"
+                ],
                 "workload_fingerprint": payload["fingerprints"]["workload"],
             }
         )
