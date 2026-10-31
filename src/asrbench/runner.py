@@ -387,6 +387,7 @@ _OPTION_NAMES = (
     "interim_results",
     "transcript_policy",
     "mode",
+    "enable_word_time_offsets",
 )
 _OPTION_DEFAULTS = WorkloadSpec()
 
@@ -520,6 +521,7 @@ async def _session(
         punctuation=config.workload.punctuation,
         diarization=config.workload.diarization,
         interim_results=config.workload.interim_results,
+        enable_word_time_offsets=config.workload.enable_word_time_offsets,
         transcript_policy=config.workload.transcript_policy,
         lookahead_frames=entry.lookahead_frames,
         workload_mode=config.workload.mode,

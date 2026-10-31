@@ -73,8 +73,8 @@ and the framework enforces them rather than documenting them.
   Engine-vs-own-oracle is raw. Engine-vs-corpus-reference is full normalization.
   Another accuracy policy needs its own hypothesis source.
 - **Two receipts are comparable only when their comparison key matches.** A silent
-  cross-hardware or cross-model delta is worse than no delta, so the tool refuses
-  rather than guessing.
+  cross-hardware or cross-checkpoint delta is worse than no delta, so the tool
+  refuses rather than guessing. The engine is the free variable.
 
 ### Cadence is an accuracy dial, not just a latency knob
 

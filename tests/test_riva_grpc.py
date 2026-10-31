@@ -325,6 +325,27 @@ def test_one_response_with_several_results_is_one_interim(
     assert first_final <= outcome.final_latency_s
 
 
+def test_audio_processed_is_one_sample_per_response(tmp_path: Path) -> None:
+    server = RunningFake(FakeRiva(mode="frontier"))
+    try:
+        outcome = asyncio.run(
+            _adapter(server.endpoint).run(
+                _request(
+                    _wav(tmp_path, 0.25),
+                    chunk_ms=100,
+                    interim_results=True,
+                )
+            )
+        )
+    finally:
+        server.stop()
+    assert outcome.terminal_status == "completed"
+    assert outcome.audio_progress is not None
+    processed = [item["audio_processed_s"] for item in outcome.audio_progress]
+    assert processed == [0.5, 1.0]
+    assert len(outcome.response_receive_times_s or []) == 3
+
+
 def test_barrier_releases_before_audio(tmp_path: Path) -> None:
     server = RunningFake(FakeRiva())
     barrier = CohortBarrier(2, timeout_s=2)

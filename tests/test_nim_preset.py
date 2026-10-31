@@ -39,6 +39,8 @@ def test_preset_names_the_published_streaming_cell() -> None:
     assert workload["interim_results"] is True
     assert workload["lookahead_frames"] == 2
     assert workload["lookahead_ms_label"] == 160
+    assert workload["att_context_right"] == 1
+    assert workload["enable_word_time_offsets"] is False
     assert workload["language"] == "en-US"
     assert workload["iterations_per_stream"] == 3
     assert workload["trials"] == 3
@@ -51,6 +53,8 @@ def test_preset_names_the_published_streaming_cell() -> None:
     assert payload["target"]["endpoint_url"] == "grpc.nvcf.nvidia.com:443"
     assert payload["target"]["transport"] == "riva-grpc"
     assert payload["target"]["model"] == "nemotron-asr-streaming"
+    assert payload["target"]["checkpoint_id"] == "nemotron-asr-streaming"
+    assert payload["target"]["checkpoint_source"] == "unverified"
     assert payload["target"]["auth_env"] == "NVIDIA_API_KEY"
     assert payload["run"]["emit_tsv"] is True
     assert (
@@ -58,6 +62,7 @@ def test_preset_names_the_published_streaming_cell() -> None:
         == "corpus_reference"
     )
     assert payload["run"]["pass_policy"]["first_partial_presence_min"] == 0.0
+    assert payload["run"]["pass_policy"]["latency_metric"] == "finalization"
     assert "Bearer" not in text
     assert "bb0837de" not in text
     assert "nvapi-" not in text
@@ -158,7 +163,9 @@ def test_smoke_preset_gates_ttfs_and_keeps_explicit_iterations(
     assert policy["accuracy_tolerance"] == 0.10
     assert policy["normalization_policy"] == "corpus_reference"
     assert policy["first_partial_presence_min"] == 1.0
-    assert payload["target"]["model"] == "server-reported-model-name"
+    assert payload["target"]["model"] == "nemotron-asr-streaming"
+    assert payload["target"]["checkpoint_id"] == "nemotron-asr-streaming"
+    assert payload["target"]["checkpoint_source"] == "unverified"
     assert payload["target"]["tls_verify"] is True
     assert options["use_ssl"] is True
     assert "allow_insecure_auth" not in options

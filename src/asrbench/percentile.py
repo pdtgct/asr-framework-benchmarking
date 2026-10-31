@@ -1,6 +1,6 @@
 """The one percentile helper in the package.
 
-Two named methods live here. Reducers call :func:`percentile` and record
+Three named methods live here. Reducers call :func:`percentile` and record
 which method produced the number. A second implementation elsewhere would
 put two answers next to one definition.
 """
@@ -11,6 +11,7 @@ import math
 from collections.abc import Sequence
 
 from asrbench.definitions import (
+    PERCENTILE_METHOD_FLOOR_INDEX,
     PERCENTILE_METHOD_NEAREST_RANK,
     PERCENTILE_METHOD_NUMPY_LINEAR,
 )
@@ -18,6 +19,7 @@ from asrbench.definitions import (
 PERCENTILE_METHODS = (
     PERCENTILE_METHOD_NUMPY_LINEAR,
     PERCENTILE_METHOD_NEAREST_RANK,
+    PERCENTILE_METHOD_FLOOR_INDEX,
 )
 
 
@@ -40,9 +42,7 @@ def percentile(
         samples: Observed values. They are copied and sorted; the argument
             is not modified.
         q: Percentile in ``[0, 100]``.
-        method: :data:`~asrbench.definitions.PERCENTILE_METHOD_NUMPY_LINEAR`
-            or
-            :data:`~asrbench.definitions.PERCENTILE_METHOD_NEAREST_RANK`.
+        method: ``numpy_linear``, ``nearest_rank``, or ``floor_index``.
 
     Returns:
         The percentile, or ``None`` when ``samples`` is empty.
@@ -75,6 +75,8 @@ def percentile(
     ordered.sort()
     if method == PERCENTILE_METHOD_NUMPY_LINEAR:
         return _numpy_linear(ordered, q)
+    if method == PERCENTILE_METHOD_FLOOR_INDEX:
+        return _floor_index(ordered, q)
     return _nearest_rank(ordered, q)
 
 
@@ -110,3 +112,18 @@ def _nearest_rank(ordered: list[float], q: float) -> float:
     rank = max(1, math.ceil(q / 100.0 * len(ordered)))
     rank = min(rank, len(ordered))
     return ordered[rank - 1]
+
+
+def _floor_index(ordered: list[float], q: float) -> float:
+    """Riva's ``sorted[floor(p * n / 100)]``, clamped into range.
+
+    Args:
+        ordered: Sorted samples, length at least 1.
+        q: Percentile in ``[0, 100]``.
+
+    Returns:
+        The selected order statistic, with no interpolation.
+    """
+    index = math.floor(q / 100.0 * len(ordered))
+    index = min(max(index, 0), len(ordered) - 1)
+    return ordered[index]

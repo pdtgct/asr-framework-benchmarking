@@ -194,6 +194,7 @@ def build_receipt(
             "software": software,
             "hardware": hardware_id,
             "warn": warn,
+            "recorded": blocks["recorded"],
         },
         "probe": {
             "hardware": {
@@ -247,6 +248,7 @@ def build_receipt(
         "lookahead": {
             "policy": config.run.lookahead_identity_policy,
             "frames": config.workload.lookahead_frames,
+            "att_context_right": config.workload.att_context_right,
             "frames_source": "client_declared",
             "millisecond_label": config.workload.lookahead_ms_label,
             "server_reported_frames": None,

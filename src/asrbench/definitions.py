@@ -24,12 +24,24 @@ from asrbench.outcome import (
 # reader does not have to know the outcome field's historical name.
 TTFS_CLOCK = NATIVE_LATENCY_CLOCK
 
-SCHEMA_VERSION = "asrbench-receipt/3"
+SCHEMA_VERSION = "asrbench-receipt/5"
 
 #: Bumped when reducer or comparison-key semantics change. Replaces the
 #: git commit in the hard comparison key, so a docs-only commit does not
 #: refuse a comparison. Git commit stays on the receipt as warn-only.
-MEASUREMENT_SEMANTICS_VERSION = "1"
+#: ``2`` adds the engine comparison axis, checkpoint identity, and the
+#: #177 headline ratios. ``3`` takes the adapter out of the hard key,
+#: keeps a failed or timed-out session out of E2E RTFx, and reads
+#: finalization as final-receive minus last-audio-sent when both stamps
+#: exist. ``4`` keeps a session that did not complete out of the
+#: finalization percentiles. ``5`` reads frontier lag against
+#: audio_processed, with the same decrease and absence gates as
+#: frontier RTFx, counts a frontier session only when it contributes a
+#: ratio, pairs Riva compat only at equal send and response counts, and
+#: hashes word_time_offsets_sent so a transport that does not send
+#: offsets does not match one that does. A consumer of ``1`` through
+#: ``4`` must re-run.
+MEASUREMENT_SEMANTICS_VERSION = "5"
 
 GPU_IDENTITY_SERVER_DECLARED = "server_declared"
 GPU_IDENTITY_CLIENT_PROBE = "client_probe"
@@ -43,7 +55,19 @@ MODE_OFFLINE = "offline"
 
 PERCENTILE_METHOD_NUMPY_LINEAR = "numpy_linear"
 PERCENTILE_METHOD_NEAREST_RANK = "nearest_rank"
+PERCENTILE_METHOD_FLOOR_INDEX = "floor_index"
 DEFAULT_PERCENTILE_METHOD = PERCENTILE_METHOD_NUMPY_LINEAR
+
+#: The one comparison axis. Fields on it are recorded and are not the key.
+COMPARISON_AXIS = "engine"
+
+CHECKPOINT_SOURCE_HUGGINGFACE = "huggingface"
+CHECKPOINT_SOURCE_NGC = "ngc"
+CHECKPOINT_SOURCE_UNVERIFIED = "unverified"
+
+CLIENT_LOCATION_LOOPBACK = "loopback"
+CLIENT_LOCATION_SAME_REGION = "same-region"
+CLIENT_LOCATION_WAN = "wan"
 
 LOOKAHEAD_IDENTITY_CLIENT_DECLARED = "client_declared"
 LOOKAHEAD_IDENTITY_SERVER_REPORTED = "server_reported_when_present"
@@ -75,7 +99,9 @@ RESPONSE_LATENCY_DEFINITION = (
 )
 FINALIZATION_DEFINITION = (
     "Seconds from the last audio sample sent to the final result "
-    "received, on the client monotonic clock."
+    "received, on the client monotonic clock. A session that did not "
+    "complete stays in n_total and contributes no sample. A negative "
+    "on a completed session is kept."
 )
 POPULATION_DEFINITION = (
     "n_with_measure counts outcomes, or samples where the metric says "
@@ -228,9 +254,12 @@ PASS_CONJUNCTION_DEFINITION = (
     "fraction, first-partial presence, the latency SLO at the declared "
     "percentile of the named latency metric, the named sustainability "
     "policy, and accuracy within tolerance under the named normalization "
-    "policy. An unevaluable clause fails the conjunction. The report "
-    "names the clause. Cross-cadence transcript agreement is not a "
-    "clause."
+    "policy. The named latency metric is ttfs, response_latency, "
+    "finalization, or frontier_lag. TTFS stays selectable and is "
+    "secondary. The headline latency measures are finalization and "
+    "frontier lag. An unevaluable clause fails the conjunction. The "
+    "report names the clause. Cross-cadence transcript agreement is "
+    "not a clause."
 )
 STEADY_INTERVAL_DEFINITION = (
     "Sustainability over a declared steady interval of the cell. "
@@ -247,13 +276,18 @@ PERCENTILE_LINEAR_DEFINITION = (
     "numpy_linear, Hyndman-Fan type 7, the NumPy default percentile: "
     "rank = (n - 1) * (q / 100), linearly interpolated between the "
     "closest order statistics. q is in [0, 100]. Empty input is absent, "
-    "not zero. This is the only percentile implementation in the "
-    "package; nearest_rank is the named alternative."
+    "not zero. nearest_rank and floor_index are the named alternatives."
 )
 PERCENTILE_NEAREST_RANK_DEFINITION = (
     "nearest_rank: 1-based rank = max(1, ceil(q / 100 * n)), clamped to "
     "n. Empty input is absent, not zero. Named alternative to "
     "numpy_linear. Not the default."
+)
+PERCENTILE_FLOOR_INDEX_DEFINITION = (
+    "floor_index: zero-based index = min(floor(q / 100 * n), n - 1) "
+    "into the sorted sample. Empty input is absent, not zero. Named "
+    "for a table placed next to Riva's published percentiles. Not the "
+    "default."
 )
 LOOKAHEAD_IDENTITY_DEFINITION = (
     "An operating point is identified by lookahead frame count. The "
@@ -277,21 +311,41 @@ HARDWARE_IDENTITY_DEFINITION = (
 COMPARISON_KEY_DEFINITION = (
     "sha256 of the canonical JSON texts of the workload fingerprint, "
     "the hard target identity, the hard software identity, and the hard "
-    "hardware identity, in that order, joined by U+001F. Lookahead "
-    "frame count is inside the workload fingerprint. The millisecond "
-    "label is not. Hard software identity includes normalization "
-    "policy, percentile method, SCHEMA_VERSION, and "
-    "MEASUREMENT_SEMANTICS_VERSION. Warn-only mismatches are listed "
-    "and do not refuse."
+    "hardware identity, in that order, joined by U+001F. The hard "
+    "target identity is the checkpoint id, revision, and source. It is "
+    "not target.model and not server_version. The comparison axis is "
+    "engine: engine name, engine version, transport, and server_version "
+    "are recorded beside the key and a mismatch does not refuse. "
+    "The adapter name is recorded with the transport and is not hard "
+    "software identity. "
+    "chunk_ms, att_context_right, lookahead frame count, and cadence "
+    "are inside the workload fingerprint. The millisecond label is not. "
+    "Decode features in that fingerprint are language, punctuation, "
+    "diarization, interim_results, decoder, language_model, and "
+    "enable_word_time_offsets. word_time_offsets_sent is true only when "
+    "that flag is set and the transport sends word offsets, so a "
+    "declaration the adapter does not send does not match a run that "
+    "sent them. Hard software identity includes "
+    "normalization policy, percentile method, SCHEMA_VERSION, and "
+    "MEASUREMENT_SEMANTICS_VERSION. Precision is recorded and is not "
+    "this key. Warn-only mismatches are listed and do not refuse."
 )
 WARN_ONLY_COMPARISON_DEFINITION = (
-    "Warn-only mismatches are recorded and do not refuse: GPU driver "
-    "version, Python version, asrbench git commit and dirty bit, "
-    "endpoint_url, tls_verify, auth_env, package version, lookahead "
-    "identity policy, client CPU, host, probe status, and "
-    "channel_options. transport_options stay in the hard target identity "
-    "because they change adapter behavior. channel_options are keepalive "
-    "and maximum message size; a channel tweak does not refuse."
+    "Warn-only mismatches are recorded and do not refuse: target.model, "
+    "transport_options, batch_size, max_num_seqs, gpu_memory_utilization, "
+    "CUDA version, torch version, GPU driver version, client_location, "
+    "Python version, asrbench git commit and dirty bit, endpoint_url, "
+    "tls_verify, auth_env, package version, lookahead identity policy, "
+    "client CPU, host, probe status, and channel_options. "
+    "channel_options are keepalive and maximum message size. A checkpoint "
+    "whose source is unverified is flagged and does not by itself refuse "
+    "when the declared checkpoint matches."
+)
+PRECISION_RECORD_DEFINITION = (
+    "precision is recorded under the NVIDIA names FP32, FP16, FP8, and "
+    "INT8, joined with + when mixed, plus an optional tf32 flag. It is "
+    "shown beside a comparison and is not a comparison key. No further "
+    "precision rule is applied."
 )
 FRONTIER_DEFINITION = (
     "Accuracy against measured latency, one point per receipt, identified "
@@ -305,7 +359,7 @@ FRONTIER_DEFINITION = (
     "not computed. Points are grouped by comparison identity with "
     "lookahead frame count and cadence removed, so a lookahead sweep "
     "that also changes cadence is one series, and different hardware "
-    "or models are not drawn on one edge."
+    "or checkpoints are not drawn on one edge."
 )
 RUNNER_HANG_GUARD_DEFINITION = (
     "The runner hang guard waits twice timeout_s, plus one timeout_s "
@@ -320,9 +374,11 @@ RUNNER_HANG_GUARD_DEFINITION = (
 VLLM_FORMAT_NOTE = (
     "Shaped like a vLLM serving-benchmark summary so a serving engineer "
     "can read the counts. ttfs_s is this project's time to first "
-    "non-empty partial. response_latency_s is per response. Neither "
-    "field is vLLM TTFT, and neither is a vendor-reported response "
-    "latency."
+    "non-empty partial. response_latency_s is per response. e2e_rtfx is "
+    "offered audio divided by first-audio-to-final. None of these is "
+    "vLLM TTFT, and none is a vendor per-chunk latency. "
+    "riva_client_compat_s is the labelled 1:1 statistic and is not a "
+    "headline."
 )
 LANE_UNAVAILABLE_DEFINITION = (
     "A session whose adapter set terminal_status to lane_unavailable: an "
@@ -331,11 +387,79 @@ LANE_UNAVAILABLE_DEFINITION = (
 )
 LATENCY_METRIC_TTFS = "ttfs"
 LATENCY_METRIC_RESPONSE = "response_latency"
+LATENCY_METRIC_FINALIZATION = "finalization"
+LATENCY_METRIC_FRONTIER_LAG = "frontier_lag"
 RTFX_VALIDITY_UNQUALIFIED = "pacing_fidelity_unavailable"
 RTFX_VALIDITY_PACING_DISABLED = "pacing_disabled"
 RTFX_VALIDITY_NOT_APPLICABLE = "not_this_mode"
 RTFX_VALIDITY_SIMULATED = "simulated"
 DIGEST_COVERS_PCM16 = "pcm16_payload"
+
+E2E_RTFX_CLOCK = "client_monotonic/first_audio_sent_to_final_received"
+E2E_RTFX_DEFINITION = (
+    "Per measured session, offered audio seconds divided by the "
+    "client-monotonic interval from the first audio sample sent to the "
+    "final result received. Real-time pacing caps this near 1. Read it "
+    "as kept up, not as speed. A session that did not complete, including "
+    "a timeout, a protocol error, or an early final on a failed stream, "
+    "stays in n_total and contributes no ratio. A completed session "
+    "missing either timestamp stays in n_total and is absent from "
+    "n_with_measure. Not streaming_rtfx and not a vendor per-chunk latency."
+)
+FRONTIER_RTFX_CLOCK = (
+    "client_monotonic/audio_processed_delta_over_receive_delta"
+)
+FRONTIER_RTFX_DEFINITION = (
+    "Per consecutive audio_processed samples on one stream, the increase "
+    "in audio_processed divided by the client-monotonic receive interval. "
+    "Independent of how the transcript is segmented. Invalid when "
+    "audio_processed decreases on that stream. Unavailable when the "
+    "transport did not report audio_processed. An invalid or absent "
+    "session stays in n_total and contributes no ratio."
+)
+FRONTIER_RTFX_INVALID_REASON = "audio_processed_decreased"
+FRONTIER_RTFX_UNAVAILABLE_REASON = "audio_processed_absent"
+FRONTIER_LAG_CLOCK = "client_monotonic/response_receive_minus_audio_processed"
+FRONTIER_LAG_DEFINITION = (
+    "For each audio_processed sample, client-monotonic receive time "
+    "minus the sum of first-audio-sent and audio_processed at that "
+    "sample. Negatives are kept. Invalid when audio_processed decreases "
+    "on that stream. Unavailable when audio_processed or the "
+    "first-audio timestamp is absent. An invalid or absent session stays "
+    "in n_total and contributes no sample. Not response latency and not "
+    "the Riva 1:1 statistic."
+)
+FRONTIER_LAG_INVALID_REASON = "audio_processed_decreased"
+FRONTIER_LAG_UNAVAILABLE_REASON = "audio_processed_or_first_audio_absent"
+WORD_LATENCY_CLOCK = "client_monotonic/final_receive_minus_word_end"
+WORD_LATENCY_DEFINITION = (
+    "Client-monotonic time of the final that carried the word, minus "
+    "first-audio-sent plus word.end_time in seconds on the paced audio "
+    "clock. Requires enable_word_time_offsets. Negatives are kept. "
+    "Unavailable when word end times were not recorded."
+)
+WORD_LATENCY_UNAVAILABLE_REASON = "word_time_offsets_not_recorded"
+AGGREGATE_RTFX_CLOCK = "client_monotonic/benchmark_wall_span"
+AGGREGATE_RTFX_DEFINITION = (
+    "Sum of offered audio seconds over every measured session, including "
+    "sessions that produced no transcript, divided by the benchmark wall "
+    "span from the first stream start to the last stream finish. Under "
+    "real-time pacing this tracks stream count: a concurrency measure, "
+    "not a speedup. successful_audio_s is reported beside the ratio. "
+    "streaming_rtfx is the productive-audio ratio on the cell span and "
+    "is not this number."
+)
+RIVA_CLIENT_COMPAT_CLOCK = "client_monotonic/response_i_minus_chunk_i"
+RIVA_CLIENT_COMPAT_DEFINITION = (
+    "Labelled Riva client compat only. Receive time of response i minus "
+    "send time of chunk i. Valid only when the response count equals the "
+    "chunk count. An adapter may omit a protocol event from those lists "
+    "before pairing; the reducer does not drop a trailing response. Not "
+    "a headline. Not frontier lag, not finalization, and not TTFS."
+)
+RIVA_CLIENT_COMPAT_LABEL = "Riva client compat"
+RIVA_CLIENT_COMPAT_INVALID_REASON = "response_count_not_one_to_one"
+RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON = "chunk_or_response_times_absent"
 
 
 def emitted_definitions() -> dict[str, str]:

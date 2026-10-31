@@ -22,6 +22,15 @@ def test_single_sample_is_every_percentile() -> None:
 def test_two_samples_linear_interpolates_and_nearest_rank_does_not() -> None:
     assert percentile([10.0, 20.0], 50) == 15.0
     assert percentile([10.0, 20.0], 50, method="nearest_rank") == 10.0
+    assert percentile([10.0, 20.0], 50, method="floor_index") == 20.0
+
+
+def test_floor_index_matches_riva_sorted_floor() -> None:
+    samples = [1.0, 2.0, 3.0, 4.0]
+    assert percentile(samples, 0, method="floor_index") == 1.0
+    assert percentile(samples, 100, method="floor_index") == 4.0
+    assert percentile(samples, 90, method="floor_index") == 4.0
+    assert percentile([], 90, method="floor_index") is None
 
 
 def test_ties_stay_ties() -> None:
