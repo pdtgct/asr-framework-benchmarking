@@ -18,7 +18,9 @@ from asrbench.adapter import (
     SessionProgressCallback,
     TransportAdapter,
 )
+from asrbench.definitions import SCHEMA_VERSION
 from asrbench.outcome import (
+    FINALIZATION_CLOCK,
     NATIVE_LATENCY_CLOCK,
     RESPONSE_LATENCY_CLOCK,
     SessionOutcome,
@@ -26,8 +28,10 @@ from asrbench.outcome import (
 )
 
 __all__ = [
+    "FINALIZATION_CLOCK",
     "NATIVE_LATENCY_CLOCK",
     "RESPONSE_LATENCY_CLOCK",
+    "SCHEMA_VERSION",
     "SessionAdmissionBarrier",
     "SessionOutcome",
     "SessionProgressCallback",

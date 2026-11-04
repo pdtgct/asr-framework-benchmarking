@@ -30,6 +30,10 @@ NATIVE_LATENCY_CLOCK = (
 RESPONSE_LATENCY_CLOCK = (
     "client_monotonic/latest_audio_append_to_nonempty_transcription_delta"
 )
+#: Interval from the last audio sample sent to the final result received.
+FINALIZATION_CLOCK = (
+    "client_monotonic/last_audio_sample_sent_to_final_result_received"
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,21 @@ class SessionRequest:
     #: Transmit in real time (one ``chunk_ms`` of audio per ``chunk_ms``)
     #: rather than as fast as the transport accepts.
     pace: bool
+    #: Language requested from the server. ``None`` means unspecified.
+    language: str | None = None
+    #: Ask the server to punctuate.
+    punctuation: bool = False
+    #: Ask the server to diarize.
+    diarization: bool = False
+    #: Ask the server for interim hypotheses.
+    interim_results: bool = True
+    #: Transcript shape requested from the server.
+    transcript_policy: str = "final-and-interims"
+    #: Client-declared lookahead for this session, in frames.
+    lookahead_frames: int | None = None
+    #: Workload mode, ``streaming`` or ``offline``. Distinct from
+    #: :attr:`mode`, which is the realtime lifecycle probe.
+    workload_mode: str = "streaming"
 
 
 @dataclass
@@ -106,3 +125,26 @@ class SessionOutcome:
 
     #: Protocol-specific residue, in observation order.
     protocol_extras: dict[str, Any] = field(default_factory=dict)
+
+    #: Cumulative interim hypotheses in arrival order. ``None`` means the
+    #: adapter did not record them — distinct from an empty list, which
+    #: means it recorded that no interim text was emitted. Prefix
+    #: violations cannot be computed from :attr:`interim_count` alone.
+    interim_texts: list[str] | None = None
+    #: Set when the adapter itself decided the session timed out. Reducers
+    #: read this field. A protocol that also stores the flag under
+    #: ``protocol_extras`` must copy it here; the extra is residue.
+    timed_out: bool = False
+    #: Public protocol error code, when the server named one.
+    error_code: str | None = None
+    #: Adapter-supplied terminal label, such as ``lane_unavailable``.
+    #: Outcome accounting is derived from the fields above; this label is
+    #: recorded, and a count is taken when it says the lane was unavailable.
+    terminal_status: str = ""
+    #: Exception or timeout text. Reducers read this field. Protocol
+    #: residue may still echo it under ``protocol_extras``.
+    error_detail: str | None = None
+    #: Clock for :attr:`final_latency_s`. Empty means the adapter did not
+    #: name one; reducers then attribute :data:`FINALIZATION_CLOCK` and
+    #: say they did so.
+    final_latency_clock: str = ""

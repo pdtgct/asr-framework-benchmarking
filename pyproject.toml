@@ -44,6 +44,9 @@ dev = [
 Homepage = "https://github.com/pdtgct/asr-framework-benchmarking"
 Issues = "https://github.com/pdtgct/asr-framework-benchmarking/issues"
 
+[project.scripts]
+asrbench = "asrbench.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/asrbench"]
 

@@ -22,7 +22,7 @@ deliberate diff rather than a copy, so the two do not silently diverge.
 |---|---|---|
 | **0** ✅ | Public repo scaffold | Licence, NOTICE, attribution, corpus policy, CI matrix, boundary test, agent instructions |
 | **1** ✅ | Adapter seam behind an existing transport | Both existing runners untouched at their call sites; receipt byte-identical on replay; existing tests green |
-| **2** | The `asrbench` package: workload, outcome, reducers, reporters, config, tracking | Golden-schema and mock-adapter tests define the contract; percentile, identity, and commit helpers exist exactly once |
+| **2** ✅ | The `asrbench` package: workload, outcome, reducers, reporters, config, tracking | Golden-schema and mock-adapter tests define the contract; percentile, identity, and commit helpers exist exactly once |
 | **3** | Riva public gRPC adapter and a vendor-compatibility preset | Published streaming and offline commands reproduced through the common runner, three trials, TSV emitted |
 | **4** | vLLM-style offered load | Request rate, burstiness, max concurrency, SLO goodput, and mixed-cadence vectors compose with TTFS and outcome accounting without weakening the homogeneous preset |
 | **5** | 1.0 | Semantic versioning on the receipt schema and the adapter interface; deployment recipes demoted to optional examples |
@@ -34,6 +34,10 @@ claim. It has since been migrated out, leaving the harness as it was before the
 extraction.
 
 ## Current position
+
+**Step 2's measurement core is in this repository.** Workload, target, and run specs,
+the receipt, reducers, reporters, comparison, the mock preset, and the generated
+schema reference are in the tree. Step 3 — a second public transport — is next.
 
 **Step 0 is in this repository.** Scaffold, licence and attribution, corpus policy,
 the stdlib-only boundary test, CI on Python 3.10 and 3.12, and the agent instruction
@@ -60,6 +64,18 @@ outcome back into the private harness's pre-existing record shape. It existed to
 one caller byte-compatible during the extraction, and shipping it would have exported
 a dialect this project does not speak.
 
+The measurement core sits on that seam:
+
+| Module | Role |
+|---|---|
+| `spec.py`, `config.py` | Workload, target, and run specs, resolved once and frozen |
+| `fingerprint.py`, `canonical.py`, `compare.py` | Workload fingerprint and the comparison key |
+| `reducers.py`, `percentile.py`, `wer.py` | Metric families; one percentile implementation |
+| `receipt.py`, `tracking.py`, `reporters.py` | The receipt, a rebuildable index, projections |
+| `runner.py`, `adapters/mock.py`, `cli.py` | Closed-loop lanes and the mock path |
+| `identity.py` | Hardware probe and the one git-commit helper |
+| `definitions.py`, `schema_doc.py` | Emitted constants and the generated schema reference |
+
 ## Step 2 — the framework package
 
 Build the measurement core on top of the migrated seam.
@@ -83,16 +99,19 @@ trackers are optional plugins, never core dependencies.
 generation, and documentation code blocks that execute against the mock adapter — a
 quickstart that no longer runs should be a test failure, not a bug report.
 
-### Two shape decisions to carry in
+### Shape decisions now in the measurement core
 
-Both were settled after step 1 and are not yet reflected in any code:
+These were settled after step 1 and are implemented in the comparison key and
+the frontier reporter:
 
-1. **The lookahead frame count belongs inside the comparison key**, not merely
+1. **The lookahead frame count is inside the comparison key**, not merely
    reported beside it. Two receipts at different lookaheads measure different
    operating points of the model, so pooling them is as wrong as pooling across
-   hardware.
-2. **The frontier is the dashboard's primary panel** — accuracy against measured
-   latency, one point per lookahead, Pareto edge marked — rather than a
+   hardware. The cadence that sets that lookahead is in the key as well. The
+   frontier removes both when it groups a sweep. `chunk_ms` stays: it is
+   transmit size.
+2. **The frontier is the primary panel** — accuracy against measured latency,
+   one point per lookahead and cadence, Pareto edge marked — rather than a
    cadence-by-concurrency matrix. The matrix was designed on the assumption that
    cadence varies load at a fixed result; it varies the result too.
 
