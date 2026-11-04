@@ -1,5 +1,6 @@
 """Fingerprints cover offered work and ignore observation choices."""
 
+from dataclasses import replace
 from pathlib import Path
 
 from asrbench.canonical import CanonicalError, fingerprint, format_float
@@ -81,6 +82,26 @@ def test_observation_choices_do_not_change_the_workload_fingerprint() -> None:
     assert _key(base) == _key(same_observation)
 
 
+def test_right_context_and_decoder_change_the_workload_fingerprint() -> None:
+    base = resolve(env={})
+    right = resolve(env={}, overrides={("workload", "att_context_right"): 1})
+    decoder = resolve(env={}, overrides={("workload", "decoder"): "greedy"})
+    offsets = resolve(
+        env={},
+        overrides={
+            ("workload", "enable_word_time_offsets"): True,
+            ("target", "transport_options"): {
+                "interim_every_chunks": 2,
+                "transcript": "the birch canoe slid on the smooth planks",
+                "enable_word_time_offsets": True,
+            },
+        },
+    )
+    assert workload_fingerprint(base) != workload_fingerprint(right)
+    assert workload_fingerprint(base) != workload_fingerprint(decoder)
+    assert _key(base) != _key(offsets)
+
+
 def test_chunk_and_lookahead_frames_change_the_workload_fingerprint() -> None:
     base = resolve(env={})
     chunk = resolve(env={"ASRBENCH_CHUNK_MS": "80"})
@@ -145,5 +166,15 @@ def test_preset_path_and_licence_are_not_offered_work() -> None:
         "note",
         "lookahead_ms_label",
         "lookahead_frames_source",
+        "iterations_per_stream",
+        "correctness_streams",
+        "performance_streams",
     ):
         assert absent not in material
+
+
+def test_emit_tsv_does_not_change_the_observation_fingerprint() -> None:
+    base = resolve(env={})
+    other = replace(base, run=replace(base.run, emit_tsv=True))
+    assert observation_fingerprint(base) == observation_fingerprint(other)
+    assert workload_fingerprint(base) == workload_fingerprint(other)

@@ -11,9 +11,12 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from asrbench.compare import COMPARISON_EXCLUSIONS
 from asrbench.config import resolve
 from asrbench.definitions import SCHEMA_VERSION, emitted_definitions
+from asrbench.fingerprint import (
+    COMPARISON_EXCLUSIONS,
+    RECORDED_COMPARISON_FIELDS,
+)
 from asrbench.identity import FixedProbe, GitState, collect_hardware
 from asrbench.runner import AdvancingClock, run_benchmark
 
@@ -97,10 +100,22 @@ def schema_markdown() -> str:
         "workload fingerprint, target identity, software identity,",
         "hardware identity.",
         "",
-        "Not in the hard comparison key. Warn-only fields are still",
-        "compared and reported; a mismatch does not refuse:",
+        "Not in the hard comparison key.",
+        "",
+        "Record-only. Shown side by side. A mismatch does not warn",
+        "and does not refuse:",
         "",
     ]
+    for item in RECORDED_COMPARISON_FIELDS:
+        lines.append(f"- `{item}`")
+    lines.extend(
+        [
+            "",
+            "Warn-only and other exclusions. Warn-only fields are still",
+            "compared and reported; a mismatch does not refuse:",
+            "",
+        ]
+    )
     for item in COMPARISON_EXCLUSIONS:
         lines.append(f"- `{item}`")
     lines.extend(

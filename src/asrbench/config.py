@@ -24,6 +24,14 @@ from typing import Any
 from asrbench.canonical import leaves
 from asrbench.clips import ClipError, pin_digest
 from asrbench.definitions import (
+    CHECKPOINT_SOURCE_HUGGINGFACE,
+    CHECKPOINT_SOURCE_NGC,
+    CHECKPOINT_SOURCE_UNVERIFIED,
+    CLIENT_LOCATION_LOOPBACK,
+    CLIENT_LOCATION_SAME_REGION,
+    CLIENT_LOCATION_WAN,
+    LATENCY_METRIC_FINALIZATION,
+    LATENCY_METRIC_FRONTIER_LAG,
     LATENCY_METRIC_RESPONSE,
     LATENCY_METRIC_TTFS,
     LOOKAHEAD_IDENTITY_CLIENT_DECLARED,
@@ -62,12 +70,30 @@ _SUSTAINABILITY = {
     SUSTAINABILITY_STEADY_INTERVAL,
     SUSTAINABILITY_COMPLETION_FRACTION,
 }
-_LATENCY_METRICS = {LATENCY_METRIC_TTFS, LATENCY_METRIC_RESPONSE}
+_LATENCY_METRICS = {
+    LATENCY_METRIC_TTFS,
+    LATENCY_METRIC_RESPONSE,
+    LATENCY_METRIC_FINALIZATION,
+    LATENCY_METRIC_FRONTIER_LAG,
+}
+_CHECKPOINT_SOURCES = {
+    CHECKPOINT_SOURCE_HUGGINGFACE,
+    CHECKPOINT_SOURCE_NGC,
+    CHECKPOINT_SOURCE_UNVERIFIED,
+}
+_CLIENT_LOCATIONS = {
+    CLIENT_LOCATION_LOOPBACK,
+    CLIENT_LOCATION_SAME_REGION,
+    CLIENT_LOCATION_WAN,
+}
+_PRECISION_TOKENS = {"FP32", "FP16", "FP8", "INT8"}
+_PLACEHOLDER_MODEL_NAME = "server-reported-model-name"
 _OWNED_BY_POPULATION = {
     ("workload", "lanes"),
     ("workload", "cadence_ms"),
     ("workload", "lookahead_frames"),
     ("workload", "lookahead_ms_label"),
+    ("workload", "att_context_right"),
 }
 _SECTIONS = {
     "workload": WorkloadSpec,
@@ -131,6 +157,22 @@ def _bindings() -> tuple[Binding, ...]:
             ("workload", "lookahead_ms_label"),
             "millisecond label carried beside the frame count; not identity",
         ),
+        (
+            ("workload", "att_context_right"),
+            "NVIDIA right-context frames r; hard operating point",
+        ),
+        (
+            ("workload", "decoder"),
+            "decoder name, such as greedy or beam; hard decode identity",
+        ),
+        (
+            ("workload", "language_model"),
+            "language model, such as none or n-gram; hard decode identity",
+        ),
+        (
+            ("workload", "enable_word_time_offsets"),
+            "request word end times; hard workload identity",
+        ),
         (("workload", "lanes"), "closed-loop parallel lanes"),
         (("workload", "iterations"), "measured iterations per lane"),
         (
@@ -174,7 +216,44 @@ def _bindings() -> tuple[Binding, ...]:
         (("target", "tls_verify"), "verify TLS certificates"),
         (
             ("target", "server_version"),
-            "server image or version; hard identity when set",
+            "server image or version; recorded on the engine axis",
+        ),
+        (
+            ("target", "checkpoint_id"),
+            "checkpoint id, HF repo or NGC model; hard identity",
+        ),
+        (
+            ("target", "checkpoint_revision"),
+            "HF revision or NGC version or archive digest; hard identity",
+        ),
+        (
+            ("target", "checkpoint_source"),
+            "huggingface, ngc, or unverified",
+        ),
+        (
+            ("target", "engine_name"),
+            "serving engine name; the comparison axis, not the hard key",
+        ),
+        (
+            ("target", "engine_version"),
+            "engine version or image digest; recorded, not the hard key",
+        ),
+        (
+            ("target", "precision"),
+            "NVIDIA precision names joined with +; recorded only",
+        ),
+        (("target", "tf32"), "optional TF32 flag; recorded only"),
+        (("target", "batch_size"), "server batch size; warn-only"),
+        (("target", "max_num_seqs"), "max_num_seqs; warn-only"),
+        (
+            ("target", "gpu_memory_utilization"),
+            "GPU memory utilization; warn-only",
+        ),
+        (("target", "cuda_version"), "CUDA version; warn-only"),
+        (("target", "torch_version"), "torch version; warn-only"),
+        (
+            ("target", "client_location"),
+            "loopback, same-region, or wan; warn-only",
         ),
         (
             ("target", "server_gpu_name"),
@@ -263,6 +342,7 @@ def config_to_dict(config: ResolvedConfig) -> dict[str, Any]:
         for item in fields(config.target)
     }
     target["transport_options"] = dict(config.target.transport_options)
+    target["channel_options"] = dict(config.target.channel_options)
     encoded = {"workload": workload, "target": target, "run": run}
     decoded: dict[str, Any] = json.loads(json.dumps(encoded, allow_nan=False))
     return decoded
@@ -346,6 +426,7 @@ def resolve(
         config = _set_path(config, path, value)
         seen.add(path)
     config = _derive_population(config, seen)
+    config = _scale_iterations(config, seen, base)
     config = validate(config, pin=True)
     if base is not None:
         # The receipt already stores the digest. Re-reading the original
@@ -439,6 +520,15 @@ def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
         raise ConfigError("cadence_ms must be positive when set")
     if workload.lookahead_frames is not None and workload.lookahead_frames < 0:
         raise ConfigError("lookahead_frames must be zero or positive")
+    if workload.iterations_per_stream is not None:
+        _require_positive(
+            "iterations_per_stream",
+            workload.iterations_per_stream,
+            minimum=1,
+        )
+    for name in ("correctness_streams", "performance_streams"):
+        for index, item in enumerate(getattr(workload, name)):
+            _require_positive(f"{name}[{index}]", item, minimum=1)
     if workload.lookahead_ms_label is not None:
         _require_finite("lookahead_ms_label", workload.lookahead_ms_label)
     if not workload.language or not workload.transcript_policy:
@@ -473,6 +563,9 @@ def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
     if run.verbosity < 0:
         raise ConfigError("verbosity must be zero or positive")
     _validate_policy(run.pass_policy)
+    _validate_operating_point(workload)
+    _validate_word_offsets(workload, config.target)
+    _validate_checkpoint(config.target)
     if not config.target.endpoint_url or not config.target.transport:
         raise ConfigError("endpoint_url and transport must be non-empty")
     if not config.target.model:
@@ -682,8 +775,10 @@ def _merge(
             )
         elif name == "population":
             updates[name] = _population(value)
-        elif name == "transport_options":
-            updates[name] = _options(value)
+        elif name in {"transport_options", "channel_options"}:
+            updates[name] = _options(value, name)
+        elif name in {"correctness_streams", "performance_streams"}:
+            updates[name] = _int_tuple(value, f"{where}.{name}")
         else:
             updates[name] = _coerce(
                 value, str(known[name].type), f"{where}.{name}"
@@ -701,7 +796,13 @@ def _population(value: object) -> tuple[PopulationEntry, ...]:
         payload = _object(item, f"population[{index}]")
         _unknown(
             payload,
-            {"lanes", "cadence_ms", "lookahead_frames", "lookahead_ms_label"},
+            {
+                "lanes",
+                "cadence_ms",
+                "lookahead_frames",
+                "lookahead_ms_label",
+                "att_context_right",
+            },
             f"population[{index}]",
         )
         if "lanes" not in payload:
@@ -725,18 +826,73 @@ def _population(value: object) -> tuple[PopulationEntry, ...]:
                     "float | None",
                     f"{where}.lookahead_ms_label",
                 ),
+                att_context_right=_coerce(
+                    payload.get("att_context_right"),
+                    "int | None",
+                    f"{where}.att_context_right",
+                ),
             )
         )
     return tuple(entries)
 
 
-def _options(value: object) -> dict[str, Any]:
+def _options(value: object, where: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ConfigError("transport_options must be an object")
+        raise ConfigError(f"{where} must be an object")
     for key in value:
         if not isinstance(key, str):
-            raise ConfigError("transport_options keys must be strings")
+            raise ConfigError(f"{where} keys must be strings")
     return dict(value)
+
+
+def _int_tuple(value: object, where: str) -> tuple[int, ...]:
+    """Return a tuple of positive ints from a JSON list."""
+    if not isinstance(value, list):
+        raise ConfigError(f"{where} must be a list")
+    items: list[int] = []
+    for index, item in enumerate(value):
+        number = _check_int(item, f"{where}[{index}]")
+        if number < 1:
+            raise ConfigError(f"{where}[{index}] must be >= 1")
+        items.append(number)
+    return tuple(items)
+
+
+def _scale_iterations(
+    config: ResolvedConfig,
+    seen: set[tuple[str, ...]],
+    base: ResolvedConfig | None,
+) -> ResolvedConfig:
+    """Set measured iterations to ``iterations_per_stream``.
+
+    The runner already repeats that count on every lane, so one trial
+    is ``iterations_per_stream * lanes`` sessions. Multiplying by the
+    lane count here would run the square of the grid.
+
+    A preset's own ``iterations`` value is replaced, because the factor
+    is the recipe. ``--iterations`` and ``ASRBENCH_ITERATIONS`` win.
+    Reproducing a receipt keeps the stored iteration count unless lanes
+    or the factor changed on this invocation. A lane change recomputes
+    from the factor alone.
+
+    Args:
+        config: Config after population derivation.
+        seen: Env and CLI paths the user set.
+        base: The receipt config when reproducing, else ``None``.
+
+    Returns:
+        The config, with ``iterations`` possibly replaced.
+    """
+    factor = config.workload.iterations_per_stream
+    if factor is None:
+        return config
+    if ("workload", "iterations") in seen:
+        return config
+    lanes_changed = ("workload", "lanes") in seen
+    factor_changed = ("workload", "iterations_per_stream") in seen
+    if base is not None and not lanes_changed and not factor_changed:
+        return config
+    return replace(config, workload=replace(config.workload, iterations=factor))
 
 
 def _derive_population(
@@ -748,7 +904,7 @@ def _derive_population(
             raise ConfigError(
                 "a multi-entry population is explicit; edit its entries "
                 "instead of --lanes, --cadence-ms, --lookahead-frames, "
-                "or --lookahead-ms-label"
+                "--lookahead-ms-label, or --att-context-right"
             )
         return config
     entry = PopulationEntry(
@@ -756,6 +912,7 @@ def _derive_population(
         cadence_ms=workload.cadence_ms,
         lookahead_frames=workload.lookahead_frames,
         lookahead_ms_label=workload.lookahead_ms_label,
+        att_context_right=workload.att_context_right,
     )
     return replace(config, workload=replace(workload, population=(entry,)))
 
@@ -778,6 +935,11 @@ def _check_population_agreement(workload: WorkloadSpec) -> None:
         workload.lookahead_ms_label,
         {entry.lookahead_ms_label for entry in population},
         "lookahead_ms_label",
+    )
+    _agree(
+        workload.att_context_right,
+        {entry.att_context_right for entry in population},
+        "att_context_right",
     )
 
 
@@ -808,6 +970,99 @@ def _validate_policy(policy: PassPolicy) -> None:
     _require_finite("accuracy_tolerance", policy.accuracy_tolerance)
     if policy.latency_slo_s < 0 or policy.accuracy_tolerance < 0:
         raise ConfigError("latency SLO and accuracy tolerance must be >= 0")
+
+
+def _validate_operating_point(workload: WorkloadSpec) -> None:
+    """Reject a blank decode name or a negative right-context count."""
+    if (
+        workload.att_context_right is not None
+        and workload.att_context_right < 0
+    ):
+        raise ConfigError("att_context_right must be zero or positive")
+    _reject_blank("decoder", workload.decoder)
+    _reject_blank("language_model", workload.language_model)
+
+
+def _validate_word_offsets(workload: WorkloadSpec, target: TargetSpec) -> None:
+    """Keep the workload key equal to the flag the adapter sends.
+
+    A missing transport option means the adapter default, false.
+    """
+    sent = target.transport_options.get("enable_word_time_offsets", False)
+    if not isinstance(sent, bool):
+        raise ConfigError(
+            "transport_options.enable_word_time_offsets must be a bool"
+        )
+    if sent != workload.enable_word_time_offsets:
+        raise ConfigError(
+            "workload.enable_word_time_offsets and "
+            "transport_options.enable_word_time_offsets disagree"
+        )
+
+
+def _validate_checkpoint(target: TargetSpec) -> None:
+    """Reject an unknown checkpoint source, precision, or client location."""
+    if target.checkpoint_source not in _CHECKPOINT_SOURCES:
+        raise ConfigError(
+            f"unknown checkpoint_source {target.checkpoint_source!r}"
+        )
+    _reject_blank("checkpoint_id", target.checkpoint_id)
+    _reject_blank("checkpoint_revision", target.checkpoint_revision)
+    if target.transport != "mock" and not target.checkpoint_id:
+        raise ConfigError("checkpoint_id is required unless transport is mock")
+    if target.transport != "mock" and (
+        target.checkpoint_id == _PLACEHOLDER_MODEL_NAME
+        or target.model == _PLACEHOLDER_MODEL_NAME
+    ):
+        raise ConfigError(
+            "server-reported-model-name is not a checkpoint or model identity"
+        )
+    if (
+        target.checkpoint_source != CHECKPOINT_SOURCE_UNVERIFIED
+        and not target.checkpoint_revision
+    ):
+        raise ConfigError(
+            "checkpoint_revision is required when checkpoint_source "
+            "is not unverified"
+        )
+    _reject_blank("engine_name", target.engine_name)
+    _reject_blank("engine_version", target.engine_version)
+    _reject_blank("cuda_version", target.cuda_version)
+    _reject_blank("torch_version", target.torch_version)
+    _validate_precision(target.precision)
+    if (
+        target.client_location is not None
+        and target.client_location not in _CLIENT_LOCATIONS
+    ):
+        raise ConfigError(f"unknown client_location {target.client_location!r}")
+    if target.batch_size is not None and target.batch_size < 1:
+        raise ConfigError("batch_size must be >= 1")
+    if target.max_num_seqs is not None and target.max_num_seqs < 1:
+        raise ConfigError("max_num_seqs must be >= 1")
+    if target.gpu_memory_utilization is not None:
+        _require_finite("gpu_memory_utilization", target.gpu_memory_utilization)
+        if (
+            target.gpu_memory_utilization <= 0
+            or target.gpu_memory_utilization > 1
+        ):
+            raise ConfigError("gpu_memory_utilization must be in (0, 1]")
+
+
+def _validate_precision(value: str | None) -> None:
+    """Accept NVIDIA precision names joined with ``+``, or null."""
+    if value is None:
+        return
+    parts = value.split("+")
+    if not parts or any(part not in _PRECISION_TOKENS for part in parts):
+        raise ConfigError(
+            "precision must use FP32, FP16, FP8, or INT8, "
+            "joined with + when mixed"
+        )
+
+
+def _reject_blank(name: str, value: str | None) -> None:
+    if value is not None and value.strip() == "":
+        raise ConfigError(f"{name} must be null or non-empty")
 
 
 def _validate_server(target: TargetSpec) -> None:

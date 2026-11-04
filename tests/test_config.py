@@ -12,6 +12,7 @@ from asrbench.config import (
     resolve,
     secret_records,
 )
+from asrbench.definitions import SCHEMA_VERSION
 from asrbench.spec import default_config
 
 _PRESET = Path("presets/mock-streaming.json")
@@ -182,7 +183,7 @@ def test_from_receipt_rejects_stray_env_and_a_foreign_schema(
     receipt.write_text(
         json.dumps(
             {
-                "schema_version": "asrbench-receipt/1",
+                "schema_version": SCHEMA_VERSION,
                 "resolved_config": config_to_dict(good),
             }
         ),
@@ -200,3 +201,62 @@ def test_from_receipt_rejects_stray_env_and_a_foreign_schema(
     assert "allowed-secret" not in json.dumps(config_to_dict(reproduced))
     with pytest.raises(ConfigError, match="missing"):
         config_from_mapping({"workload": {}}, complete=True)
+
+
+def test_iterations_per_stream_scales_unless_iterations_is_set(
+    tmp_path: Path,
+) -> None:
+    preset = tmp_path / "factor.json"
+    preset.write_text(
+        json.dumps(
+            {
+                "workload": {
+                    "lanes": 1,
+                    "iterations": 99,
+                    "iterations_per_stream": 3,
+                    "correctness_streams": [1, 4],
+                    "performance_streams": [1, 4, 8],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    scaled = resolve(preset_path=preset, env={})
+    assert scaled.workload.iterations == 3
+    assert scaled.workload.correctness_streams == (1, 4)
+    wider = resolve(
+        preset_path=preset,
+        env={},
+        overrides={("workload", "lanes"): 4},
+    )
+    assert wider.workload.iterations == 3
+    assert wider.workload.lanes == 4
+    explicit = resolve(
+        preset_path=preset,
+        env={},
+        overrides={
+            ("workload", "lanes"): 4,
+            ("workload", "iterations"): 5,
+        },
+    )
+    assert explicit.workload.iterations == 5
+    source = resolve(preset_path=preset, env={})
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "resolved_config": config_to_dict(source),
+            }
+        ),
+        encoding="utf-8",
+    )
+    kept = resolve(from_receipt=receipt, env={})
+    assert kept.workload.iterations == 3
+    relaned = resolve(
+        from_receipt=receipt,
+        env={},
+        overrides={("workload", "lanes"): 4},
+    )
+    assert relaned.workload.iterations == 3
+    assert relaned.workload.lanes == 4

@@ -45,7 +45,7 @@ def session(
         texts = interim_texts
     return SessionOutcome(
         label=label,
-        mode="full",
+        lifecycle="full",
         clip_name="clip.wav",
         chunk_ms=160,
         audio_duration_s=audio_duration_s,

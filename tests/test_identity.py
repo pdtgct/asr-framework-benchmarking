@@ -71,7 +71,7 @@ def test_missing_nvidia_smi_is_absent_not_fatal() -> None:
         },
         {
             "adapter": "mock",
-            "schema_version": "asrbench-receipt/1",
+            "schema_version": "asrbench-receipt/2",
             "measurement_semantics_version": "1",
             "package_version": "0",
             "python_version": "3.12.0",

@@ -12,7 +12,9 @@ from typing import Any
 
 from asrbench.config import ConfigError, config_from_mapping, validate
 from asrbench.definitions import (
+    FINALIZATION_CLOCK,
     FRONTIER_DEFINITION,
+    NATIVE_LATENCY_CLOCK,
     SUSTAINED_STREAMS_DEFINITION,
     VLLM_FORMAT_NOTE,
 )
@@ -20,7 +22,7 @@ from asrbench.fingerprint import capacity_group_key, frontier_group_key
 
 
 class NotHomogeneousError(ValueError):
-    """Vendor TSV is only defined for a homogeneous population."""
+    """A pooled projection requires one cadence and one lookahead."""
 
 
 def console_report(receipt: dict[str, Any]) -> str:
@@ -37,6 +39,13 @@ def console_report(receipt: dict[str, Any]) -> str:
     pooled = summary["pooled"]
     ttfs = pooled["ttfs_s"]
     response = pooled["response_latency_s"]
+    final = pooled["finalization_s"]
+    e2e = pooled["e2e_rtfx"]
+    frontier = pooled["frontier_rtfx"]
+    lag = pooled["frontier_lag_s"]
+    words = pooled["word_latency_s"]
+    aggregate = pooled["aggregate_rtfx"]
+    compat = pooled["riva_client_compat_s"]
     wer = pooled["wer"]
     rtfx = pooled["streaming_rtfx"]
     counts = pooled["counts"]
@@ -44,6 +53,7 @@ def console_report(receipt: dict[str, Any]) -> str:
     lines = [
         f"schema {receipt['schema_version']}",
         f"comparison_key {receipt['comparison_key']}",
+        f"percentile_method {ttfs['percentile_method']}",
         "conjunction "
         + ("passed" if summary["conjunction_passed"] else "FAILED"),
         "failed " + ",".join(summary["failed_clauses"]),
@@ -69,9 +79,45 @@ def console_report(receipt: dict[str, Any]) -> str:
             f"n_with_measure={wer['n_with_measure']} n_total={wer['n_total']}"
         ),
         (
+            f"finalization_s p50={final['p50']} p99={final['p99']} "
+            f"n_with_measure={final['n_with_measure']} "
+            f"n_total={final['n_total']} clock={final['clock']}"
+        ),
+        (
+            f"e2e_rtfx mean={e2e['mean']} p50={e2e['p50']} "
+            f"availability={e2e['availability']} "
+            f"n_with_measure={e2e['n_with_measure']} n_total={e2e['n_total']}"
+        ),
+        (
+            f"frontier_rtfx availability={frontier['availability']} "
+            f"p50={frontier['p50']} n_invalid={frontier['n_invalid_sessions']} "
+            f"n_unavailable={frontier['n_unavailable_sessions']} "
+            f"n_total={frontier['n_total']}"
+        ),
+        (
+            f"frontier_lag_s p50={lag['p50']} "
+            f"n_with_measure={lag['n_with_measure']} "
+            f"n_total={lag['n_total']}"
+        ),
+        (
+            f"word_latency_s p50={words['p50']} "
+            f"n_with_measure={words['n_with_measure']} "
+            f"n_total={words['n_total']}"
+        ),
+        (
+            f"aggregate_rtfx value={aggregate['value']} "
+            f"offered_audio_s={aggregate['offered_audio_s']} "
+            f"benchmark_span_s={aggregate['benchmark_span_s']}"
+        ),
+        (
             f"streaming_rtfx value={rtfx['value']} validity={rtfx['validity']} "
             f"successful_audio_s={rtfx['successful_audio_s']} "
             f"attempted_audio_s={rtfx['attempted_audio_s']}"
+        ),
+        (
+            f"riva_client_compat label={compat['label']} "
+            f"availability={compat['availability']} "
+            f"p50={compat['p50']} n_total={compat['n_total']}"
         ),
         (
             "outcomes "
@@ -160,6 +206,44 @@ def vllm_report(receipt: dict[str, Any]) -> dict[str, Any]:
                 "attempted_audio_s",
             ),
         ),
+        "finalization_s": _pick(
+            pooled["finalization_s"],
+            ("mean", "p50", "p90", "p95", "p99", "n_with_measure", "n_total"),
+        ),
+        "e2e_rtfx": _pick(
+            pooled["e2e_rtfx"],
+            (
+                "mean",
+                "p50",
+                "p90",
+                "p95",
+                "p99",
+                "availability",
+                "n_with_measure",
+                "n_total",
+                "percentile_method",
+            ),
+        ),
+        "aggregate_rtfx": _pick(
+            pooled["aggregate_rtfx"],
+            ("value", "offered_audio_s", "successful_audio_s", "availability"),
+        ),
+        "frontier_rtfx": _pick(
+            pooled["frontier_rtfx"],
+            ("availability", "reason", "p50", "n_total", "percentile_method"),
+        ),
+        "frontier_lag_s": _pick(
+            pooled["frontier_lag_s"],
+            ("p50", "n_with_measure", "n_total", "availability"),
+        ),
+        "word_latency_s": _pick(
+            pooled["word_latency_s"],
+            ("p50", "n_with_measure", "n_total", "availability"),
+        ),
+        "riva_client_compat_s": _pick(
+            pooled["riva_client_compat_s"],
+            ("label", "availability", "reason", "percentile_method"),
+        ),
     }
 
 
@@ -168,7 +252,9 @@ def vendor_tsv(receipt: dict[str, Any]) -> str:
 
     Pooled columns describe every measured session. ``across_mean``
     columns are the mean of the per-trial scalars, which is what a
-    three-trial vendor sheet averages.
+    three-trial vendor sheet averages. ``model`` is the warn-only routing
+    name. Checkpoint, engine, and precision are the columns that name
+    the weights and the engine axis.
 
     Args:
         receipt: A receipt object.
@@ -188,8 +274,16 @@ def vendor_tsv(receipt: dict[str, Any]) -> str:
         admission: float | None = counts["admitted"] / counts["attempted"]
     else:
         admission = None
+    checkpoint = receipt["identity"]["target"]["checkpoint"]
+    engine = receipt["identity"]["recorded"]["engine"]
     columns: tuple[tuple[str, object], ...] = (
-        ("model", receipt["identity"]["target"]["model"]),
+        ("model", receipt["identity"]["warn"]["model"]),
+        ("checkpoint_id", checkpoint["id"]),
+        ("checkpoint_revision", checkpoint["revision"]),
+        ("checkpoint_source", checkpoint["source"]),
+        ("engine_name", engine["name"]),
+        ("engine_transport", engine["transport"]),
+        ("precision", receipt["identity"]["recorded"]["precision"]),
         ("lookahead_frames", workload["lookahead_frames"]),
         ("lookahead_ms_label", workload["lookahead_ms_label"]),
         ("lanes", workload["lanes"]),
@@ -250,6 +344,76 @@ def vendor_tsv(receipt: dict[str, Any]) -> str:
     return comment + "\n" + header + "\n" + row + "\n"
 
 
+def perf_table_tsv(receipt: dict[str, Any]) -> str:
+    """Project one homogeneous receipt into NVIDIA's perf-table column order.
+
+    The columns are a three-trial mean of per-trial finalization stats
+    and streaming RTFX, in the published order: stream count, mean, p50,
+    p90, p95, p99, throughput. Values are seconds and asrbench's
+    streaming RTFX. A trial that lacks the measure stays in ``n_trials``
+    and out of that column's mean. The comment quotes the TTFS clock so
+    the row cannot be read as that clock or as a vendor millisecond
+    latency.
+
+    Args:
+        receipt: A receipt object.
+
+    Returns:
+        A comment, a header, and one data row.
+
+    Raises:
+        NotHomogeneousError: The population mixes cadence or lookahead.
+    """
+    _require_homogeneous(receipt)
+    trials = receipt["trials"]
+    workload = receipt["resolved_config"]["workload"]
+    pooled = receipt["summary"]["pooled"]["finalization_s"]
+    final_mean = _trial_mean(trials, "finalization_s", "mean")
+    final_p50 = _trial_mean(trials, "finalization_s", "p50")
+    final_p90 = _trial_mean(trials, "finalization_s", "p90")
+    final_p95 = _trial_mean(trials, "finalization_s", "p95")
+    final_p99 = _trial_mean(trials, "finalization_s", "p99")
+    rtfx = _trial_mean(trials, "streaming_rtfx", "value")
+    columns: tuple[tuple[str, object], ...] = (
+        ("num_streams", workload["lanes"]),
+        ("finalization_mean_s", final_mean[0]),
+        ("finalization_p50_s", final_p50[0]),
+        ("finalization_p90_s", final_p90[0]),
+        ("finalization_p95_s", final_p95[0]),
+        ("finalization_p99_s", final_p99[0]),
+        ("streaming_rtfx", rtfx[0]),
+    )
+    comment = (
+        "# columns are three-trial means of per-trial finalization_s on "
+        f"{FINALIZATION_CLOCK} and of streaming_rtfx. Not TTFS. Not a "
+        "vendor millisecond latency. "
+        f"ttfs_clock {NATIVE_LATENCY_CLOCK} "
+        f"n_trials={len(trials)} "
+        f"n_trials_with_finalization={final_p50[1]} "
+        f"n_trials_with_streaming_rtfx={rtfx[1]} "
+        f"finalization_n_with_measure={pooled['n_with_measure']} "
+        f"finalization_n_total={pooled['n_total']}"
+    )
+    header = "\t".join(name for name, _value in columns)
+    row = "\t".join(_cell(value) for _name, value in columns)
+    return comment + "\n" + header + "\n" + row + "\n"
+
+
+def _trial_mean(
+    trials: list[dict[str, Any]], section: str, field: str
+) -> tuple[float | None, int]:
+    """Return the mean of one per-trial scalar and how many trials had it."""
+    values: list[float] = []
+    for trial in trials:
+        value = trial["reduction"][section][field]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        values.append(float(value))
+    if not values:
+        return None, 0
+    return sum(values) / len(values), len(values)
+
+
 def frontier_report(
     receipts: list[dict[str, Any]],
     sources: list[str],
@@ -268,7 +432,12 @@ def frontier_report(
 
     Returns:
         A JSON-ish frontier object.
+
+    Raises:
+        NotHomogeneousError: A receipt mixes cadence or lookahead.
     """
+    for receipt in receipts:
+        _require_homogeneous(receipt)
     order, grouped = _group(
         receipts, sources, frontier_group_key, _frontier_point
     )
@@ -341,7 +510,12 @@ def sustained_streams_report(
 
     Returns:
         A JSON-ish projection. ``value`` is null when no cell passed.
+
+    Raises:
+        NotHomogeneousError: A receipt mixes cadence or lookahead.
     """
+    for receipt in receipts:
+        _require_homogeneous(receipt)
     order, grouped = _group(
         receipts, sources, capacity_group_key, _capacity_cell
     )
@@ -485,9 +659,7 @@ def _require_homogeneous(receipt: dict[str, Any]) -> None:
     frames = {entry["lookahead_frames"] for entry in population}
     cadences = {entry["cadence_ms"] for entry in population}
     if len(frames) != 1 or len(cadences) != 1:
-        raise NotHomogeneousError(
-            "vendor TSV requires one cadence and one lookahead"
-        )
+        raise NotHomogeneousError("one cadence and one lookahead are required")
 
 
 def _cell(value: object) -> str:

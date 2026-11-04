@@ -97,6 +97,18 @@ def test_a_language_change_names_the_field(tmp_path: Path) -> None:
     assert any(item.field.endswith("language") for item in result.differences)
 
 
+def test_channel_options_warn_and_do_not_refuse(tmp_path: Path) -> None:
+    left = _run(tmp_path)
+    right = json.loads(json.dumps(left))
+    right["resolved_config"]["target"]["channel_options"] = {
+        "keepalive_time_ms": 30000
+    }
+    result = compare_receipts(left, right)
+    assert result.status == "comparable"
+    assert result.comparison_key_left == result.comparison_key_right
+    assert any("channel_options" in item.field for item in result.warnings)
+
+
 def test_driver_and_git_commit_warn_and_do_not_refuse(tmp_path: Path) -> None:
     left = _run(tmp_path)
     driver = json.loads(json.dumps(left))
@@ -113,7 +125,9 @@ def test_driver_and_git_commit_warn_and_do_not_refuse(tmp_path: Path) -> None:
     assert any(item.field == "git_commit" for item in commit_result.warnings)
 
 
-def test_server_gpu_and_server_version_are_hard(tmp_path: Path) -> None:
+def test_server_gpu_is_hard_and_server_version_is_recorded(
+    tmp_path: Path,
+) -> None:
     left = _run(
         tmp_path,
         overrides={
@@ -127,7 +141,9 @@ def test_server_gpu_and_server_version_are_hard(tmp_path: Path) -> None:
     assert left["identity"]["hardware"]["gpu_name"] == "A40"
     source = left["identity"]["hardware"]["gpu_identity_source"]
     assert source == "server_declared"
-    assert left["identity"]["target"]["server_version"] == "1.2.3"
+    assert "server_version" not in left["identity"]["target"]
+    assert left["identity"]["recorded"]["server_version"] == "1.2.3"
+    assert left["identity"]["recorded"]["engine"]["version"] == "1.2.3"
     assert left["identity"]["warn"]["driver_version"] == "550.54.15"
     driver_source = left["identity"]["warn"]["driver_version_source"]
     assert driver_source == "server_declared"
@@ -143,6 +159,22 @@ def test_server_gpu_and_server_version_are_hard(tmp_path: Path) -> None:
         },
     )
     assert compare_receipts(left, same).status == "comparable"
+    version = _run(
+        tmp_path,
+        run_id="version",
+        overrides={
+            ("target", "server_gpu_name"): "A40",
+            ("target", "server_gpu_count"): 1,
+            ("target", "server_gpu_memory_mib"): 46068,
+            ("target", "server_version"): "9.9.9",
+            ("target", "server_driver_version"): "550.54.15",
+        },
+    )
+    moved = compare_receipts(left, version)
+    assert moved.status == "comparable"
+    assert moved.comparison_key_left == moved.comparison_key_right
+    assert any(item.field == "server_version" for item in moved.recorded)
+    assert "server_version" not in {item.field for item in moved.differences}
     other = _run(
         tmp_path,
         run_id="other",
@@ -158,7 +190,7 @@ def test_server_gpu_and_server_version_are_hard(tmp_path: Path) -> None:
     assert refused.status == "refused"
     fields = {item.field for item in refused.differences}
     assert "gpu_name" in fields
-    assert "server_version" in fields
+    assert "server_version" not in fields
 
 
 def test_a_tampered_comparison_key_is_stored_versus_recomputed(
@@ -325,9 +357,9 @@ def test_semantics_version_is_read_from_the_receipt(
     left = _run(tmp_path)
     right = json.loads(json.dumps(left))
     monkeypatch.setattr(
-        "asrbench.definitions.MEASUREMENT_SEMANTICS_VERSION", "2"
+        "asrbench.definitions.MEASUREMENT_SEMANTICS_VERSION", "9"
     )
-    monkeypatch.setattr("asrbench.receipt.MEASUREMENT_SEMANTICS_VERSION", "2")
+    monkeypatch.setattr("asrbench.receipt.MEASUREMENT_SEMANTICS_VERSION", "9")
     assert compare_receipts(left, right).status == "comparable"
     newer = _run(tmp_path / "bumped", run_id="bumped")
     result = compare_receipts(left, newer)
@@ -340,4 +372,4 @@ def test_semantics_version_is_read_from_the_receipt(
         left["identity"]["software"]["measurement_semantics_version"]
         == MEASUREMENT_SEMANTICS_VERSION
     )
-    assert newer["identity"]["software"]["measurement_semantics_version"] == "2"
+    assert newer["identity"]["software"]["measurement_semantics_version"] == "9"

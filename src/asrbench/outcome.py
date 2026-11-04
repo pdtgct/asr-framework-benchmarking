@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 #: Interval from the first audio sample transmitted to the first non-empty
 #: interim response. The name is emitted into every artifact.
@@ -34,6 +34,30 @@ RESPONSE_LATENCY_CLOCK = (
 FINALIZATION_CLOCK = (
     "client_monotonic/last_audio_sample_sent_to_final_result_received"
 )
+
+
+class AudioProgressSample(TypedDict):
+    """One ``audio_processed`` observation on the client clock.
+
+    Times are seconds. ``received_s`` and ``audio_sent_s`` share the
+    client's monotonic clock. ``audio_sent_s`` is the audio duration
+    sent by the time the response arrived, not a wall time.
+    """
+
+    audio_processed_s: float
+    received_s: float
+    audio_sent_s: float
+
+
+class WordTimingSample(TypedDict):
+    """One word end on the audio clock and the final that carried it.
+
+    ``end_time_s`` is seconds from the start of the audio.
+    ``final_received_s`` is client-monotonic.
+    """
+
+    end_time_s: float
+    final_received_s: float
 
 
 @dataclass(frozen=True)
@@ -59,9 +83,10 @@ class SessionRequest:
     cadence_ms: int | None
     #: Bound on both session configuration and transcript completion.
     timeout_s: float
-    #: Lifecycle probe selector, not a workload knob. See the module note in
-    #: ``asrbench.adapters.realtime_ws``.
-    mode: str
+    #: Realtime WebSocket lifecycle probe, such as ``full``. Not a workload
+    #: knob and not :attr:`workload_mode`. See the module note in
+    #: ``asrbench.adapters.realtime_ws``. gRPC does not read it.
+    lifecycle: str
     #: Transmit in real time (one ``chunk_ms`` of audio per ``chunk_ms``)
     #: rather than as fast as the transport accepts.
     pace: bool
@@ -73,12 +98,14 @@ class SessionRequest:
     diarization: bool = False
     #: Ask the server for interim hypotheses.
     interim_results: bool = True
+    #: Ask the server for word end offsets. A workload comparison key.
+    enable_word_time_offsets: bool = False
     #: Transcript shape requested from the server.
     transcript_policy: str = "final-and-interims"
     #: Client-declared lookahead for this session, in frames.
     lookahead_frames: int | None = None
     #: Workload mode, ``streaming`` or ``offline``. Distinct from
-    #: :attr:`mode`, which is the realtime lifecycle probe.
+    #: :attr:`lifecycle`, which is the realtime lifecycle probe.
     workload_mode: str = "streaming"
 
 
@@ -94,7 +121,8 @@ class SessionOutcome:
 
     #: Echoed from the request so an outcome is self-identifying.
     label: str
-    mode: str
+    #: Realtime lifecycle probe echoed from the request, not workload mode.
+    lifecycle: str
     clip_name: str
     chunk_ms: int
     #: Duration of the source clip, not of the session.
@@ -148,3 +176,26 @@ class SessionOutcome:
     #: name one; reducers then attribute :data:`FINALIZATION_CLOCK` and
     #: say they did so.
     final_latency_clock: str = ""
+    #: Index into the workload population. The runner writes it. ``None``
+    #: means the outcome was not produced by the runner.
+    entry_index: int | None = None
+    #: Cadence of that population entry, in milliseconds.
+    cadence_ms: int | None = None
+    #: Lookahead frame count of that population entry.
+    lookahead_frames: int | None = None
+    #: Client-monotonic time of the first audio sample sent.
+    first_audio_sent_s: float | None = None
+    #: Client-monotonic time of the last audio sample sent.
+    last_audio_sent_s: float | None = None
+    #: Client-monotonic time of the final result.
+    final_received_s: float | None = None
+    #: ``audio_processed`` samples in arrival order. ``None`` means the
+    #: transport did not report the field. An empty list means it
+    #: reported no samples.
+    audio_progress: list[AudioProgressSample] | None = None
+    #: Word end times. ``None`` means offsets were not recorded.
+    word_timings: list[WordTimingSample] | None = None
+    #: Client-monotonic send time of each audio chunk, in send order.
+    chunk_send_times_s: list[float] | None = None
+    #: Client-monotonic receive time of each streaming response.
+    response_receive_times_s: list[float] | None = None

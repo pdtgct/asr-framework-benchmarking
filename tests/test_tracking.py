@@ -12,11 +12,19 @@ from asrbench.tracking import build_index, write_index
 def _receipt(path: Path, key: str, gpu: str) -> None:
     payload = {
         "comparison_key": key,
-        "schema_version": "asrbench-receipt/1",
+        "schema_version": "asrbench-receipt/2",
         "summary": {"conjunction_passed": True},
         "identity": {
             "hardware": {"gpu_name": gpu},
-            "target": {"model": "mock-asr", "transport": "mock"},
+            "target": {
+                "checkpoint": {
+                    "id": "mock",
+                    "revision": "rev",
+                    "source": "unverified",
+                }
+            },
+            "warn": {"model": "mock-asr"},
+            "recorded": {"engine": {"transport": "mock"}},
             "software": {"normalization_policy": "engine_vs_own_oracle"},
         },
         "fingerprints": {

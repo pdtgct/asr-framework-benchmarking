@@ -23,6 +23,8 @@ MOCK_TTFS_CLOCK = "mock/simulated_first_audio_to_first_nonempty_partial"
 MOCK_RESPONSE_CLOCK = "mock/simulated_latest_audio_to_nonempty_partial"
 #: Simulated stand-in for :data:`asrbench.outcome.FINALIZATION_CLOCK`.
 MOCK_FINAL_CLOCK = "mock/simulated_last_audio_to_final"
+#: Simulated stand-in for end-to-end RTFx. Not a client monotonic clock.
+MOCK_E2E_CLOCK = "mock/simulated_first_audio_sent_to_final_received"
 
 # 1/8 second. Exact in binary floating point, so receipts do not wobble.
 _STEP_S = 0.125
@@ -82,7 +84,7 @@ class MockAdapter:
         chunks = chunk_pcm16(pcm, request.chunk_ms)
         outcome = SessionOutcome(
             label=request.label,
-            mode=request.mode,
+            lifecycle=request.lifecycle,
             clip_name=request.clip_path.name,
             chunk_ms=request.chunk_ms,
             audio_duration_s=len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE,
@@ -95,6 +97,12 @@ class MockAdapter:
             final_latency_s=_FINAL_S,
             terminal_status="completed",
         )
+        # Simulated timeline: 0 is the first audio sample. The default
+        # tier reduces E2E RTFx from these stamps and does not sleep.
+        last_sent = _STEP_S * max(len(chunks) - 1, 0)
+        outcome.first_audio_sent_s = 0.0
+        outcome.last_audio_sent_s = last_sent
+        outcome.final_received_s = last_sent + _FINAL_S
         outcome.protocol_extras["adapter"] = self.name
         if admission_barrier is not None:
             markers = await admission_barrier.wait(request.label)

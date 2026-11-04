@@ -18,10 +18,12 @@ from asrbench.config import (
     config_from_mapping,
     validate,
 )
+from asrbench.definitions import CHECKPOINT_SOURCE_UNVERIFIED
 from asrbench.fingerprint import (
     COMPARISON_EXCLUSIONS,
     comparison_key,
     identity_blocks,
+    word_offsets_sent,
     workload_fingerprint,
     workload_material,
 )
@@ -53,6 +55,7 @@ class CompareResult:
     comparable: bool
     differences: tuple[FieldDifference, ...]
     warnings: tuple[FieldDifference, ...]
+    recorded: tuple[FieldDifference, ...]
     summary: tuple[str, ...]
     force_reason: str | None
     observation_fingerprint_match: bool
@@ -77,6 +80,7 @@ class CompareResult:
                 _difference_dict(item) for item in self.differences
             ],
             "warnings": [_difference_dict(item) for item in self.warnings],
+            "recorded": [_difference_dict(item) for item in self.recorded],
         }
 
 
@@ -113,31 +117,36 @@ def compare_receipts(
     right_view = _view(right)
     differences = _hard_differences(left_view, right_view)
     warnings = _leaf_diffs("warn", left_view["warn"], right_view["warn"])
+    warnings.extend(_unverified_checkpoint(left_view, right_view))
+    recorded = _recorded_rows(left_view, right_view)
     left_observation = left_view["observation_fingerprint"]
     right_observation = right_view["observation_fingerprint"]
     observation_match = left_observation == right_observation
     if differences and force:
         status = "forced"
         comparable = False
-        recorded = reason.strip() if reason else None
+        force_reason = reason.strip() if reason else None
     elif differences:
         status = "refused"
         comparable = False
-        recorded = None
+        force_reason = None
     else:
         status = "comparable"
         comparable = True
-        recorded = None
-    summary = tuple(_summary(item) for item in differences) + tuple(
-        "warn: " + _summary(item) for item in warnings
+        force_reason = None
+    summary = (
+        tuple(_summary(item) for item in differences)
+        + tuple("warn: " + _summary(item) for item in warnings)
+        + tuple("recorded: " + _summary(item) for item in recorded)
     )
     return CompareResult(
         status=status,
         comparable=comparable,
         differences=tuple(differences),
         warnings=tuple(warnings),
+        recorded=tuple(recorded),
         summary=summary,
-        force_reason=recorded,
+        force_reason=force_reason,
         observation_fingerprint_match=observation_match,
         comparison_key_left=str(left_view["comparison_key"]),
         comparison_key_right=str(right_view["comparison_key"]),
@@ -160,7 +169,10 @@ def _view(receipt: dict[str, Any]) -> dict[str, Any]:
     return {
         "config": config,
         "workload_fingerprint": recomputed_fp,
-        "workload_material": workload_material(config.workload),
+        "workload_material": workload_material(
+            config.workload,
+            word_offsets_sent=word_offsets_sent(config),
+        ),
         "stored_workload_fingerprint": _get(
             receipt, "fingerprints", "workload"
         ),
@@ -173,6 +185,8 @@ def _view(receipt: dict[str, Any]) -> dict[str, Any]:
         "stored_software": _mapping(receipt, "identity", "software"),
         "stored_hardware": _mapping(receipt, "identity", "hardware"),
         "warn": blocks["warn"],
+        "recorded": blocks["recorded"],
+        "stored_recorded": _mapping(receipt, "identity", "recorded"),
         "observation_fingerprint": _get(receipt, "fingerprints", "observation"),
     }
 
@@ -227,6 +241,7 @@ def _integrity(view: dict[str, Any]) -> list[FieldDifference]:
         ("target_identity", "stored_target", "target"),
         ("software_identity", "stored_software", "software"),
         ("hardware_identity", "stored_hardware", "hardware"),
+        ("recorded_identity", "stored_recorded", "recorded"),
     ):
         found.extend(
             _leaf_diffs(
@@ -246,9 +261,12 @@ def _blocks(
 
     Measurement semantics and schema version come from the receipt, not
     from the installed package. A hand edit of ``identity.warn`` that
-    does not match the probe is not what is compared.
+    does not match the probe is not what is compared. The recorded
+    adapter is the injected name stored on the receipt, not
+    ``target.transport``.
     """
     probe_hw = _mapping(receipt, "probe", "hardware")
+    stored_recorded = _mapping(receipt, "identity", "recorded")
     probe_sw = _mapping(receipt, "probe", "software")
     stored_warn = _mapping(receipt, "identity", "warn")
     stored_software = _mapping(receipt, "identity", "software")
@@ -258,13 +276,11 @@ def _blocks(
             return primary[key]
         return stored_warn.get(key, default)
 
-    adapter = stored_software.get("adapter")
     schema = receipt.get("schema_version")
     semantics = stored_software.get("measurement_semantics_version")
-    if isinstance(adapter, str) and adapter:
-        adapter_text = adapter
-    else:
-        adapter_text = config.target.transport
+    recorded_adapter = stored_recorded.get("adapter")
+    if not isinstance(recorded_adapter, str) or not recorded_adapter:
+        recorded_adapter = config.target.transport
     return identity_blocks(
         config,
         {
@@ -282,7 +298,7 @@ def _blocks(
             "system": str(pick(probe_hw, "system", "")),
         },
         {
-            "adapter": adapter_text,
+            "adapter": recorded_adapter,
             "git_commit": str(pick(probe_sw, "git_commit", "unknown")),
             "git_dirty": bool(pick(probe_sw, "git_dirty", False)),
             "measurement_semantics_version": (
@@ -317,7 +333,48 @@ def _leaf_diffs(
     ]
 
 
+def _recorded_rows(
+    left: dict[str, Any], right: dict[str, Any]
+) -> list[FieldDifference]:
+    """Engine and precision, shown even when the two sides match."""
+    fields = (
+        "adapter",
+        "comparison_axis",
+        "engine",
+        "server_version",
+        "precision",
+        "tf32",
+    )
+    return [
+        FieldDifference(
+            "recorded", field, left["recorded"][field], right["recorded"][field]
+        )
+        for field in fields
+    ]
+
+
+def _unverified_checkpoint(
+    left: dict[str, Any], right: dict[str, Any]
+) -> list[FieldDifference]:
+    """Flag a checkpoint that is not a verified weights identity."""
+    left_source = left["target"]["checkpoint"]["source"]
+    right_source = right["target"]["checkpoint"]["source"]
+    if (
+        left_source != CHECKPOINT_SOURCE_UNVERIFIED
+        and right_source != CHECKPOINT_SOURCE_UNVERIFIED
+    ):
+        return []
+    return [
+        FieldDifference("checkpoint", "unverified", left_source, right_source)
+    ]
+
+
 def _summary(difference: FieldDifference) -> str:
+    if difference.left == difference.right:
+        return (
+            f"{difference.component}: {difference.field} "
+            f"{_show(difference.left)}"
+        )
     return (
         f"{difference.component}: {difference.field} "
         f"{_show(difference.left)} != {_show(difference.right)}"

@@ -1,0 +1,77 @@
+{
+  "workload": {
+    "clip": {
+      "id": "librispeech-1272-135031-0000",
+      "generator": "file",
+      "duration_s": 10.885,
+      "sample_rate": 16000,
+      "path": "clips/1272-135031-0000.wav",
+      "licence": "CC-BY-4.0",
+      "attribution": "LibriSpeech ASR corpus (Panayotov et al., ICASSP 2015)",
+      "note": "datasets.lock entry librispeech-1272-135031-0000. The lock digest is the FLAC. scripts/prepare_librispeech_clip.py checks it and writes the PCM16 WAV; the runner pins that WAV when the file is present. Audio is not committed. 10.885 s is 2.4 contexts of the 80 ms frame. Not an endpointing clip. lookahead_frames 2 is client-declared from 160 ms / 80 ms and is not server-reported. Set target.model to the model_name from GetRivaSpeechRecognitionConfig; RecognitionConfig.model is that string verbatim. iterations is explicit. finalization_s is reported by the receipt and the perf TSV and is not the pass gate."
+    },
+    "reference_transcript": "BECAUSE YOU WERE SLEEPING INSTEAD OF CONQUERING THE LOVELY ROSE PRINCESS HAS BECOME A FIDDLE WITHOUT A BOW WHILE POOR SHAGGY SITS THERE A COOING DOVE",
+    "mode": "streaming",
+    "pacing": true,
+    "chunk_ms": 160,
+    "cadence_ms": 160,
+    "lookahead_frames": 2,
+    "lookahead_ms_label": 160,
+    "att_context_right": 1,
+    "enable_word_time_offsets": false,
+    "lanes": 1,
+    "iterations": 3,
+    "warmup": 1,
+    "trials": 3,
+    "timeout_s": 30,
+    "seed": 0,
+    "language": "en-US",
+    "punctuation": true,
+    "diarization": false,
+    "interim_results": true,
+    "transcript_policy": "final-and-interims",
+    "population": [
+      {
+        "lanes": 1,
+        "cadence_ms": 160,
+        "lookahead_frames": 2,
+        "lookahead_ms_label": 160,
+        "att_context_right": 1
+      }
+    ]
+  },
+  "target": {
+    "endpoint_url": "grpc.nvcf.nvidia.com:443",
+    "transport": "riva-grpc",
+    "model": "nemotron-asr-streaming",
+    "engine_name": "nim",
+    "checkpoint_id": "nemotron-asr-streaming",
+    "checkpoint_source": "unverified",
+    "auth_env": "NVIDIA_API_KEY",
+    "tls_verify": true,
+    "transport_options": {
+      "use_ssl": true,
+      "max_alternatives": 1,
+      "enable_word_time_offsets": false,
+      "custom_configuration": {}
+    }
+  },
+  "run": {
+    "verbosity": 0,
+    "profiler": null,
+    "percentile_method": "numpy_linear",
+    "lookahead_identity_policy": "client_declared",
+    "emit_tsv": true,
+    "pass_policy": {
+      "admission_fraction_min": 1.0,
+      "first_partial_presence_min": 1.0,
+      "latency_metric": "ttfs",
+      "latency_percentile": 99,
+      "latency_slo_s": 1.0,
+      "sustainability_policy": "completion_fraction",
+      "sustainability_min": 1.0,
+      "accuracy_tolerance": 0.1,
+      "normalization_policy": "corpus_reference"
+    }
+  }
+}

@@ -230,6 +230,11 @@ def test_a_raising_lane_is_an_errored_outcome(tmp_path: Path) -> None:
     assert counts["attempted"] == 1
     text = receipt["trials"][0]["outcomes"][0]["error_detail"]
     assert "RuntimeError" in text
+    failed = receipt["trials"][0]["outcomes"][0]
+    assert failed["entry_index"] == 0
+    assert failed["cadence_ms"] == 320
+    assert failed["lookahead_frames"] == 4
+    assert failed["lifecycle"] == "full"
     extras = receipt["trials"][0]["outcomes"][0]["protocol_extras"]
     assert "exception" not in extras
 
@@ -241,14 +246,26 @@ def test_rate_rps_is_refused_rather_than_run_as_lanes() -> None:
 
 
 def test_unknown_transport_names_the_lane_unavailable_seam() -> None:
-    config = resolve(env={}, overrides={("target", "transport"): "future"})
+    config = resolve(
+        env={},
+        overrides={
+            ("target", "transport"): "future",
+            ("target", "checkpoint_id"): "declared-weights",
+        },
+    )
     with pytest.raises(ConfigError, match="lane_unavailable") as caught:
         load_adapter(config.target)
     assert "future" in str(caught.value)
 
 
 def test_realtime_ws_is_not_opened_by_the_runner() -> None:
-    config = resolve(env={}, overrides={("target", "transport"): "realtime-ws"})
+    config = resolve(
+        env={},
+        overrides={
+            ("target", "transport"): "realtime-ws",
+            ("target", "checkpoint_id"): "declared-weights",
+        },
+    )
     with pytest.raises(ConfigError, match="caller-owned"):
         load_adapter(config.target)
 
@@ -288,7 +305,7 @@ def _drive(
 def _success(request: SessionRequest) -> SessionOutcome:
     return SessionOutcome(
         label=request.label,
-        mode=request.mode,
+        lifecycle=request.lifecycle,
         clip_name=request.clip_path.name,
         chunk_ms=request.chunk_ms,
         audio_duration_s=1.6,
@@ -354,6 +371,15 @@ def test_each_lane_runs_at_its_population_cadence(tmp_path: Path) -> None:
 
     receipt = _drive(config, tmp_path, "mixed", Recording())
     assert seen == [(160, 2), (320, 4), (320, 4)]
+    recorded = [
+        (
+            item["entry_index"],
+            item["cadence_ms"],
+            item["lookahead_frames"],
+        )
+        for item in receipt["trials"][0]["outcomes"]
+    ]
+    assert recorded == [(0, 160, 2), (1, 320, 4), (1, 320, 4)]
     resolved = receipt["resolved_config"]
     assert isinstance(resolved, dict)
     assert resolved["workload"]["cadence_ms"] is None
@@ -414,6 +440,74 @@ def test_barrier_wait_plus_later_work_keeps_the_outcome(tmp_path: Path) -> None:
     assert waiting["ttfs_s"] == 0.5
     assert waiting["timed_out"] is False
     assert waiting["interim_texts"] == ["kept"]
+
+
+def test_unsent_word_offsets_are_refused_before_the_run(
+    tmp_path: Path,
+) -> None:
+    class Closed:
+        name = "realtime-ws"
+        supported_workload_options: frozenset[str] = frozenset()
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del request, admission_barrier, progress_callback
+            raise AssertionError("unsent word offsets must be refused first")
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "enable_word_time_offsets"): True,
+            ("target", "transport_options"): {
+                "enable_word_time_offsets": True,
+            },
+            ("workload", "lanes"): 1,
+            ("workload", "iterations"): 1,
+            ("workload", "trials"): 1,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    with pytest.raises(ConfigError, match="enable_word_time_offsets"):
+        _drive(config, tmp_path, "offsets", Closed())
+
+
+def test_injected_adapter_name_compares_to_itself(tmp_path: Path) -> None:
+    from asrbench.compare import compare_receipts
+
+    class Named:
+        name = "custom-adapter"
+
+        async def run(
+            self,
+            request: SessionRequest,
+            *,
+            admission_barrier: SessionAdmissionBarrier | None = None,
+            progress_callback: SessionProgressCallback | None = None,
+        ) -> SessionOutcome:
+            del admission_barrier, progress_callback
+            return _success(request)
+
+    config = resolve(
+        env={},
+        overrides={
+            ("workload", "lanes"): 1,
+            ("workload", "iterations"): 1,
+            ("workload", "trials"): 1,
+            ("workload", "warmup"): 0,
+            ("run", "output_path"): "receipt.json",
+        },
+    )
+    receipt = _drive(config, tmp_path, "named", Named())
+    assert receipt["identity"]["recorded"]["adapter"] == "custom-adapter"
+    recorded = receipt["identity"]["recorded"]["engine"]
+    assert recorded["transport"] == "mock"
+    copy = json.loads(json.dumps(receipt))
+    assert compare_receipts(receipt, copy).status == "comparable"
 
 
 def test_unsupported_workload_option_is_refused_before_the_run(
@@ -567,3 +661,39 @@ def test_later_iterations_are_not_lockstep_waves(tmp_path: Path) -> None:
         item for item in events if item[0] == "t0-lane0-i0" and item[1] == "end"
     )
     assert start[2] < end[2]
+
+
+def test_iterations_per_stream_runs_factor_times_lanes_not_squared(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(_PRESET.read_text(encoding="utf-8"))
+    workload = payload["workload"]
+    workload["lanes"] = 4
+    workload["iterations"] = 99
+    workload["iterations_per_stream"] = 3
+    workload["warmup"] = 0
+    workload["trials"] = 1
+    workload["pacing"] = False
+    workload["population"] = [
+        {
+            "lanes": 4,
+            "cadence_ms": workload["cadence_ms"],
+            "lookahead_frames": workload["lookahead_frames"],
+            "lookahead_ms_label": workload["lookahead_ms_label"],
+        }
+    ]
+    preset = tmp_path / "factor.json"
+    preset.write_text(json.dumps(payload), encoding="utf-8")
+    config = resolve(
+        preset_path=preset,
+        env={},
+        overrides={("run", "output_path"): "receipt.json"},
+    )
+    assert config.workload.iterations == 3
+    assert config.workload.lanes == 4
+    receipt = _drive(config, tmp_path / "run", "factor-lanes")
+    trial = receipt["trials"][0]
+    assert len(trial["outcomes"]) == 12
+    counts = receipt["summary"]["pooled"]["counts"]
+    assert counts["attempted"] == 12
+    assert counts["completed"] == 12

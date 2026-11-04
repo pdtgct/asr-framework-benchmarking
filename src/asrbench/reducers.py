@@ -29,6 +29,8 @@ _ACROSS = (
     ("response_latency_p50_s", "response_latency_s", "p50"),
     ("response_latency_p99_s", "response_latency_s", "p99"),
     ("finalization_p50_s", "finalization_s", "p50"),
+    ("e2e_rtfx_mean", "e2e_rtfx", "mean"),
+    ("aggregate_rtfx", "aggregate_rtfx", "value"),
     ("micro_wer", "wer", "micro_wer"),
     ("streaming_rtfx", "streaming_rtfx", "value"),
     ("offline_rtfx", "offline_rtfx", "value"),
@@ -192,9 +194,7 @@ def reduce_trial(
         definition=d.FINALIZATION_DEFINITION,
         method=percentile_method,
         population=population,
-        read=_scalar_reader(
-            "final_latency_s", "final_latency_clock", d.FINALIZATION_CLOCK
-        ),
+        read=_read_finalization,
     )
     if wer is None:
         wer = _wer(
@@ -204,6 +204,25 @@ def reduce_trial(
             percentile_method,
         )
     attempted, successful = _audio(outcomes)
+    e2e, _e2e_samples = _measure(
+        outcomes,
+        name="e2e_rtfx",
+        native_clock=d.E2E_RTFX_CLOCK,
+        definition=d.E2E_RTFX_DEFINITION,
+        method=percentile_method,
+        population=population,
+        read=_read_e2e,
+    )
+    e2e["unit"] = "ratio"
+    frontier_rtfx = _frontier_rtfx(outcomes, percentile_method)
+    frontier_lag = _frontier_lag(outcomes, percentile_method)
+    word_latency = _word_latency(outcomes, percentile_method)
+    aggregate = _aggregate_rtfx(
+        attempted=attempted,
+        successful=successful,
+        wall_span_s=wall_span_s,
+    )
+    riva_compat = _riva_compat(outcomes, percentile_method)
     rtfx = _rtfx_blocks(
         mode=mode,
         pacing=pacing,
@@ -220,6 +239,14 @@ def reduce_trial(
         metrics={
             d.LATENCY_METRIC_TTFS: (ttfs, ttfs_samples),
             d.LATENCY_METRIC_RESPONSE: (response, response_samples),
+            d.LATENCY_METRIC_FINALIZATION: (
+                finalization,
+                _final_samples,
+            ),
+            d.LATENCY_METRIC_FRONTIER_LAG: (
+                frontier_lag,
+                _lag_samples(outcomes),
+            ),
         },
         wer=wer,
         reference=reference,
@@ -231,6 +258,12 @@ def reduce_trial(
         "ttfs_s": ttfs,
         "response_latency_s": response,
         "finalization_s": finalization,
+        "e2e_rtfx": e2e,
+        "frontier_rtfx": frontier_rtfx,
+        "frontier_lag_s": frontier_lag,
+        "word_latency_s": word_latency,
+        "aggregate_rtfx": aggregate,
+        "riva_client_compat_s": riva_compat,
         "wer": wer,
         "streaming_rtfx": rtfx["streaming_rtfx"],
         "offline_rtfx": rtfx["offline_rtfx"],
@@ -385,6 +418,483 @@ def _check_finite(outcomes: list[SessionOutcome]) -> None:
                 raise MeasurementError(
                     f"{outcome.label} response latency is not finite"
                 )
+        for name, value in (
+            ("first_audio_sent_s", outcome.first_audio_sent_s),
+            ("last_audio_sent_s", outcome.last_audio_sent_s),
+            ("final_received_s", outcome.final_received_s),
+        ):
+            if value is not None and not math.isfinite(value):
+                raise MeasurementError(f"{outcome.label} {name} is not finite")
+        _check_progress(outcome)
+        _check_words(outcome)
+        _check_trace(outcome, "chunk_send_times_s", outcome.chunk_send_times_s)
+        _check_trace(
+            outcome,
+            "response_receive_times_s",
+            outcome.response_receive_times_s,
+        )
+
+
+def _finite(value: object, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise MeasurementError(f"{where} is not finite")
+    number = float(value)
+    if not math.isfinite(number):
+        raise MeasurementError(f"{where} is not finite")
+    return number
+
+
+def _check_progress(outcome: SessionOutcome) -> None:
+    if outcome.audio_progress is None:
+        return
+    for index, item in enumerate(outcome.audio_progress):
+        where = f"{outcome.label} audio_progress[{index}]"
+        for key in ("audio_processed_s", "received_s", "audio_sent_s"):
+            if key not in item:
+                raise MeasurementError(f"{where} missing {key}")
+            _finite(item[key], f"{where}.{key}")
+
+
+def _check_words(outcome: SessionOutcome) -> None:
+    if outcome.word_timings is None:
+        return
+    for index, item in enumerate(outcome.word_timings):
+        where = f"{outcome.label} word_timings[{index}]"
+        for key in ("end_time_s", "final_received_s"):
+            if key not in item:
+                raise MeasurementError(f"{where} missing {key}")
+            _finite(item[key], f"{where}.{key}")
+
+
+def _check_trace(
+    outcome: SessionOutcome, name: str, values: list[float] | None
+) -> None:
+    if values is None:
+        return
+    for index, value in enumerate(values):
+        _finite(value, f"{outcome.label} {name}[{index}]")
+
+
+def _e2e_clock(outcome: SessionOutcome) -> str:
+    """Name the E2E clock. Mock stamps are simulated, not monotonic."""
+    if (outcome.latency_clock or "").startswith("mock/"):
+        return "mock/simulated_first_audio_sent_to_final_received"
+    return d.E2E_RTFX_CLOCK
+
+
+def _read_e2e(outcome: SessionOutcome) -> tuple[list[float], str, bool]:
+    """E2E RTFx for a completed session. Failures stay in n_total only."""
+    clock = _e2e_clock(outcome)
+    if not is_completed(outcome):
+        return [], clock, False
+    start = outcome.first_audio_sent_s
+    finish = outcome.final_received_s
+    if start is None or finish is None:
+        return [], clock, False
+    span = finish - start
+    if span <= 0:
+        return [], clock, False
+    return [outcome.audio_duration_s / span], clock, True
+
+
+def _finalization_seconds(outcome: SessionOutcome) -> float | None:
+    """Return t_f minus t_last when both stamps exist.
+
+    The legacy ``final_latency_s`` is the fallback. A negative value is
+    kept: the final arrived before the last audio sample.
+    """
+    last = outcome.last_audio_sent_s
+    final = outcome.final_received_s
+    if last is not None and final is not None:
+        return final - last
+    if outcome.final_latency_s is None:
+        return None
+    return float(outcome.final_latency_s)
+
+
+def _read_finalization(
+    outcome: SessionOutcome,
+) -> tuple[list[float], str, bool]:
+    """Finalization for a completed session. Failures stay in n_total."""
+    if not is_completed(outcome):
+        return [], d.FINALIZATION_CLOCK, False
+    value = _finalization_seconds(outcome)
+    if value is None:
+        return [], d.FINALIZATION_CLOCK, False
+    explicit = str(outcome.final_latency_clock or "")
+    return [value], explicit or d.FINALIZATION_CLOCK, bool(explicit)
+
+
+def _decreased(samples: list[float]) -> bool:
+    return any(
+        samples[index] < samples[index - 1] for index in range(1, len(samples))
+    )
+
+
+def _frontier_pairs(
+    outcome: SessionOutcome,
+) -> tuple[str, list[float]]:
+    """Return ``invalid``, ``unavailable``, or ``measured`` and RTFx samples."""
+    progress = outcome.audio_progress
+    if progress is None:
+        return "unavailable", []
+    processed = [float(item["audio_processed_s"]) for item in progress]
+    if _decreased(processed):
+        return "invalid", []
+    ratios: list[float] = []
+    for index in range(1, len(progress)):
+        delta_t = float(progress[index]["received_s"]) - float(
+            progress[index - 1]["received_s"]
+        )
+        if delta_t <= 0:
+            continue
+        delta_p = processed[index] - processed[index - 1]
+        ratios.append(delta_p / delta_t)
+    return "measured", ratios
+
+
+def _frontier_rtfx(
+    outcomes: list[SessionOutcome], method: str
+) -> dict[str, Any]:
+    invalid = 0
+    absent = 0
+    measured_sessions = 0
+    samples: list[float] = []
+    for outcome in outcomes:
+        status, ratios = _frontier_pairs(outcome)
+        if status == "invalid":
+            invalid += 1
+            continue
+        if status == "unavailable":
+            absent += 1
+            continue
+        if not ratios:
+            continue
+        measured_sessions += 1
+        samples.extend(ratios)
+    publish = invalid == 0
+    if invalid:
+        availability = "invalid"
+        reason: str | None = d.FRONTIER_RTFX_INVALID_REASON
+        shown: list[float] = []
+        with_measure = 0
+    elif measured_sessions == 0 and absent == len(outcomes):
+        availability = "unavailable"
+        reason = d.FRONTIER_RTFX_UNAVAILABLE_REASON
+        shown = []
+        with_measure = 0
+    elif measured_sessions == 0:
+        availability = "no_samples"
+        reason = (
+            "audio_processed_absent_on_some_sessions"
+            if absent
+            else "audio_processed_has_no_interval"
+        )
+        shown = []
+        with_measure = 0
+    elif absent:
+        availability = "partial"
+        reason = "audio_processed_absent_on_some_sessions"
+        shown = samples
+        with_measure = measured_sessions
+    else:
+        availability = "measured"
+        reason = None
+        shown = samples
+        with_measure = measured_sessions
+    stats = _percentiles(shown, method) if shown else _blank_stats()
+    return {
+        "name": "frontier_rtfx",
+        "clock": d.FRONTIER_RTFX_CLOCK,
+        "definition": d.FRONTIER_RTFX_DEFINITION,
+        "percentile_method": method,
+        "availability": availability,
+        "reason": reason,
+        "unit": "ratio",
+        **stats,
+        "n_with_measure": with_measure,
+        "n_total": len(outcomes),
+        "n_samples": len(shown),
+        "n_invalid_sessions": invalid,
+        "n_unavailable_sessions": absent,
+        "population_definition": d.POPULATION_DEFINITION,
+        "published": publish,
+    }
+
+
+def _lags_for(outcome: SessionOutcome) -> tuple[str, list[float]]:
+    """Return ``invalid``, ``unavailable``, or ``measured`` and lags.
+
+    Lag is receive time minus the sum of first-audio-sent and
+    ``audio_processed``. A decrease is invalid. A missing frontier or
+    first-audio stamp is unavailable. The audio duration sent is not
+    this frontier.
+    """
+    progress = outcome.audio_progress
+    if progress is None:
+        return "unavailable", []
+    processed = [float(item["audio_processed_s"]) for item in progress]
+    if _decreased(processed):
+        return "invalid", []
+    if outcome.first_audio_sent_s is None:
+        return "unavailable", []
+    origin = outcome.first_audio_sent_s
+    return "measured", [
+        float(item["received_s"]) - (origin + processed[index])
+        for index, item in enumerate(progress)
+    ]
+
+
+def _lag_samples(outcomes: list[SessionOutcome]) -> list[float]:
+    found: list[float] = []
+    for outcome in outcomes:
+        status, lags = _lags_for(outcome)
+        if status == "measured":
+            found.extend(lags)
+    return found
+
+
+def _pooled_clock(
+    *,
+    name: str,
+    clock: str,
+    definition: str,
+    method: str,
+    outcomes: list[SessionOutcome],
+    read: Callable[[SessionOutcome], list[float] | None],
+    absent_reason: str,
+) -> dict[str, Any]:
+    """Pool per-session sample lists. ``None`` from ``read`` is absent."""
+    absent = 0
+    with_measure = 0
+    samples: list[float] = []
+    for outcome in outcomes:
+        values = read(outcome)
+        if values is None:
+            absent += 1
+            continue
+        if not values:
+            continue
+        with_measure += 1
+        samples.extend(values)
+    if with_measure == 0 and absent == len(outcomes):
+        availability = "unavailable"
+        reason: str | None = absent_reason
+    elif with_measure == 0:
+        availability = "no_samples"
+        reason = None if absent == 0 else absent_reason
+    elif absent:
+        availability = "partial"
+        reason = absent_reason
+    else:
+        availability = "measured"
+        reason = None
+    stats = _percentiles(samples, method) if samples else _blank_stats()
+    return {
+        "name": name,
+        "clock": clock,
+        "clock_attribution": "outcome" if samples else "none",
+        "clock_matches_native": bool(samples),
+        "definition": definition,
+        "unit": "s",
+        "percentile_method": method,
+        "availability": availability,
+        "reason": reason,
+        **stats,
+        "n_with_measure": with_measure,
+        "n_total": len(outcomes),
+        "n_samples": len(samples),
+        "n_unavailable_sessions": absent,
+        "population_definition": d.POPULATION_DEFINITION,
+    }
+
+
+def _frontier_lag(
+    outcomes: list[SessionOutcome], method: str
+) -> dict[str, Any]:
+    """Pool frontier lag. One decreasing stream publishes nothing."""
+    invalid = 0
+    absent = 0
+    measured_sessions = 0
+    samples: list[float] = []
+    for outcome in outcomes:
+        status, lags = _lags_for(outcome)
+        if status == "invalid":
+            invalid += 1
+            continue
+        if status == "unavailable":
+            absent += 1
+            continue
+        if not lags:
+            continue
+        measured_sessions += 1
+        samples.extend(lags)
+    if invalid:
+        availability = "invalid"
+        reason: str | None = d.FRONTIER_LAG_INVALID_REASON
+        shown: list[float] = []
+        with_measure = 0
+    elif measured_sessions == 0 and absent == len(outcomes):
+        availability = "unavailable"
+        reason = d.FRONTIER_LAG_UNAVAILABLE_REASON
+        shown = []
+        with_measure = 0
+    elif measured_sessions == 0:
+        availability = "no_samples"
+        reason = d.FRONTIER_LAG_UNAVAILABLE_REASON if absent else None
+        shown = []
+        with_measure = 0
+    elif absent:
+        availability = "partial"
+        reason = d.FRONTIER_LAG_UNAVAILABLE_REASON
+        shown = samples
+        with_measure = measured_sessions
+    else:
+        availability = "measured"
+        reason = None
+        shown = samples
+        with_measure = measured_sessions
+    stats = _percentiles(shown, method) if shown else _blank_stats()
+    return {
+        "name": "frontier_lag_s",
+        "clock": d.FRONTIER_LAG_CLOCK,
+        "clock_attribution": "outcome" if shown else "none",
+        "clock_matches_native": bool(shown),
+        "definition": d.FRONTIER_LAG_DEFINITION,
+        "unit": "s",
+        "percentile_method": method,
+        "availability": availability,
+        "reason": reason,
+        **stats,
+        "n_with_measure": with_measure,
+        "n_total": len(outcomes),
+        "n_samples": len(shown),
+        "n_unavailable_sessions": absent,
+        "population_definition": d.POPULATION_DEFINITION,
+    }
+
+
+def _word_offsets(outcome: SessionOutcome) -> list[float] | None:
+    if outcome.word_timings is None or outcome.first_audio_sent_s is None:
+        return None
+    origin = outcome.first_audio_sent_s
+    return [
+        float(item["final_received_s"]) - (origin + float(item["end_time_s"]))
+        for item in outcome.word_timings
+    ]
+
+
+def _word_latency(
+    outcomes: list[SessionOutcome], method: str
+) -> dict[str, Any]:
+    return _pooled_clock(
+        name="word_latency_s",
+        clock=d.WORD_LATENCY_CLOCK,
+        definition=d.WORD_LATENCY_DEFINITION,
+        method=method,
+        outcomes=outcomes,
+        read=_word_offsets,
+        absent_reason=d.WORD_LATENCY_UNAVAILABLE_REASON,
+    )
+
+
+def _aggregate_rtfx(
+    *,
+    attempted: float,
+    successful: float,
+    wall_span_s: float,
+) -> dict[str, Any]:
+    if wall_span_s <= 0:
+        value = None
+        availability = "unavailable"
+        reason: str | None = "benchmark_span_not_positive"
+    else:
+        value = attempted / wall_span_s
+        availability = "measured"
+        reason = None
+    return {
+        "name": "aggregate_rtfx",
+        "availability": availability,
+        "reason": reason,
+        "value": value,
+        "offered_audio_s": attempted,
+        "successful_audio_s": successful,
+        "benchmark_span_s": wall_span_s,
+        "clock": d.AGGREGATE_RTFX_CLOCK,
+        "definition": d.AGGREGATE_RTFX_DEFINITION,
+    }
+
+
+def _riva_pairs(outcome: SessionOutcome) -> tuple[str, list[float]]:
+    sends = outcome.chunk_send_times_s
+    receives = outcome.response_receive_times_s
+    if sends is None or receives is None:
+        return "unavailable", []
+    if len(receives) != len(sends):
+        return "invalid", []
+    return "measured", [
+        receives[index] - sends[index] for index in range(len(sends))
+    ]
+
+
+def _riva_compat(outcomes: list[SessionOutcome], method: str) -> dict[str, Any]:
+    invalid = 0
+    absent = 0
+    measured_sessions = 0
+    samples: list[float] = []
+    for outcome in outcomes:
+        status, pairs = _riva_pairs(outcome)
+        if status == "invalid":
+            invalid += 1
+            continue
+        if status == "unavailable":
+            absent += 1
+            continue
+        measured_sessions += 1
+        samples.extend(pairs)
+    if invalid:
+        availability = "invalid"
+        reason: str | None = d.RIVA_CLIENT_COMPAT_INVALID_REASON
+        shown: list[float] = []
+        with_measure = 0
+    elif measured_sessions == 0:
+        availability = "unavailable"
+        reason = d.RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON
+        shown = []
+        with_measure = 0
+    elif absent:
+        availability = "partial" if samples else "no_samples"
+        reason = d.RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON
+        shown = samples
+        with_measure = measured_sessions
+    elif samples:
+        availability = "measured"
+        reason = None
+        shown = samples
+        with_measure = measured_sessions
+    else:
+        availability = "no_samples"
+        reason = None
+        shown = []
+        with_measure = measured_sessions
+    stats = _percentiles(shown, method) if shown else _blank_stats()
+    return {
+        "name": "riva_client_compat_s",
+        "label": d.RIVA_CLIENT_COMPAT_LABEL,
+        "clock": d.RIVA_CLIENT_COMPAT_CLOCK,
+        "definition": d.RIVA_CLIENT_COMPAT_DEFINITION,
+        "percentile_method": method,
+        "availability": availability,
+        "reason": reason,
+        "unit": "s",
+        **stats,
+        "n_with_measure": with_measure,
+        "n_total": len(outcomes),
+        "n_samples": len(shown),
+        "n_invalid_sessions": invalid,
+        "n_unavailable_sessions": absent,
+        "population_definition": d.POPULATION_DEFINITION,
+    }
 
 
 def _clocks_are_simulated(outcomes: list[SessionOutcome]) -> bool:
@@ -1321,6 +1831,19 @@ def _session_meets(
         return False
     if pass_policy.latency_metric == d.LATENCY_METRIC_TTFS:
         if outcome.ttfs_s is None or outcome.ttfs_s > pass_policy.latency_slo_s:
+            return False
+    elif pass_policy.latency_metric == d.LATENCY_METRIC_FINALIZATION:
+        latency = _finalization_seconds(outcome)
+        if latency is None or latency > pass_policy.latency_slo_s:
+            return False
+    elif pass_policy.latency_metric == d.LATENCY_METRIC_FRONTIER_LAG:
+        status, lags = _lags_for(outcome)
+        if status != "measured" or not lags:
+            return False
+        observed = percentile(
+            lags, pass_policy.latency_percentile, percentile_method
+        )
+        if observed is None or observed > pass_policy.latency_slo_s:
             return False
     else:
         if not outcome.response_latencies_s:

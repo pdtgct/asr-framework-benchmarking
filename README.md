@@ -18,8 +18,17 @@ server speaks the protocol, it can be measured.
 
 The measurement core is in the tree: a frozen workload, one receipt per run, reducers
 that keep failures in the denominator, and reporters that read only that receipt.
-`presets/mock-streaming.json` runs with no server and no network. The next step is a
-second public transport. See [`docs/roadmap.md`](docs/roadmap.md).
+`presets/mock-streaming.json` runs with no server and no network. `riva-grpc` speaks
+NVIDIA's public StreamingRecognize protocol, and `presets/nim-compat-streaming.json`
+is the vendor-compatibility cell. `presets/nim-compat-smoke.json` is the single-GPU
+smoke: interims on, three explicit iterations, TTFS p99 under 1 s, and
+corpus-reference WER within 0.10. Finalization is written beside that receipt and
+is not a pass gate. `scripts/prepare_librispeech_clip.py` turns the locked FLAC
+into the WAV that preset names and prints the WAV sha256. Set `--model` to the
+`model_name` the server reports. `nim-realtime` speaks the public NIM transcription WebSocket
+(`/v1/realtime?intent=transcription`). That is a different dialect from
+`realtime-ws`. Offline Recognize is not implemented, so roadmap step 3 is not closed.
+See [`docs/roadmap.md`](docs/roadmap.md).
 
 Version 1.0 is when the receipt schema and the adapter interface take semantic
 versioning.
@@ -64,8 +73,8 @@ and the framework enforces them rather than documenting them.
   Engine-vs-own-oracle is raw. Engine-vs-corpus-reference is full normalization.
   Another accuracy policy needs its own hypothesis source.
 - **Two receipts are comparable only when their comparison key matches.** A silent
-  cross-hardware or cross-model delta is worse than no delta, so the tool refuses
-  rather than guessing.
+  cross-hardware or cross-checkpoint delta is worse than no delta, so the tool
+  refuses rather than guessing. The engine is the free variable.
 
 ### Cadence is an accuracy dial, not just a latency knob
 

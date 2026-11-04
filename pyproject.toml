@@ -31,7 +31,7 @@ dependencies = []
 # One extra per transport, so installing the framework never pulls a client
 # library for a protocol you are not measuring.
 websocket = ["aiohttp>=3.10"]
-riva = ["nvidia-riva-client>=2.26.0"]
+riva = ["nvidia-riva-client>=2.26.0", "grpcio>=1.62"]
 dev = [
     "pytest>=8",
     "mypy>=1.13",
@@ -70,6 +70,10 @@ convention = "google"
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["grpc", "grpc.*", "riva", "riva.*"]
+ignore_missing_imports = true
 # Deliberately no `python_version`: mypy checks against the interpreter that
 # runs it, so each CI matrix leg type-checks the branches that leg actually
 # executes. Pinning one version here would check a combination nothing runs.

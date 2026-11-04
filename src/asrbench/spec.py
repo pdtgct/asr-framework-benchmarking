@@ -14,6 +14,7 @@ from typing import Any
 
 from asrbench.audio import SAMPLE_RATE
 from asrbench.definitions import (
+    CHECKPOINT_SOURCE_UNVERIFIED,
     DEFAULT_LOOKAHEAD_IDENTITY_POLICY,
     DEFAULT_NORMALIZATION_POLICY,
     DEFAULT_PERCENTILE_METHOD,
@@ -61,14 +62,17 @@ class PopulationEntry:
     cadence_ms: int | None
     lookahead_frames: int | None
     lookahead_ms_label: float | None = None
+    #: NVIDIA right-context frame count ``r``. Hard operating-point identity.
+    att_context_right: int | None = None
 
 
 @dataclass(frozen=True)
 class PassPolicy:
     """The conjunction thresholds. They do not change offered work.
 
-    ``latency_metric`` is ``ttfs`` or ``response_latency``. The two are
-    never substituted for each other by a default.
+    ``latency_metric`` is ``ttfs``, ``response_latency``,
+    ``finalization``, or ``frontier_lag``. One is never substituted for
+    another by a default. TTFS is secondary to finalization.
     """
 
     admission_fraction_min: float = 1.0
@@ -94,6 +98,8 @@ class WorkloadSpec:
     cadence_ms: int | None = 320
     lookahead_frames: int | None = 4
     lookahead_ms_label: float | None = 320.0
+    #: NVIDIA ``att_context_size`` right context. Hard operating point.
+    att_context_right: int | None = None
     lanes: int = 1
     rate_rps: float | None = None
     iterations: int = 1
@@ -105,8 +111,24 @@ class WorkloadSpec:
     punctuation: bool = False
     diarization: bool = False
     interim_results: bool = True
+    #: Decoder name, such as ``greedy`` or ``beam``. Hard decode identity.
+    decoder: str | None = None
+    #: Language model, such as ``none`` or ``n-gram``. Hard decode identity.
+    language_model: str | None = None
+    #: Workload key for word latency. The adapter sends the same flag.
+    enable_word_time_offsets: bool = False
     transcript_policy: str = "final-and-interims"
     population: tuple[PopulationEntry, ...] = ()
+    #: When set, and the user did not pass ``--iterations``, each lane
+    #: runs this many measured iterations. A trial is this value times
+    #: ``lanes`` sessions, not this value times ``lanes`` squared. The
+    #: resolved ``iterations`` value is what the workload fingerprint
+    #: records.
+    iterations_per_stream: int | None = None
+    #: Published correctness grid. Recorded, not executed, and not identity.
+    correctness_streams: tuple[int, ...] = ()
+    #: Published performance grid. Recorded, not executed, and not identity.
+    performance_streams: tuple[int, ...] = ()
 
 
 def _default_transport_options() -> Mapping[str, Any]:
@@ -117,6 +139,15 @@ def _default_transport_options() -> Mapping[str, Any]:
             "transcript": DEFAULT_REFERENCE,
         }
     )
+
+
+def _default_channel_options() -> Mapping[str, Any]:
+    """Return empty channel tuning, frozen against later mutation.
+
+    Keepalive and maximum message size live here, not in
+    ``transport_options``. They are warn-only identity.
+    """
+    return MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -137,18 +168,45 @@ class TargetSpec:
     transport_options: Mapping[str, Any] = field(
         default_factory=_default_transport_options
     )
+    #: Keepalive and maximum message size. Not hard identity.
+    channel_options: Mapping[str, Any] = field(
+        default_factory=_default_channel_options
+    )
     server_version: str | None = None
     server_gpu_name: str | None = None
     server_gpu_count: int | None = None
     server_gpu_memory_mib: int | None = None
     server_driver_version: str | None = None
+    #: Weights identity. Hard comparison key. Not the routing model name.
+    checkpoint_id: str | None = None
+    checkpoint_revision: str | None = None
+    checkpoint_source: str = CHECKPOINT_SOURCE_UNVERIFIED
+    #: Serving stack on the comparison axis. Not the hard key.
+    engine_name: str | None = None
+    engine_version: str | None = None
+    #: NVIDIA precision names, joined with ``+`` when mixed. Record only.
+    precision: str | None = None
+    tf32: bool | None = None
+    #: Warn-only concurrency knobs.
+    batch_size: int | None = None
+    max_num_seqs: int | None = None
+    gpu_memory_utilization: float | None = None
+    cuda_version: str | None = None
+    torch_version: str | None = None
+    #: ``loopback``, ``same-region``, or ``wan``. Warn-only.
+    client_location: str | None = None
 
     def __post_init__(self) -> None:
-        """Freeze transport options so a caller cannot mutate identity."""
+        """Freeze option maps so a caller cannot mutate them later."""
         object.__setattr__(
             self,
             "transport_options",
             MappingProxyType(dict(self.transport_options)),
+        )
+        object.__setattr__(
+            self,
+            "channel_options",
+            MappingProxyType(dict(self.channel_options)),
         )
 
 
@@ -167,6 +225,9 @@ class RunSpec:
     percentile_method: str = DEFAULT_PERCENTILE_METHOD
     lookahead_identity_policy: str = DEFAULT_LOOKAHEAD_IDENTITY_POLICY
     pass_policy: PassPolicy = field(default_factory=PassPolicy)
+    #: Write the perf-table TSV beside the receipt. Not offered work and
+    #: not part of the observation fingerprint.
+    emit_tsv: bool = False
 
 
 @dataclass(frozen=True)

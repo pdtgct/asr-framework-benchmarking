@@ -13,7 +13,7 @@ The non-final commit is what starts generation. Omitting it is not a
 degraded run but a hang: the session accepts audio and never produces a
 transcript.
 
-``mode`` selects a lifecycle probe rather than a workload. ``full`` is the
+``lifecycle`` selects a lifecycle probe rather than a workload. ``full`` is the
 measurement path; ``disconnect`` and ``abort`` exercise server cleanup, and
 ``no-start-commit`` and ``late-start`` reproduce specific client mistakes on
 purpose, so a hang can be attributed rather than guessed at. Only ``full``
@@ -39,6 +39,7 @@ from asrbench.audio import (
 )
 from asrbench.clock import utc_timestamp
 from asrbench.outcome import (
+    FINALIZATION_CLOCK,
     NATIVE_LATENCY_CLOCK,
     RESPONSE_LATENCY_CLOCK,
     SessionOutcome,
@@ -79,9 +80,10 @@ class RealtimeWebSocketAdapter:
     """Drives one ``/v1/realtime`` session over an aiohttp WebSocket."""
 
     name = "realtime-ws"
-    #: Workload fields this dialect does not put on ``session.update``.
-    #: Cadence is sent. The runner refuses a non-default value outside
-    #: this set before the session starts.
+    #: Workload fields this dialect puts on ``session.update``. Cadence
+    #: is sent separately. Word time offsets are not a field of this
+    #: dialect. The runner refuses a non-default value outside this set
+    #: before the session starts.
     supported_workload_options: frozenset[str] = frozenset()
 
     def __init__(self, session: aiohttp.ClientSession) -> None:
@@ -103,7 +105,7 @@ class RealtimeWebSocketAdapter:
 
         outcome = SessionOutcome(
             label=label,
-            mode=request.mode,
+            lifecycle=request.lifecycle,
             clip_name=request.clip_path.name,
             chunk_ms=request.chunk_ms,
             audio_duration_s=len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE,
@@ -167,9 +169,21 @@ class RealtimeWebSocketAdapter:
                             elif kind == "transcription.done":
                                 outcome.transcript = event.get("text", "")
                                 extras["usage"] = event.get("usage")
-                                if final_commit_at is not None:
+                                received = time.monotonic()
+                                outcome.final_received_s = received
+                                if outcome.last_audio_sent_s is not None:
                                     outcome.final_latency_s = (
-                                        time.monotonic() - final_commit_at
+                                        received - outcome.last_audio_sent_s
+                                    )
+                                    outcome.final_latency_clock = (
+                                        FINALIZATION_CLOCK
+                                    )
+                                elif final_commit_at is not None:
+                                    outcome.final_latency_s = (
+                                        received - final_commit_at
+                                    )
+                                    outcome.final_latency_clock = (
+                                        FINALIZATION_CLOCK
                                     )
                                 done.set()
                                 _progress(
@@ -218,10 +232,12 @@ class RealtimeWebSocketAdapter:
                             # the first audio sample begins, before send can
                             # yield.
                             first_append_at = time.monotonic()
+                            outcome.first_audio_sent_s = first_append_at
                             extras.setdefault("markers", {})[
                                 "first_audio_at"
                             ] = utc_timestamp()
                         latest_append_at = time.monotonic()
+                        outcome.last_audio_sent_s = latest_append_at
                         await send(
                             {
                                 "type": "input_audio_buffer.append",
@@ -237,7 +253,10 @@ class RealtimeWebSocketAdapter:
                                 "first_audio_append.sent",
                                 bytes=len(frame),
                             )
-                        if request.mode == "disconnect" and index >= cutoff:
+                        if (
+                            request.lifecycle == "disconnect"
+                            and index >= cutoff
+                        ):
                             extras["disconnected_after_frames"] = index
                             await ws.close()
                             return False
@@ -296,23 +315,23 @@ class RealtimeWebSocketAdapter:
                     extras.setdefault("markers", {}).update(released)
                     _progress(progress_callback, label, "barrier.released")
 
-                if request.mode in ("full", "disconnect", "abort"):
+                if request.lifecycle in ("full", "disconnect", "abort"):
                     # The non-final commit is what starts generation.
                     await send(
                         {"type": "input_audio_buffer.commit", "final": False}
                     )
                     _progress(progress_callback, label, "start_commit.sent")
                     streamed = await append_all()
-                elif request.mode == "late-start":
+                elif request.lifecycle == "late-start":
                     streamed = await append_all()
                     await send(
                         {"type": "input_audio_buffer.commit", "final": False}
                     )
                     _progress(progress_callback, label, "start_commit.sent")
-                elif request.mode == "no-start-commit":
+                elif request.lifecycle == "no-start-commit":
                     streamed = await append_all()
                 else:
-                    raise SystemExit(f"unknown mode {request.mode}")
+                    raise SystemExit(f"unknown lifecycle {request.lifecycle}")
 
                 if streamed:
                     final_commit_at = time.monotonic()
@@ -320,7 +339,7 @@ class RealtimeWebSocketAdapter:
                         {"type": "input_audio_buffer.commit", "final": True}
                     )
                     _progress(progress_callback, label, "final_commit.sent")
-                    if request.mode == "abort":
+                    if request.lifecycle == "abort":
                         # Close while generation is still in flight.
                         await asyncio.sleep(0.05)
                         extras["aborted"] = True
