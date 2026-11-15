@@ -1,6 +1,9 @@
 """The ``asrbench`` command.
 
-``run`` writes one receipt and prints the console projection. ``compare``
+``run`` writes one receipt and prints the console projection. ``sweep``
+runs one ``run`` per stream count and writes an NVIDIA-layout table; a
+failed cell is a result, so the sweep continues and still exits 0.
+``compare``
 refuses when the comparison key does not match unless ``--force`` and
 ``--reason`` are both present. The reason is copied into the output.
 """
@@ -191,6 +194,10 @@ def _stream_list(text: str) -> tuple[int, ...]:
         raise argparse.ArgumentTypeError(
             "--streams needs at least one count, each >= 1"
         )
+    if len(set(counts)) != len(counts):
+        raise argparse.ArgumentTypeError(
+            "--streams repeats a count; each would overwrite the last receipt"
+        )
     return counts
 
 
@@ -227,22 +234,46 @@ def _sweep(args: argparse.Namespace) -> int:
             "no stream counts: set workload.performance_streams in the "
             "preset or pass --streams"
         )
-    prefix = args.prefix or f"c{first.workload.chunk_ms}"
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
+    if len(set(streams)) != len(streams):
+        raise ConfigError(
+            "stream counts repeat; each would overwrite the last receipt"
+        )
+    default_prefix = (
+        "offline"
+        if first.workload.mode == "offline"
+        else f"c{first.workload.chunk_ms}"
+    )
+    prefix = args.prefix or default_prefix
+    # Resolve every count before the first run, so a config error surfaces
+    # before a long sweep has used any server time.
+    cells = []
     for count in streams:
         destination = args.out_dir / f"{prefix}-n{count}.json"
-        config = resolve(
-            preset_path=args.preset,
-            from_receipt=args.from_receipt,
-            env=env,
-            overrides={
-                **overrides,
-                ("workload", "lanes"): count,
-                ("run", "output_path"): str(destination),
-            },
+        cells.append(
+            (
+                count,
+                destination,
+                resolve(
+                    preset_path=args.preset,
+                    from_receipt=args.from_receipt,
+                    env=env,
+                    overrides={
+                        **overrides,
+                        ("workload", "lanes"): count,
+                        ("run", "output_path"): str(destination),
+                    },
+                ),
+            )
         )
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for count, destination, config in cells:
         print(f"sweep streams={count} -> {destination}", file=sys.stderr)
+        for item in config.reproduction_overrides:
+            print(
+                f"reproduction {item.path}: {item.receipt} -> {item.resolved}",
+                file=sys.stderr,
+            )
         receipt = asyncio.run(run_benchmark(config, env=env))
         _write_json(destination, receipt)
         if config.run.emit_tsv:

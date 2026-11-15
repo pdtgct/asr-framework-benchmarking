@@ -113,6 +113,41 @@ def test_streams_flag_overrides_and_prefix(tmp_path: Path) -> None:
         server.stop()
     assert code == 0
     assert sorted(path.name for path in out.glob("*.json")) == ["site-n2.json"]
+    receipt = json.loads((out / "site-n2.json").read_text(encoding="utf-8"))
+    assert receipt["resolved_config"]["workload"]["lanes"] == 2
+    assert (out / "site-nvidia-layout.tsv").exists()
+
+
+def test_failed_cells_are_results_and_the_sweep_continues(
+    tmp_path: Path,
+) -> None:
+    preset = _preset(tmp_path, "127.0.0.1:1", [1, 2])
+    payload = json.loads(preset.read_text(encoding="utf-8"))
+    payload["workload"]["timeout_s"] = 0.5
+    preset.write_text(json.dumps(payload), encoding="utf-8")
+    out = tmp_path / "failed"
+    code = main(
+        [
+            "sweep",
+            "--preset",
+            str(preset),
+            "--out-dir",
+            str(out),
+            "--no-pacing",
+            "--trials",
+            "1",
+        ]
+    )
+    assert code == 0
+    assert (out / "c160-n1.json").exists()
+    assert (out / "c160-n2.json").exists()
+    lines = (out / "c160-nvidia-layout.tsv").read_text("utf-8").splitlines()
+    assert len(lines) == 4
+    header = lines[1].split("\t")
+    for line in lines[2:]:
+        cells = dict(zip(header, line.split("\t"), strict=True))
+        assert cells["comparable"] == "false"
+        assert cells["compat_status"] != "measured"
 
 
 def test_sweep_refuses_lanes_and_out(tmp_path: Path) -> None:
@@ -126,3 +161,10 @@ def test_sweep_refuses_lanes_and_out(tmp_path: Path) -> None:
     )
     with pytest.raises(SystemExit):
         main([*base, "--streams", "0"])
+    with pytest.raises(SystemExit):
+        main([*base, "--streams", "8,8"])
+    repeated = _preset(tmp_path, "127.0.0.1:1", [8, 8])
+    assert (
+        main(["sweep", "--preset", str(repeated), "--out-dir", str(tmp_path)])
+        == 2
+    )

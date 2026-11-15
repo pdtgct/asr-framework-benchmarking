@@ -642,7 +642,12 @@ preset. `--lanes` and `--out` are refused; the sweep sets both per count.
 
 A failed cell still exits `0` and the sweep continues. The failure is a result and
 stays on the receipt.
-Exit code `2` means a configuration error.
+Exit code `2` means a configuration error. Every count is resolved before the
+first cell runs, and a repeated count is refused.
+
+Existing receipts with the same names in `--out-dir` are overwritten, so a
+same-day rerun with the `RUN` above replaces the earlier one; add a suffix to
+`RUN` to keep both. An offline preset's default prefix is `offline`.
 
 Things that differ from NVIDIA even with these settings:
 
@@ -864,7 +869,7 @@ as an issue. Where a change has since addressed one, it is named under the gap.
    recorded but not executed. Each stream count is a separate run, looped in the
    shell.
    Issue: "run: execute a lanes sweep from performance_streams and emit one receipt per stream count"
-   Addressed: `asrbench sweep` (section 6).
+   Addressed by `asrbench sweep` (section 6).
 3. **Riva compat refuses the chunks + 1 case.** The Riva client accepts one extra
    trailing response and ignores it. asrbench marks the session, and so the whole
    statistic, invalid.
