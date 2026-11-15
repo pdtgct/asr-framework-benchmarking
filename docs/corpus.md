@@ -156,8 +156,9 @@ clips across lanes and scores every session against its clip's corpus transcript
 so one receipt carries a test-set WER with the same reduction NVIDIA and the Open
 ASR Leaderboard use (pooled edits over pooled reference words). It is scored under
 the `corpus_reference` normalization policy, so it is not numerically comparable to
-leaderboard or NVIDIA figures until a matching normalization policy is used. Builders write the manifest from locally staged corpus files; nothing is
-fetched at run time.
+leaderboard or NVIDIA figures until a matching normalization policy is used.
+Builders write the manifest from locally staged corpus files; nothing is fetched at
+run time.
 
 ```json
 {
@@ -265,9 +266,10 @@ without saying so.
 **`ami-excerpts` is the streaming path.** It cuts fixed windows (20.16 s, 60 s) from
 whole headset channels per a committed recipe. The built-in recipe
 `ami-ihm-excerpts-v1` is the eleven-excerpt set from the author's
-nemotron-omni-port work, with the per-excerpt WAV sha256s it published (re-measure
-any of them with `asrbench corpus ami-survey` and `ami-excerpts`); the builder refuses a cut whose bytes differ, which catches a different
-corpus release or channel. Each excerpt records its qualifying pauses and speech
+nemotron-omni-port work. The recipe pins each excerpt's WAV sha256 (re-measure any
+of them with `asrbench corpus ami-survey` and `ami-excerpts`), and the builder
+refuses a cut whose bytes differ, which catches a different corpus release or
+channel. Each excerpt records its qualifying pauses and speech
 fraction (same -50 dBFS absolute floor and 20 ms frames as the omni-port survey). Its
 reference is the headset's own speaker's words whose midpoint lies in the window.
 **Crosstalk from other participants is audible on every headset and is not in that
