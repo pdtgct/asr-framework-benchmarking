@@ -33,7 +33,6 @@ import aiohttp
 from asrbench.adapter import SessionAdmissionBarrier, SessionProgressCallback
 from asrbench.audio import (
     BYTES_PER_SAMPLE,
-    SAMPLE_RATE,
     chunk_pcm16,
     read_pcm16,
 )
@@ -98,8 +97,8 @@ class RealtimeWebSocketAdapter:
         progress_callback: SessionProgressCallback | None = None,
     ) -> SessionOutcome:
         """Drive one realtime session and return its observed result."""
-        pcm = read_pcm16(request.clip_path)
-        frames = chunk_pcm16(pcm, request.chunk_ms)
+        pcm = read_pcm16(request.clip_path, request.sample_rate_hertz)
+        frames = chunk_pcm16(pcm, request.chunk_ms, request.sample_rate_hertz)
         url = request.endpoint_url
         label = request.label
 
@@ -108,7 +107,9 @@ class RealtimeWebSocketAdapter:
             lifecycle=request.lifecycle,
             clip_name=request.clip_path.name,
             chunk_ms=request.chunk_ms,
-            audio_duration_s=len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE,
+            audio_duration_s=len(pcm)
+            / BYTES_PER_SAMPLE
+            / request.sample_rate_hertz,
             latency_clock=NATIVE_LATENCY_CLOCK,
             response_latency_clock=RESPONSE_LATENCY_CLOCK,
         )

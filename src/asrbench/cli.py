@@ -27,6 +27,8 @@ from asrbench.config import (
     overrides_from_args,
     resolve,
 )
+from asrbench.corpora import ami, librispeech
+from asrbench.manifest import ManifestError, load_manifest, verify_manifest
 from asrbench.nim import load_nim_metadata, nim_overrides
 from asrbench.reducers import MeasurementError
 from asrbench.reporters import (
@@ -123,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     report_parser.add_argument("--out", type=Path)
 
+    _add_corpus_parsers(sub)
+
     args = parser.parse_args(argv)
     try:
         return _dispatch(args)
@@ -132,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         NotHomogeneousError,
         CanonicalError,
         MeasurementError,
+        ManifestError,
     ) as error:
         print(f"asrbench: {error}", file=sys.stderr)
         return 2
@@ -155,6 +160,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _report(args)
     if args.command == "nvidia-table":
         return _nvidia_table(args)
+    if args.command == "corpus":
+        return _corpus(args)
     raise ConfigError(f"unknown command {args.command}")
 
 
@@ -388,3 +395,171 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _add_corpus_parsers(sub: Any) -> None:
+    """``asrbench corpus ...``: build and check manifests from local files."""
+    corpus = sub.add_parser(
+        "corpus",
+        help="build or verify a corpus manifest from locally staged files",
+    )
+    kinds = corpus.add_subparsers(dest="corpus_command", required=True)
+
+    urls = kinds.add_parser(
+        "ami-urls", help="print the AMI files to stage on a connected host"
+    )
+    urls.add_argument("--recipe", default="ami-ihm-excerpts-v1")
+    urls.add_argument(
+        "--split",
+        choices=sorted(ami.SPLITS),
+        help="every headset of a split instead of the recipe's channels",
+    )
+
+    survey = kinds.add_parser(
+        "ami-survey", help="measure pauses on staged headsets"
+    )
+    survey.add_argument("channels", nargs="+", metavar="MEETING:CHANNEL")
+    survey.add_argument("--audio-root", type=Path, required=True)
+    survey.add_argument("--min-silence-ms", type=int, default=800)
+    survey.add_argument("--propose", type=int, default=3)
+    survey.add_argument(
+        "--windows", type=float, nargs="+", default=[20.16, 60.0]
+    )
+
+    excerpts = kinds.add_parser(
+        "ami-excerpts", help="cut recipe windows into a manifest"
+    )
+    excerpts.add_argument("--recipe", default="ami-ihm-excerpts-v1")
+    _ami_inputs(excerpts)
+    excerpts.add_argument("--id")
+    excerpts.add_argument("--min-silence-ms", type=int, default=800)
+
+    segments = kinds.add_parser(
+        "ami-segments", help="one clip per annotated headset segment"
+    )
+    _ami_inputs(segments)
+    group = segments.add_mutually_exclusive_group(required=True)
+    group.add_argument("--split", choices=sorted(ami.SPLITS))
+    group.add_argument("--meetings", nargs="+", metavar="MEETING[:N]")
+    segments.add_argument("--id")
+    segments.add_argument("--min-duration-s", type=float, default=0.0)
+    segments.add_argument("--max-clips", type=int)
+
+    libri = kinds.add_parser(
+        "librispeech", help="one clip per LibriSpeech utterance"
+    )
+    libri.add_argument("--root", type=Path, required=True)
+    libri.add_argument("--split", choices=librispeech.SPLITS, required=True)
+    libri.add_argument("--out-dir", type=Path, required=True)
+    libri.add_argument("--id")
+    libri.add_argument("--limit", type=int)
+    libri.add_argument("--speakers", nargs="+")
+
+    verify = kinds.add_parser(
+        "verify", help="re-hash every clip of a manifest against its pins"
+    )
+    verify.add_argument("manifest", type=Path)
+
+
+def _ami_inputs(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--audio-root", type=Path, required=True)
+    parser.add_argument(
+        "--annotations",
+        type=Path,
+        required=True,
+        help="ami_public_manual_1.6.2.zip or its extracted directory",
+    )
+    parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--language", default="en-US")
+
+
+def _corpus(args: argparse.Namespace) -> int:
+    command = args.corpus_command
+    if command == "ami-urls":
+        if args.split:
+            print(ami.ANNOTATIONS_URL)
+            print(
+                "# Headset-0..3 of each meeting; corpusResources/meetings.xml "
+                "in the annotations lists any further headset"
+            )
+            for meeting in ami.SPLITS[args.split]:
+                for channel in range(4):
+                    print(ami.channel_url(meeting, channel))
+            return 0
+        recipe, _ = ami.load_recipe(args.recipe)
+        for url in ami.mirror_urls(ami.recipe_channels(recipe)):
+            print(url)
+        return 0
+    if command == "ami-survey":
+        pairs = []
+        for spec in args.channels:
+            meeting, _, channel = spec.partition(":")
+            pairs.append((meeting, int(channel or 0)))
+        for row in ami.survey(
+            channels=pairs,
+            audio_root=args.audio_root,
+            windows=args.windows,
+            min_silence_ms=args.min_silence_ms,
+            propose=args.propose,
+        ):
+            print(
+                f"{row.meeting}:{row.channel}  {row.duration_s / 60:.1f} min  "
+                f"pauses>={args.min_silence_ms}ms: {row.qualifying_pauses}  "
+                f"longest={row.longest_gap_ms}ms"
+            )
+            for window, offsets in row.proposals.items():
+                shown = ", ".join(f"{item:.3f}s" for item in offsets)
+                print(f"  {window:>7.2f}s windows: {shown or 'none found'}")
+        return 0
+    if command == "ami-excerpts":
+        result = ami.build_excerpts(
+            recipe_spec=args.recipe,
+            audio_root=args.audio_root,
+            annotations=args.annotations,
+            out_dir=args.out_dir,
+            manifest_id=args.id,
+            language=args.language,
+            min_silence_ms=args.min_silence_ms,
+        )
+    elif command == "ami-segments":
+        meetings = list(ami.SPLITS[args.split]) if args.split else args.meetings
+        result = ami.build_segments(
+            meetings=meetings,
+            audio_root=args.audio_root,
+            annotations=args.annotations,
+            out_dir=args.out_dir,
+            manifest_id=args.id or f"ami-ihm-{args.split or 'custom'}-segments",
+            language=args.language,
+            min_duration_s=args.min_duration_s,
+            max_clips=args.max_clips,
+        )
+    elif command == "librispeech":
+        result = librispeech.build(
+            root=args.root,
+            split=args.split,
+            out_dir=args.out_dir,
+            manifest_id=args.id,
+            limit=args.limit,
+            speakers=args.speakers,
+        )
+    elif command == "verify":
+        loaded = load_manifest(args.manifest)
+        problems = verify_manifest(loaded)
+        for line in problems:
+            print(f"FAIL {line}", file=sys.stderr)
+        print(
+            f"{loaded.id} {loaded.digest} {len(loaded.clips)} clips "
+            f"{loaded.total_duration_s:.1f}s: "
+            + ("ok" if not problems else f"{len(problems)} failed")
+        )
+        return 1 if problems else 0
+    else:
+        raise ConfigError(f"unknown corpus command {command}")
+    for line in result.warnings:
+        print(f"warning: {line}", file=sys.stderr)
+    manifest = result.manifest
+    print(
+        f"{manifest.path}\n{manifest.id} {manifest.digest} "
+        f"{len(manifest.clips)} clips {manifest.total_duration_s:.1f}s"
+    )
+    return 0

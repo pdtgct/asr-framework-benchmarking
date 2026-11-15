@@ -423,3 +423,14 @@ def test_deadline_after_audio_is_a_timeout(tmp_path: Path) -> None:
     assert outcome.terminal_status == "timed_out"
     assert outcome.ttfs_s is None
     assert outcome.transcript is None
+
+
+def test_8k_audio_is_declared_in_input_audio_params(tmp_path: Path) -> None:
+    path = tmp_path / "clip8k.wav"
+    path.write_bytes(pcm16_wav(b"\x00\x00" * 4000, 8000))
+    fake, outcome = asyncio.run(
+        _run(FakeNimRealtime(), _request(path, sample_rate_hertz=8000))
+    )
+    assert fake.session is not None
+    assert fake.session["input_audio_params"]["sample_rate_hz"] == 8000
+    assert outcome.audio_duration_s == 0.5

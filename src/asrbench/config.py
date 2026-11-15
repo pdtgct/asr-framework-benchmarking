@@ -24,12 +24,16 @@ from typing import Any
 from asrbench.canonical import leaves
 from asrbench.clips import ClipError, pin_digest
 from asrbench.definitions import (
+    AUDIO_CONDITION_NATIVE,
+    AUDIO_CONDITION_TELEPHONY_8K,
+    AUDIO_CONDITION_TELEPHONY_8K_IN_16K,
     CHECKPOINT_SOURCE_HUGGINGFACE,
     CHECKPOINT_SOURCE_NGC,
     CHECKPOINT_SOURCE_UNVERIFIED,
     CLIENT_LOCATION_LOOPBACK,
     CLIENT_LOCATION_SAME_REGION,
     CLIENT_LOCATION_WAN,
+    CLIP_ASSIGNMENT_ROUND_ROBIN,
     LATENCY_METRIC_FINALIZATION,
     LATENCY_METRIC_FRONTIER_LAG,
     LATENCY_METRIC_RESPONSE,
@@ -44,9 +48,11 @@ from asrbench.definitions import (
     SUSTAINABILITY_COMPLETION_FRACTION,
     SUSTAINABILITY_STEADY_INTERVAL,
 )
+from asrbench.manifest import Manifest, ManifestError, load_manifest
 from asrbench.percentile import PERCENTILE_METHODS
 from asrbench.spec import (
     ClipSpec,
+    ManifestSpec,
     PassPolicy,
     PopulationEntry,
     ReproductionOverride,
@@ -58,6 +64,11 @@ from asrbench.spec import (
 )
 
 _MODES = {MODE_STREAMING, MODE_OFFLINE}
+_AUDIO_CONDITIONS = {
+    AUDIO_CONDITION_NATIVE,
+    AUDIO_CONDITION_TELEPHONY_8K,
+    AUDIO_CONDITION_TELEPHONY_8K_IN_16K,
+}
 _LOOKAHEAD_POLICIES = {
     LOOKAHEAD_IDENTITY_CLIENT_DECLARED,
     LOOKAHEAD_IDENTITY_SERVER_REPORTED,
@@ -129,6 +140,9 @@ def _annotation(path: tuple[str, ...]) -> str:
     if path[:2] == ("workload", "clip"):
         model: type[Any] = ClipSpec
         name = path[2]
+    elif path[:2] == ("workload", "manifest"):
+        model = ManifestSpec
+        name = path[2]
     elif path[:2] == ("run", "pass_policy"):
         model = PassPolicy
         name = path[2]
@@ -186,6 +200,11 @@ def _bindings() -> tuple[Binding, ...]:
             "seed recorded for arrival draws; closed-loop lanes do not draw",
         ),
         (("workload", "pacing"), "transmit in real time"),
+        (
+            ("workload", "audio_condition"),
+            "native, telephony_8k (send 8 kHz), or telephony_8k_in_16k "
+            "(8 kHz band, sent at 16 kHz); hard identity",
+        ),
         (("workload", "mode"), "streaming or offline"),
         (("workload", "language"), "language requested from the server"),
         (("workload", "punctuation"), "ask the server to punctuate"),
@@ -205,6 +224,11 @@ def _bindings() -> tuple[Binding, ...]:
         (
             ("workload", "clip", "path"),
             "local path of a file clip; not part of the workload fingerprint",
+        ),
+        (
+            ("workload", "manifest", "path"),
+            "local path of a corpus manifest; its digest is workload "
+            "identity, its path is not",
         ),
         (("target", "endpoint_url"), "server endpoint"),
         (("target", "transport"), "adapter name, such as mock"),
@@ -306,6 +330,9 @@ def _bindings() -> tuple[Binding, ...]:
         elif path == ("workload", "clip", "path"):
             env_name = "ASRBENCH_CLIP_PATH"
             flag = "--clip-path"
+        elif path == ("workload", "manifest", "path"):
+            env_name = "ASRBENCH_MANIFEST"
+            flag = "--manifest"
         built.append(Binding(env_name, flag, path, help_text))
     return tuple(built)
 
@@ -521,6 +548,11 @@ def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
     workload = config.workload
     if workload.mode not in _MODES:
         raise ConfigError("mode must be streaming or offline")
+    if workload.audio_condition not in _AUDIO_CONDITIONS:
+        raise ConfigError(
+            f"unknown audio_condition {workload.audio_condition!r}; one of "
+            + ", ".join(sorted(_AUDIO_CONDITIONS))
+        )
     _require_positive("chunk_ms", workload.chunk_ms, minimum=1)
     _require_positive("lanes", workload.lanes, minimum=1)
     _require_positive("iterations", workload.iterations, minimum=1)
@@ -584,6 +616,17 @@ def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
     if not config.target.model:
         raise ConfigError("model must be non-empty")
     _validate_server(config.target)
+    if _manifest_active(workload.manifest):
+        if (
+            run.pass_policy.normalization_policy
+            != NORMALIZATION_CORPUS_REFERENCE
+        ):
+            raise ConfigError(
+                "a manifest scores against corpus transcripts; set "
+                "--normalization-policy corpus_reference (got "
+                f"{run.pass_policy.normalization_policy!r})"
+            )
+        return replace(config, workload=_validate_manifest(workload, pin=pin))
     if pin:
         try:
             clip = pin_digest(workload.clip)
@@ -594,6 +637,106 @@ def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
     else:
         clip = workload.clip
     return replace(config, workload=replace(workload, clip=clip))
+
+
+#: ``clip.generator`` of the summary clip a manifest workload carries.
+MANIFEST_CLIP_GENERATOR = "manifest"
+_ASSIGNMENTS = {CLIP_ASSIGNMENT_ROUND_ROBIN}
+
+
+def _manifest_active(manifest: ManifestSpec) -> bool:
+    return manifest.path is not None or manifest.digest is not None
+
+
+def _primary_language(tag: str) -> str:
+    return tag.replace("_", "-").split("-")[0].casefold()
+
+
+def _validate_manifest(workload: WorkloadSpec, *, pin: bool) -> WorkloadSpec:
+    """Pin a manifest workload and replace its clip with a summary.
+
+    With ``pin``, the manifest file is read and every field it implies is
+    filled or checked. Without it (compare and reporters), the receipt's
+    recorded digest is trusted and no file is opened. Clip audio is not
+    read here; the runner re-checks every clip digest when it
+    materializes them.
+
+    Raises:
+        ConfigError: The manifest is missing, disagrees with a declared
+            field, does not fit the workload, or is incomplete.
+    """
+    spec = workload.manifest
+    if spec.assignment not in _ASSIGNMENTS:
+        raise ConfigError(f"unknown clip assignment {spec.assignment!r}")
+    # The manifest supersedes the preset's single clip and its reference:
+    # each manifest clip carries its own corpus transcript. Both are
+    # cleared so a receipt cannot show a reference that was not scored.
+    workload = replace(workload, reference_transcript=None)
+    if pin:
+        if spec.path is None:
+            raise ConfigError("manifest digest is declared without a path")
+        try:
+            loaded = load_manifest(Path(spec.path))
+        except ManifestError as error:
+            raise ConfigError(str(error)) from error
+        spec = _pin_manifest(spec, loaded)
+    elif not spec.digest or spec.clip_count is None:
+        raise ConfigError("manifest digest is required when it is not re-read")
+    assert spec.id is not None and spec.digest is not None
+    assert spec.clip_count is not None and spec.language is not None
+    if _primary_language(spec.language) != _primary_language(workload.language):
+        raise ConfigError(
+            f"manifest language {spec.language!r} does not match workload "
+            f"language {workload.language!r}"
+        )
+    clip = ClipSpec(
+        id=f"manifest-{spec.id}",
+        generator=MANIFEST_CLIP_GENERATOR,
+        duration_s=spec.total_duration_s,
+        sample_rate=workload.clip.sample_rate,
+        digest=spec.digest,
+        path=None,
+        licence=workload.clip.licence
+        if workload.clip.generator == MANIFEST_CLIP_GENERATOR
+        else "see dataset.manifest",
+        attribution=workload.clip.attribution
+        if workload.clip.generator == MANIFEST_CLIP_GENERATOR
+        else "see dataset.manifest",
+        note=(
+            "Summary of a corpus manifest. Clips, digests, and references "
+            "are in dataset.manifest; clip_digest is the manifest digest."
+        ),
+    )
+    return replace(workload, manifest=spec, clip=clip)
+
+
+def _pin_manifest(spec: ManifestSpec, loaded: Manifest) -> ManifestSpec:
+    pinned = ManifestSpec(
+        path=spec.path,
+        id=loaded.id,
+        digest=loaded.digest,
+        language=loaded.language,
+        clip_count=len(loaded.clips),
+        total_duration_s=loaded.total_duration_s,
+        assignment=spec.assignment,
+    )
+    for name in ("id", "digest", "language", "clip_count"):
+        declared = getattr(spec, name)
+        if declared is not None and declared != getattr(pinned, name):
+            raise ConfigError(
+                f"manifest {name} mismatch: {spec.path} has "
+                f"{getattr(pinned, name)!r}, pinned {declared!r}"
+            )
+    declared_s = spec.total_duration_s
+    if (
+        declared_s is not None
+        and abs(declared_s - loaded.total_duration_s) > 1e-6
+    ):
+        raise ConfigError(
+            f"manifest total_duration_s mismatch: {spec.path} has "
+            f"{loaded.total_duration_s!r}, pinned {declared_s!r}"
+        )
+    return pinned
 
 
 def config_from_mapping(
@@ -768,7 +911,13 @@ def _set_path(
 #: to null. A complete ``resolved_config`` written before them may omit
 #: them; they read as null, which is what that receipt meant.
 _ADDED_WITH_NULL_DEFAULT = frozenset(
-    {"nim_profile_id", "nim_model_url", "nim_tags_selector"}
+    {
+        "nim_profile_id",
+        "nim_model_url",
+        "nim_tags_selector",
+        "manifest",
+        "audio_condition",
+    }
 )
 
 
@@ -787,7 +936,7 @@ def _merge(
             raise ConfigError(f"{where} missing fields: {', '.join(missing)}")
     updates: dict[str, Any] = {}
     for name, value in payload.items():
-        if name in {"clip", "pass_policy"}:
+        if name in {"clip", "pass_policy", "manifest"}:
             updates[name] = _merge(
                 getattr(instance, name),
                 _object(value, name),

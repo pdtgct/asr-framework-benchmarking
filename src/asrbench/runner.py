@@ -34,15 +34,27 @@ from typing import Any, Protocol
 
 from asrbench.adapter import TransportAdapter
 from asrbench.audio import BYTES_PER_SAMPLE, SAMPLE_RATE, read_pcm16
-from asrbench.clips import materialize
+from asrbench.clips import materialize, pcm16_wav
 from asrbench.clock import utc_timestamp
 from asrbench.config import ConfigError
-from asrbench.definitions import RUNNER_HANG_GRACE_S
+from asrbench.definitions import (
+    AUDIO_CONDITION_NATIVE,
+    AUDIO_CONDITION_TELEPHONY_8K,
+    RUNNER_HANG_GRACE_S,
+)
+from asrbench.fingerprint import sent_sample_rate
 from asrbench.identity import (
     GitState,
     HardwareRecord,
     collect_hardware,
     git_commit,
+)
+from asrbench.manifest import (
+    Manifest,
+    ManifestError,
+    assign_clip,
+    load_manifest,
+    materialize_manifest,
 )
 from asrbench.outcome import (
     FINALIZATION_CLOCK,
@@ -52,6 +64,11 @@ from asrbench.outcome import (
     SessionRequest,
 )
 from asrbench.receipt import build_receipt
+from asrbench.resample import (
+    NARROWBAND_RATE,
+    decimate_16k_to_8k,
+    interpolate_8k_to_16k,
+)
 from asrbench.spec import (
     PopulationEntry,
     ResolvedConfig,
@@ -197,7 +214,13 @@ def load_adapter(target: TargetSpec) -> TransportAdapter:
             raise ConfigError(
                 "mock interim_every_chunks must be a positive int"
             )
-        return MockAdapter(transcript, every)
+        scripts = options.get("transcripts", {})
+        if not isinstance(scripts, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in scripts.items()
+        ):
+            raise ConfigError("mock transcripts must map clip names to text")
+        return MockAdapter(transcript, every, scripts)
     if target.transport == "realtime-ws":
         raise ConfigError(
             "realtime-ws needs a caller-owned client session; "
@@ -315,9 +338,23 @@ async def run_benchmark(
     directory = materialize_dir
     if directory is None:
         directory = Path(tempfile.mkdtemp(prefix="asrbench-"))
-    wav_path = materialize(config.workload.clip, directory)
-    pcm = read_pcm16(wav_path)
-    audio_s = len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE
+    corpus = _load_corpus(config)
+    if corpus is None:
+        wav_path = materialize(config.workload.clip, directory)
+        sources = [wav_path]
+        materialized = str(wav_path)
+    else:
+        try:
+            written = materialize_manifest(corpus, directory)
+        except ManifestError as error:
+            raise ConfigError(str(error)) from error
+        sources = [written[clip.id] for clip in corpus.clips]
+        materialized = str(directory)
+    rate = sent_sample_rate(config.workload)
+    _refuse_unsent_rate(chosen, rate)
+    plays = [
+        _condition(path, config.workload.audio_condition) for path in sources
+    ]
     start_marker = started_at if started_at is not None else utc_timestamp()
     trials: list[dict[str, Any]] = []
     try:
@@ -329,8 +366,7 @@ async def run_benchmark(
                 trial_index=trial_index,
                 phase="warmup",
                 count=config.workload.warmup,
-                audio_s=audio_s,
-                wav_path=wav_path,
+                plays=plays,
                 barrier=None,
             )
             barrier = CohortBarrier(
@@ -344,8 +380,7 @@ async def run_benchmark(
                 trial_index=trial_index,
                 phase="measured",
                 count=config.workload.iterations,
-                audio_s=audio_s,
-                wav_path=wav_path,
+                plays=plays,
                 barrier=barrier,
             )
             span_end = chosen_clock.monotonic()
@@ -380,8 +415,72 @@ async def run_benchmark(
         run_id=run_id if run_id is not None else uuid.uuid4().hex,
         started_at=start_marker,
         finished_at=finish_marker,
-        materialized_path=str(wav_path),
+        materialized_path=materialized,
+        corpus=corpus,
     )
+
+
+def _condition(path: Path, condition: str) -> tuple[Path, float, int]:
+    """Rewrite one materialized 16 kHz clip for the audio condition.
+
+    The file keeps its name, so a corpus session still maps to its
+    clip's reference. Duration is the source duration either way.
+    """
+    pcm = read_pcm16(path)
+    seconds = len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE
+    if condition == AUDIO_CONDITION_NATIVE:
+        return path, seconds, SAMPLE_RATE
+    narrow = decimate_16k_to_8k(pcm)
+    if condition == AUDIO_CONDITION_TELEPHONY_8K:
+        path.write_bytes(pcm16_wav(narrow, NARROWBAND_RATE))
+        return (
+            path,
+            len(narrow) / BYTES_PER_SAMPLE / NARROWBAND_RATE,
+            (NARROWBAND_RATE),
+        )
+    wide = interpolate_8k_to_16k(narrow)
+    path.write_bytes(pcm16_wav(wide, SAMPLE_RATE))
+    return path, len(wide) / BYTES_PER_SAMPLE / SAMPLE_RATE, SAMPLE_RATE
+
+
+def _refuse_unsent_rate(adapter: TransportAdapter, rate: int) -> None:
+    """Refuse a sent rate the adapter cannot declare to its server.
+
+    Adapters that omit ``supported_sample_rates`` send 16 kHz only.
+
+    Raises:
+        ConfigError: The adapter would mislabel the audio.
+    """
+    supported = getattr(adapter, "supported_sample_rates", (SAMPLE_RATE,))
+    if rate not in supported:
+        raise ConfigError(
+            f"{adapter.name} sends only {sorted(supported)} Hz; use "
+            "audio_condition telephony_8k_in_16k to offer 8 kHz content "
+            "at 16 kHz"
+        )
+
+
+def _load_corpus(config: ResolvedConfig) -> Manifest | None:
+    """Load the manifest a resolved workload names, re-checking its digest.
+
+    Raises:
+        ConfigError: The file moved or changed since resolution.
+    """
+    spec = config.workload.manifest
+    if spec.digest is None:
+        return None
+    if spec.path is None:
+        raise ConfigError("manifest workload has no local path to run")
+    try:
+        loaded = load_manifest(Path(spec.path))
+    except ManifestError as error:
+        raise ConfigError(str(error)) from error
+    if loaded.digest != spec.digest:
+        raise ConfigError(
+            f"manifest {spec.path} digest {loaded.digest} != resolved "
+            f"{spec.digest}"
+        )
+    return loaded
 
 
 _OPTION_NAMES = (
@@ -435,8 +534,7 @@ async def _phase(
     trial_index: int,
     phase: str,
     count: int,
-    audio_s: float,
-    wav_path: Path,
+    plays: list[tuple[Path, float, int]],
     barrier: CohortBarrier | None,
 ) -> list[list[SessionOutcome]]:
     groups: list[list[SessionOutcome]] = list(
@@ -451,8 +549,8 @@ async def _phase(
                     lane=lane,
                     phase=phase,
                     count=count,
-                    audio_s=audio_s,
-                    wav_path=wav_path,
+                    plays=plays,
+                    lanes=len(assigned),
                     barrier=barrier,
                 )
                 for lane, (index, entry) in enumerate(assigned)
@@ -472,12 +570,17 @@ async def _lane_sessions(
     lane: int,
     phase: str,
     count: int,
-    audio_s: float,
-    wav_path: Path,
+    plays: list[tuple[Path, float, int]],
+    lanes: int,
     barrier: CohortBarrier | None,
 ) -> list[SessionOutcome]:
     outcomes: list[SessionOutcome] = []
     for index in range(count):
+        wav_path, audio_s, rate = plays[
+            assign_clip(
+                lane=lane, iteration=index, lanes=lanes, clip_count=len(plays)
+            )
+        ]
         outcomes.append(
             await _session(
                 config,
@@ -490,6 +593,7 @@ async def _lane_sessions(
                 iteration=index,
                 audio_s=audio_s,
                 wav_path=wav_path,
+                sample_rate=rate,
                 barrier=barrier if index == 0 else None,
             )
         )
@@ -508,6 +612,7 @@ async def _session(
     iteration: int,
     audio_s: float,
     wav_path: Path,
+    sample_rate: int,
     barrier: CohortBarrier | None,
 ) -> SessionOutcome:
     kind = "w" if phase == "warmup" else "i"
@@ -529,6 +634,7 @@ async def _session(
         transcript_policy=config.workload.transcript_policy,
         lookahead_frames=entry.lookahead_frames,
         workload_mode=config.workload.mode,
+        sample_rate_hertz=sample_rate,
     )
     guard = hang_guard_s(
         config.workload.timeout_s, audio_s, pacing=config.workload.pacing

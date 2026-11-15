@@ -14,6 +14,7 @@ from typing import Any
 
 from asrbench.audio import SAMPLE_RATE
 from asrbench.definitions import (
+    AUDIO_CONDITION_NATIVE,
     CHECKPOINT_SOURCE_UNVERIFIED,
     DEFAULT_LOOKAHEAD_IDENTITY_POLICY,
     DEFAULT_NORMALIZATION_POLICY,
@@ -48,6 +49,29 @@ class ClipSpec:
         "Mock path only. Not a streaming-behavior claim; clip duration "
         "is below a full encoder context."
     )
+
+
+@dataclass(frozen=True)
+class ManifestSpec:
+    """A corpus manifest: many clips, each scored against its own reference.
+
+    ``path`` is how the manifest is found on this machine and, like
+    ``clip.path``, is not part of the workload fingerprint. ``digest`` is:
+    it covers each clip's PCM16 digest and reference text in order (see
+    :func:`asrbench.manifest.manifest_digest`). Every other field is
+    filled from the file when the run resolves, and checked against it
+    when a preset or receipt already names it. ``path`` unset means no
+    manifest: the workload is the single ``clip``.
+    """
+
+    path: str | None = None
+    id: str | None = None
+    digest: str | None = None
+    language: str | None = None
+    clip_count: int | None = None
+    total_duration_s: float | None = None
+    #: How sessions map to clips. Hard workload identity.
+    assignment: str = "round_robin"
 
 
 @dataclass(frozen=True)
@@ -92,6 +116,12 @@ class WorkloadSpec:
 
     clip: ClipSpec = field(default_factory=ClipSpec)
     reference_transcript: str | None = DEFAULT_REFERENCE
+    #: Corpus manifest. When set, ``clip`` summarizes it and
+    #: ``reference_transcript`` is null: each clip carries its own.
+    manifest: ManifestSpec = field(default_factory=ManifestSpec)
+    #: ``native``, ``telephony_8k``, or ``telephony_8k_in_16k``. Hard
+    #: workload identity; see ``AUDIO_CONDITION_DEFINITION``.
+    audio_condition: str = AUDIO_CONDITION_NATIVE
     mode: str = MODE_STREAMING
     pacing: bool = True
     chunk_ms: int = 160

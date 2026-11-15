@@ -8,10 +8,11 @@ slow to be the default tier, and a near-zero wall span is not pacing.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from asrbench.adapter import SessionAdmissionBarrier, SessionProgressCallback
 from asrbench.audio import (
     BYTES_PER_SAMPLE,
-    SAMPLE_RATE,
     chunk_pcm16,
     read_pcm16,
 )
@@ -35,6 +36,8 @@ class MockAdapter:
     """Replay a scripted transcript over the clip's real chunking."""
 
     name = "mock"
+    #: Rates this adapter declares on the wire; it never resamples.
+    supported_sample_rates = frozenset({8_000, 16_000})
     supported_workload_options = frozenset(
         {
             "language",
@@ -46,11 +49,18 @@ class MockAdapter:
         }
     )
 
-    def __init__(self, transcript: str, interim_every_chunks: int = 2) -> None:
+    def __init__(
+        self,
+        transcript: str,
+        interim_every_chunks: int = 2,
+        transcripts: Mapping[str, str] | None = None,
+    ) -> None:
         """Store the script.
 
         Args:
             transcript: Final text every successful session returns.
+            transcripts: Optional per-clip final text keyed by clip file
+                name; a clip it names overrides ``transcript``.
             interim_every_chunks: Emit one more word of that text every
                 this many chunks. Must be at least 1.
 
@@ -60,6 +70,7 @@ class MockAdapter:
         if interim_every_chunks < 1:
             raise ValueError("interim_every_chunks must be >= 1")
         self._transcript = transcript
+        self._transcripts = dict(transcripts or {})
         self._every = interim_every_chunks
 
     async def run(
@@ -80,20 +91,23 @@ class MockAdapter:
             A successful outcome whose latencies are simulated.
         """
         del progress_callback
-        pcm = read_pcm16(request.clip_path)
-        chunks = chunk_pcm16(pcm, request.chunk_ms)
+        script = self._transcripts.get(request.clip_path.name, self._transcript)
+        pcm = read_pcm16(request.clip_path, request.sample_rate_hertz)
+        chunks = chunk_pcm16(pcm, request.chunk_ms, request.sample_rate_hertz)
         outcome = SessionOutcome(
             label=request.label,
             lifecycle=request.lifecycle,
             clip_name=request.clip_path.name,
             chunk_ms=request.chunk_ms,
-            audio_duration_s=len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE,
+            audio_duration_s=len(pcm)
+            / BYTES_PER_SAMPLE
+            / request.sample_rate_hertz,
             latency_clock=MOCK_TTFS_CLOCK,
             response_latency_clock=MOCK_RESPONSE_CLOCK,
             final_latency_clock=MOCK_FINAL_CLOCK,
             connected=True,
             configured=True,
-            transcript=self._transcript,
+            transcript=script,
             final_latency_s=_FINAL_S,
             terminal_status="completed",
         )
@@ -107,7 +121,7 @@ class MockAdapter:
         if admission_barrier is not None:
             markers = await admission_barrier.wait(request.label)
             outcome.protocol_extras.setdefault("markers", {}).update(markers)
-        words = self._transcript.split()
+        words = script.split()
         emitted = 0
         texts: list[str] = []
         for index, _chunk in enumerate(chunks, start=1):

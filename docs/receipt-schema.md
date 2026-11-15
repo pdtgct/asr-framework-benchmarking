@@ -91,6 +91,10 @@ compared and reported; a mismatch does not refuse:
 | `AGGREGATE_RTFX_CLOCK` | client_monotonic/benchmark_wall_span |
 | `AGGREGATE_RTFX_DEFINITION` | Sum of offered audio seconds over every measured session, including sessions that produced no transcript, divided by the benchmark wall span from the first stream start to the last stream finish. Under real-time pacing this tracks stream count: a concurrency measure, not a speedup. successful_audio_s is reported beside the ratio. streaming_rtfx is the productive-audio ratio on the cell span and is not this number. |
 | `AUDIO_CLOCK_ORIGIN_DEFINITION` | Audio t=0 on the client monotonic clock: audio offset a was capturable at origin + a. riva-grpc records its pacing schedule origin (schedule_origin). An outcome without one derives it: a paced session uses first-audio-sent minus the first chunk's duration, since a paced chunk is sent once it could have been captured (first_send_minus_first_chunk); an unpaced session uses first-audio-sent (first_send). Frontier lag, word latency, and pacing fidelity all use it, and each block counts which source every session used. |
+| `AUDIO_CONDITION_DEFINITION` | native sends each clip as staged, 16 kHz PCM16. telephony_8k low-passes at 3.8 kHz, decimates to 8 kHz, and sends 8 kHz PCM16 with sample_rate_hertz 8000. telephony_8k_in_16k applies the same decimation, interpolates back to 16 kHz with the same filter, and sends 16 kHz PCM16: narrowband content at the wideband rate, for a server that accepts only 16 kHz. The filter is named by dataset.audio_condition.resampler. Clip and manifest digests name the source audio; the condition and the sent rate are separate workload identity, so 8 kHz and 16 kHz receipts of the same clips share a source digest and differ in fingerprint. |
+| `AUDIO_CONDITION_NATIVE` | native |
+| `AUDIO_CONDITION_TELEPHONY_8K` | telephony_8k |
+| `AUDIO_CONDITION_TELEPHONY_8K_IN_16K` | telephony_8k_in_16k |
 | `AUDIO_DENOMINATOR_DEFINITION` | attempted_audio_s sums clip duration over every measured session, including failures. successful_audio_s sums clip duration over productive sessions only. Both are reported. |
 | `CER_DEFINITION` | Character error rate under the same named normalization policy as the accompanying WER, over the normalized utterance text. Not interchangeable across policies. |
 | `CHECKPOINT_SOURCE_HUGGINGFACE` | huggingface |
@@ -108,10 +112,13 @@ compared and reported; a mismatch does not refuse:
 | `CLIENT_LOCATION_LOOPBACK` | loopback |
 | `CLIENT_LOCATION_SAME_REGION` | same-region |
 | `CLIENT_LOCATION_WAN` | wan |
+| `CLIP_ASSIGNMENT_DEFINITION` | round_robin: with a corpus manifest, the session on lane l at iteration i of its phase plays manifest clip (i * lanes + l) mod clip_count. Concurrent sessions play different clips, every trial replays the same assignment, and every clip is played only when lanes * iterations >= clip_count; wer.corpus.complete records it. |
+| `CLIP_ASSIGNMENT_ROUND_ROBIN` | round_robin |
 | `COMPARISON_AXIS` | engine |
 | `COMPARISON_KEY_DEFINITION` | sha256 of the canonical JSON texts of the workload fingerprint, the hard target identity, the hard software identity, and the hard hardware identity, in that order, joined by U+001F. The hard target identity is the checkpoint id, revision, and source. It is not target.model and not server_version. The comparison axis is engine: engine name, engine version, transport, and server_version are recorded beside the key and a mismatch does not refuse. The adapter name is recorded with the transport and is not hard software identity. chunk_ms, att_context_right, lookahead frame count, and cadence are inside the workload fingerprint. The millisecond label is not. Decode features in that fingerprint are language, punctuation, diarization, interim_results, decoder, language_model, and enable_word_time_offsets. word_time_offsets_sent is true only when that flag is set and the transport sends word offsets, so a declaration the adapter does not send does not match a run that sent them. Hard software identity includes normalization policy, percentile method, SCHEMA_VERSION, and MEASUREMENT_SEMANTICS_VERSION. Precision is recorded and is not this key. Warn-only mismatches are listed and do not refuse. |
 | `COMPLETION_FRACTION_DEFINITION` | Fraction of measured sessions that completed. A named policy a preset may select in place of the steady-interval condition. It is not that condition. |
 | `CORPUS_NORMALIZATION_DEFINITION` | corpus_reference applies full normalization: case-fold, strip control tags, strip punctuation, normalize English cardinals (en_cardinals_v1, 0 through 999, including the 'and' form), and collapse whitespace. |
+| `CORPUS_WER_DEFINITION` | Corpus WER: total edits (substitutions + alignment deletions + insertions + deletions_from_missing_transcript) over total reference words, pooled over every measured session of every clip. A long clip weighs by its words, as the Open ASR Leaderboard and NVIDIA's published accuracy tables reduce a test set. Equal to micro_wer. Only a complete run (every clip scored) and a balanced one (every clip played equally often) is the test-set number. |
 | `DEFAULT_LOOKAHEAD_IDENTITY_POLICY` | client_declared |
 | `DEFAULT_NORMALIZATION_POLICY` | engine_vs_own_oracle |
 | `DEFAULT_PERCENTILE_METHOD` | numpy_linear |
@@ -151,6 +158,7 @@ compared and reported; a mismatch does not refuse:
 | `LOOKAHEAD_IDENTITY_CLIENT_DECLARED` | client_declared |
 | `LOOKAHEAD_IDENTITY_DEFINITION` | An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is warn-only until an adapter reports a frame count, so naming the unused policy does not refuse a comparison. |
 | `LOOKAHEAD_IDENTITY_SERVER_REPORTED` | server_reported_when_present |
+| `MANIFEST_DIGEST_DEFINITION` | sha256 over canonical JSON of the manifest schema, its language, and per clip in manifest order the clip id, the sha256 of its PCM16 payload, and the sha256 of its UTF-8 reference text. Paths, notes, and provenance are not covered. Part of the workload fingerprint: a changed clip, a changed reference, or a reordered manifest is different offered work. |
 | `MEASUREMENT_SEMANTICS_VERSION` | 6 |
 | `MODE_IS_OFFLINE_REASON` | mode_is_offline |
 | `MODE_OFFLINE` | offline |
@@ -178,6 +186,7 @@ compared and reported; a mismatch does not refuse:
 | `PERCENTILE_METHOD_NEAREST_RANK` | nearest_rank |
 | `PERCENTILE_METHOD_NUMPY_LINEAR` | numpy_linear |
 | `PERCENTILE_NEAREST_RANK_DEFINITION` | nearest_rank: 1-based rank = max(1, ceil(q / 100 * n)), clamped to n. Empty input is absent, not zero. Named alternative to numpy_linear. Not the default. |
+| `PER_CLIP_MEAN_WER_DEFINITION` | Secondary. Each clip's WER pooled over its own sessions, then the unweighted mean over clips with a defined rate. A one-word clip weighs as much as a thousand-word clip, so this is not the published corpus number; it shows whether a few clips carry the errors. |
 | `PER_UTTERANCE_WER_DEFINITION` | Distribution of per-utterance word error rates under the named policy. The micro-average is a separate number. A mean of rates hides a catastrophic utterance, so both are reported. Utterances without a defined rate stay in n_total. |
 | `POPULATION_DEFINITION` | n_with_measure counts outcomes, or samples where the metric says so, that possess the measure. n_total counts the measured population, including failures. Percentiles are conditional on n_with_measure. An empty sample is an absent percentile, not zero. Neither count is omitted. |
 | `PRECISION_RECORD_DEFINITION` | precision is recorded under the NVIDIA names FP32, FP16, FP8, and INT8, joined with + when mixed, plus an optional tf32 flag. It is shown beside a comparison and is not a comparison key. No further precision rule is applied. |
@@ -252,6 +261,15 @@ object is named once and then cited by path.
       - `attribution`: string
       - `note`: string
     - `reference_transcript`: string
+    - `manifest`: object
+      - `path`: null
+      - `id`: null
+      - `digest`: null
+      - `language`: null
+      - `clip_count`: null
+      - `total_duration_s`: null
+      - `assignment`: string
+    - `audio_condition`: string
     - `mode`: string
     - `pacing`: bool
     - `chunk_ms`: int

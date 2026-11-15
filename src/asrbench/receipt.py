@@ -10,10 +10,14 @@ import json
 from dataclasses import asdict
 from typing import Any, cast
 
+from asrbench.canonical import sha256_text
 from asrbench.config import config_to_dict
 from asrbench.definitions import (
+    AUDIO_CONDITION_DEFINITION,
+    AUDIO_CONDITION_NATIVE,
     DIGEST_COVERS_PCM16,
     LOOKAHEAD_IDENTITY_DEFINITION,
+    MANIFEST_DIGEST_DEFINITION,
     MEASUREMENT_SEMANTICS_VERSION,
     SCHEMA_VERSION,
     emitted_definitions,
@@ -22,11 +26,14 @@ from asrbench.fingerprint import (
     comparison_key,
     identity_blocks,
     observation_fingerprint,
+    sent_sample_rate,
     workload_fingerprint,
 )
 from asrbench.identity import GitState, HardwareRecord
+from asrbench.manifest import Manifest
 from asrbench.outcome import SessionOutcome
 from asrbench.reducers import is_productive, reduce_trial, summarize_trials
+from asrbench.resample import RESAMPLER
 from asrbench.spec import ResolvedConfig
 
 
@@ -73,6 +80,7 @@ def build_receipt(
     started_at: str,
     finished_at: str,
     materialized_path: str,
+    corpus: Manifest | None = None,
 ) -> dict[str, Any]:
     """Build the authoritative receipt object.
 
@@ -89,7 +97,10 @@ def build_receipt(
         run_id: Per-run id. Not part of the comparison key.
         started_at: RFC 3339 start marker.
         finished_at: RFC 3339 finish marker.
-        materialized_path: Where the clip WAV was written. Not identity.
+        materialized_path: Where the clip WAV was written, or the
+            directory of a manifest's clips. Not identity.
+        corpus: The loaded manifest of a corpus workload. Each session is
+            scored against its own clip's reference.
 
     Returns:
         A JSON-ready receipt dict.
@@ -124,6 +135,11 @@ def build_receipt(
     software = blocks["software"]
     hardware_id = blocks["hardware"]
     warn = blocks["warn"]
+    reference: str | dict[str, str] | None = (
+        config.workload.reference_transcript
+        if corpus is None
+        else corpus.references()
+    )
     rendered_trials: list[dict[str, Any]] = []
     measured: list[SessionOutcome] = []
     spans: list[float] = []
@@ -138,7 +154,7 @@ def build_receipt(
             mode=config.workload.mode,
             pacing=config.workload.pacing,
             lanes=config.workload.lanes,
-            reference=config.workload.reference_transcript,
+            reference=reference,
             pass_policy=config.run.pass_policy,
             percentile_method=config.run.percentile_method,
             warmup_excluded=len(warmup),
@@ -160,7 +176,7 @@ def build_receipt(
         mode=config.workload.mode,
         pacing=config.workload.pacing,
         lanes=config.workload.lanes,
-        reference=config.workload.reference_transcript,
+        reference=reference,
         pass_policy=config.run.pass_policy,
         percentile_method=config.run.percentile_method,
         warmup_excluded=sum(
@@ -236,6 +252,8 @@ def build_receipt(
             "note": clip.note,
             "materialized_path": materialized_path,
             "reference_transcript": config.workload.reference_transcript,
+            **_manifest_dataset(config, corpus),
+            **_audio_condition_dataset(config),
         },
         "audio_denominators": {
             "definition": emitted_definitions()["AUDIO_DENOMINATOR_DEFINITION"],
@@ -258,3 +276,58 @@ def build_receipt(
         "summary": summary,
     }
     return cast(dict[str, Any], json_ready(receipt))
+
+
+def _manifest_dataset(
+    config: ResolvedConfig, corpus: Manifest | None
+) -> dict[str, Any]:
+    """Return ``{"manifest": ...}`` for a corpus run, else nothing.
+
+    Single-clip receipts keep their old ``dataset`` shape. A corpus
+    receipt carries every clip's digest and reference text, so it can be
+    re-scored under another normalizer without the staged audio.
+    """
+    if corpus is None:
+        return {}
+    spec = config.workload.manifest
+    return {
+        "manifest": {
+            "id": corpus.id,
+            "digest": corpus.digest,
+            "digest_definition": MANIFEST_DIGEST_DEFINITION,
+            "language": corpus.language,
+            "corpus": corpus.corpus,
+            "licence": corpus.licence,
+            "attribution": corpus.attribution,
+            "assignment": spec.assignment,
+            "clip_count": len(corpus.clips),
+            "total_duration_s": corpus.total_duration_s,
+            "path": spec.path,
+            "clips": [
+                {
+                    "id": clip.id,
+                    "pcm_sha256": clip.pcm_sha256,
+                    "duration_s": clip.duration_s,
+                    "reference_sha256": sha256_text(clip.reference),
+                    "reference": clip.reference,
+                }
+                for clip in corpus.clips
+            ],
+        }
+    }
+
+
+def _audio_condition_dataset(config: ResolvedConfig) -> dict[str, Any]:
+    """Return ``{"audio_condition": ...}`` unless the audio is native."""
+    workload = config.workload
+    if workload.audio_condition == AUDIO_CONDITION_NATIVE:
+        return {}
+    return {
+        "audio_condition": {
+            "name": workload.audio_condition,
+            "definition": AUDIO_CONDITION_DEFINITION,
+            "source_sample_rate_hertz": workload.clip.sample_rate,
+            "sent_sample_rate_hertz": sent_sample_rate(workload),
+            "resampler": RESAMPLER,
+        }
+    }

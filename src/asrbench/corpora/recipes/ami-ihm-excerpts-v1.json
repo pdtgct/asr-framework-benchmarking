@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "id": "ami-ihm-excerpts-v1",
+  "corpus": "AMI Meeting Corpus (CC BY 4.0)",
+  "origin": "Survey of the public AMI headsets on 2026-08-02, first run in the author's nemotron-omni-port work. Every offset and file_sha256 is re-measurable from the public mirror with `asrbench corpus ami-survey` and `ami-excerpts`.",
+  "note": "Offsets are measured, never guessed. Each was reported by `ami_excerpts.py survey` at ITS OWN duration as containing >=2 pauses >=800ms and >=30% speech; `excerpt` re-measures every cut and exits non-zero if a window fails. Silence uses an absolute -50 dBFS floor, never a fraction of the clip's own peak. Durations are multiples of one encoder context (56 frames x 80 ms = 4.48 s). file_sha256 is the sha256 of the excerpt WAV (canonical 44-byte header plus PCM16) as the omni-port excerpt tool wrote it; an asrbench build from the same staged channel reproduces it byte for byte.",
+  "survey": {
+    "date": "2026-08-02",
+    "min_silence_ms": 800,
+    "silence_floor_dbfs": -50.0,
+    "min_speech_fraction": 0.3,
+    "channel_notes": {
+      "ES2002a:0": "REJECTED - no window meets both constraints; that speaker talks little.",
+      "EN2001a:0": "20.16 s only; a natural non-scenario channel is too sparse for longer windows."
+    }
+  },
+  "excerpts": [
+    {
+      "name": "ami-is1009a-h0-20s",
+      "meeting": "IS1009a",
+      "channel": 0,
+      "start_s": 38.12,
+      "duration_s": 20.16,
+      "contexts": 4.5,
+      "role": "threshold",
+      "file_sha256": "sha256:38369956c8f5fac0565a4aac33439d3f627ff77633d4f8305f715a0f887053d7"
+    },
+    {
+      "name": "ami-is1009a-h0-60s",
+      "meeting": "IS1009a",
+      "channel": 0,
+      "start_s": 29.46,
+      "duration_s": 60.0,
+      "contexts": 13.4,
+      "role": "threshold",
+      "file_sha256": "sha256:effe59a4302f36c04bf36ca02c77cb552b5c45551b4372e7432b08758721c697"
+    },
+    {
+      "name": "ami-es2002a-h1-20s",
+      "meeting": "ES2002a",
+      "channel": 1,
+      "start_s": 48.16,
+      "duration_s": 20.16,
+      "contexts": 4.5,
+      "role": "threshold",
+      "file_sha256": "sha256:28e4ce66fac17fe5cf5311c0c4f820a76710ddee559c106e88bfbe1390aadfc5"
+    },
+    {
+      "name": "ami-es2002a-h1-60s",
+      "meeting": "ES2002a",
+      "channel": 1,
+      "start_s": 41.4,
+      "duration_s": 60.0,
+      "contexts": 13.4,
+      "role": "threshold",
+      "file_sha256": "sha256:a139151ccb71a76c95c491865357eaf63e74b545e020d2e7f74d51421ccb8be2"
+    },
+    {
+      "name": "ami-ts3003a-h0-20s",
+      "meeting": "TS3003a",
+      "channel": 0,
+      "start_s": 8.24,
+      "duration_s": 20.16,
+      "contexts": 4.5,
+      "role": "threshold",
+      "file_sha256": "sha256:4874daf553a5fddbf2ee02132835d9c96c30501332174df316bb573ef931760e"
+    },
+    {
+      "name": "ami-ts3003a-h0-60s",
+      "meeting": "TS3003a",
+      "channel": 0,
+      "start_s": 0.2,
+      "duration_s": 60.0,
+      "contexts": 13.4,
+      "role": "threshold",
+      "file_sha256": "sha256:0e6824c0b514672413d6165b6034534db4474f4d4f0df8ce8a26899478bff44d"
+    },
+    {
+      "name": "ami-en2001a-h0-20s",
+      "meeting": "EN2001a",
+      "channel": 0,
+      "start_s": 13.4,
+      "duration_s": 20.16,
+      "contexts": 4.5,
+      "role": "threshold",
+      "file_sha256": "sha256:edb0ce5bc291590def999bd94f2d5b22edfbd0d76194f107d2a9dde8deb943e4"
+    },
+    {
+      "name": "ami-conc-1-en2001a-h0-20s",
+      "meeting": "EN2001a",
+      "channel": 0,
+      "start_s": 2332.42,
+      "duration_s": 20.16,
+      "contexts": 4.5,
+      "role": "concurrency",
+      "file_sha256": "sha256:048dd8558a97b65d13f5f5a22723963e4ed0bd2f17f9d2bd2725b92c4f2cdc2f"
+    },
+    {
+      "name": "ami-conc-2-is1009a-h0-49s",
+      "meeting": "IS1009a",
+      "channel": 0,
+      "start_s": 146.28,
+      "duration_s": 49.28,
+      "contexts": 11.0,
+      "role": "concurrency",
+      "file_sha256": "sha256:3b4481ad714694f3e5a316e4d17d7c0d584d9b31666603f9ad0e46382906e704"
+    },
+    {
+      "name": "ami-conc-3-ts3003a-h0-90s",
+      "meeting": "TS3003a",
+      "channel": 0,
+      "start_s": 90.16,
+      "duration_s": 89.6,
+      "contexts": 20.0,
+      "role": "concurrency",
+      "file_sha256": "sha256:890710df97967280ed00c6cc305c5bc09a28900ae27731b981ca78220e95a851"
+    },
+    {
+      "name": "ami-conc-4-es2002a-h1-134s",
+      "meeting": "ES2002a",
+      "channel": 1,
+      "start_s": 308.52,
+      "duration_s": 134.4,
+      "contexts": 30.0,
+      "role": "concurrency",
+      "file_sha256": "sha256:e3135079c992d922d0229fea7b7dbcb05f03c2aff9cfae6dc0f76b49cd2863fa"
+    }
+  ]
+}
