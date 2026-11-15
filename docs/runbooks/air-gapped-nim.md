@@ -855,7 +855,9 @@ Checked on a Linux box on 2026-11-12 against `0e93681`:
 - Section 3: install, `pytest` (228 passed, 2 skipped, 1 deselected), and the mock
   run were done inside a network namespace with no network (`unshare -rn`), so
   `--no-index` was proven offline.
-- Sections 4 to 8: run inside the same offline namespace against a local fake Riva
+- Sections 4 to 8 (verified at `0e93681`, before receipt/6: the chunks + 1
+  case now reads `measured`, and `nvidia_row.py` is superseded by
+  `asrbench nvidia-table`): run inside the same offline namespace against a local fake Riva
   server that answers `GetRivaSpeechRecognitionConfig` and sends one response per
   chunk. Checked: `nim_asr_config.py` over plaintext and over TLS with a private
   CA; `asrbench run` with the site preset at 1 and 4 lanes, 3 iterations, 3

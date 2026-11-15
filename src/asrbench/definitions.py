@@ -241,7 +241,10 @@ RIVA_PACING_SCHEDULE_DEFINITION = (
     "riva_streaming_asr_client does: chunk i is sent no earlier than "
     "stream start plus i times chunk_ms plus the duration of chunk i, "
     "so audio is never sent before it would have been recorded and a "
-    "late wake-up does not delay every later chunk."
+    "late wake-up does not delay every later chunk. Here stream start is "
+    "taken after the config write and the cohort barrier release, not "
+    "before the config write as in the NVIDIA client, so chunk 0 waits "
+    "one full chunk from that point."
 )
 STREAMING_RTFX_CLOCK = "client_monotonic/cell_wall_span"
 STREAMING_RTFX_DEFINITION = (
@@ -405,8 +408,8 @@ VLLM_FORMAT_NOTE = (
     "non-empty partial. response_latency_s is per response. e2e_rtfx is "
     "offered audio divided by first-audio-to-final. None of these is "
     "vLLM TTFT, and none is a vendor per-chunk latency. "
-    "riva_client_compat_s is the labelled 1:1 statistic and is not a "
-    "headline."
+    "riva_client_compat_s is the labelled chunk-i/response-i Riva client "
+    "compat statistic and is not a headline."
 )
 LANE_UNAVAILABLE_DEFINITION = (
     "A session whose adapter set terminal_status to lane_unavailable: an "
@@ -457,7 +460,7 @@ FRONTIER_LAG_DEFINITION = (
     "on that stream. Unavailable when audio_processed or the "
     "first-audio timestamp is absent. An invalid or absent session stays "
     "in n_total and contributes no sample. Not response latency and not "
-    "the Riva 1:1 statistic."
+    "the Riva client compat statistic."
 )
 FRONTIER_LAG_INVALID_REASON = "audio_processed_decreased"
 FRONTIER_LAG_UNAVAILABLE_REASON = "audio_processed_or_first_audio_absent"
@@ -500,7 +503,9 @@ RIVA_CLIENT_COMPAT_SPLIT_DEFINITION = (
     "a result with is_final true (final) or not (intermediate), as "
     "riva_streaming_asr_client splits its intermediate and final "
     "latency lists. Same validity as the pooled statistic. Unavailable "
-    "when the adapter did not record one final flag per response."
+    "when the adapter did not record one final flag per response. The "
+    "final split is not finalization_s: a final that arrives as the "
+    "tolerated trailing extra response is dropped, as NVIDIA drops it."
 )
 RIVA_CLIENT_COMPAT_SPLIT_UNAVAILABLE_REASON = "response_final_flags_absent"
 NVIDIA_STREAMING_ROW_DEFINITION = (

@@ -809,4 +809,6 @@ def _cell(value: object) -> str:
         return ""
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, float):
+        return format(value, ".5g")
     return str(value)

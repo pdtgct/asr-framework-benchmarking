@@ -93,6 +93,8 @@ def test_trailing_extra_response_still_yields_a_row(tmp_path: Path) -> None:
     assert row["compat_status"] == "measured"
     assert row["trailing_extra_ignored"] == 9
     assert row["pacing_validity"] == "pacing_disabled"
+    # NVIDIA prints latency only under --simulate_realtime. The follow-up
+    # comparability gates (paced, interims off, ...) must flip this to False.
     assert row["comparable"] is True
 
 
