@@ -652,7 +652,13 @@ Things that differ from NVIDIA even with these settings:
   the same: one channel per run, reused by every lane. Each outcome records
   `protocol_extras.channel` (`shared` or `per_session`). Connection setup is
   outside the latency clocks but inside the trial wall span, so use the shared
-  channel for rows at high stream counts.
+  channel for rows at high stream counts. The shared channel connects when the
+  first session asks for it, so with `--warmup 0` the connect falls inside trial
+  0's span only. A shared channel is one HTTP/2 connection: a gateway's
+  `MAX_CONCURRENT_STREAMS` limit (often 100 or 128 on Envoy or nginx) queues
+  lanes on the client, which shows up as barrier timeouts, not server latency.
+  NVIDIA's client behaves the same. A misconfigured mutual-TLS setup can read
+  `lane_unavailable` or `errored`, depending on when the server rejects.
 - At high stream counts (hundreds and up) the Python client may become the
   bottleneck. Watch the client host's CPU and treat a rising `e2e_rtfx` shortfall
   as a client limit until shown otherwise.

@@ -50,6 +50,8 @@ def make_site_tls(directory: Path) -> SiteTls:
         "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
         "-subj", "/CN=asrbench test CA", "-keyout", str(ca_key),
         "-out", str(ca),
+        "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
     )  # fmt: skip
     pairs: dict[str, tuple[Path, Path]] = {}
     for name, subject, extension in (

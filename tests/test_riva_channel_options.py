@@ -152,7 +152,9 @@ def test_mutual_tls_needs_the_client_certificate(tmp_path: Path) -> None:
     finally:
         server.stop()
     assert with_cert.terminal_status == "completed"
-    assert without.terminal_status == "lane_unavailable"
+    # Under TLS 1.3 the server may reject a missing client cert after the
+    # client thinks the handshake is done, which classifies as errored.
+    assert without.terminal_status in {"lane_unavailable", "errored"}
     key_text = site.client_key.read_text(encoding="utf-8")
     assert key_text.splitlines()[1] not in json.dumps(with_cert.protocol_extras)
 

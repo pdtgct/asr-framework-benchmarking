@@ -40,7 +40,13 @@ class SessionAdmissionBarrier(Protocol):
 
 
 class TransportAdapter(Protocol):
-    """Drives one streaming session over one protocol."""
+    """Drives one streaming session over one protocol.
+
+    An adapter may also define ``async def aclose(self) -> None``. The
+    runner awaits it once after the last trial, even when a trial raised,
+    so a shared resource such as one gRPC channel is released. An error
+    from it is warned about and does not discard the receipt.
+    """
 
     #: Stable identifier recorded in receipts, e.g. ``"realtime-ws"``.
     name: str
