@@ -210,7 +210,7 @@ def reduce_trial(
     e2e["unit"] = "ratio"
     frontier_rtfx = _frontier_rtfx(outcomes, percentile_method)
     frontier_lag = _frontier_lag(outcomes, percentile_method)
-    word_latency = _word_latency(outcomes, percentile_method)
+    word_latency = _word_latency(outcomes, percentile_method, mode=mode)
     aggregate = _aggregate_rtfx(
         attempted=attempted,
         successful=successful,
@@ -222,7 +222,7 @@ def reduce_trial(
     )
     riva_final = _riva_compat(outcomes, percentile_method, split="final")
     pacing_fidelity = _pacing_fidelity(
-        outcomes, pacing=pacing, method=percentile_method
+        outcomes, pacing=pacing, method=percentile_method, mode=mode
     )
     rtfx = _rtfx_blocks(
         mode=mode,
@@ -790,17 +790,28 @@ def _word_offsets(outcome: SessionOutcome) -> list[float] | None:
 
 
 def _word_latency(
-    outcomes: list[SessionOutcome], method: str
+    outcomes: list[SessionOutcome],
+    method: str,
+    *,
+    mode: str = d.MODE_STREAMING,
 ) -> dict[str, Any]:
-    return _pooled_clock(
+    offline = mode == d.MODE_OFFLINE
+    block = _pooled_clock(
         name="word_latency_s",
         clock=d.WORD_LATENCY_CLOCK,
         definition=d.WORD_LATENCY_DEFINITION,
         method=method,
         outcomes=outcomes,
-        read=_word_offsets,
+        # Offline sends all audio at the call start, so there is no paced
+        # audio clock to measure word ends against. Word timings stay on
+        # the outcomes as raw data.
+        read=(lambda _outcome: None) if offline else _word_offsets,
         absent_reason=d.WORD_LATENCY_UNAVAILABLE_REASON,
     )
+    if offline:
+        block["availability"] = "not_applicable"
+        block["reason"] = "mode_is_offline"
+    return block
 
 
 def _aggregate_rtfx(
@@ -964,9 +975,15 @@ def _pacing_lags(outcome: SessionOutcome) -> list[float] | None:
 
 
 def _pacing_fidelity(
-    outcomes: list[SessionOutcome], *, pacing: bool, method: str
+    outcomes: list[SessionOutcome],
+    *,
+    pacing: bool,
+    method: str,
+    mode: str = d.MODE_STREAMING,
 ) -> dict[str, Any]:
     """Measure how closely paced sessions kept to the chunk schedule."""
+    offline = mode == d.MODE_OFFLINE
+    pacing = pacing and not offline
     lags: list[float] = []
     session_max: list[float] = []
     tolerance = 0.0
@@ -981,7 +998,11 @@ def _pacing_fidelity(
         session_max.append(max(found) if found else 0.0)
     measured = len(session_max)
     reason: str | None = None
-    if not pacing:
+    if offline:
+        availability = "not_applicable"
+        reason = "mode_is_offline"
+        validity = d.RTFX_VALIDITY_NOT_APPLICABLE
+    elif not pacing:
         availability = "not_applicable"
         reason = d.PACING_FIDELITY_NOT_PACED_REASON
         validity = d.RTFX_VALIDITY_PACING_DISABLED

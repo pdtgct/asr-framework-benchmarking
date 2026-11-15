@@ -187,15 +187,58 @@ def test_tls_bearer_does_not_need_allow_insecure_auth(
     assert _MARKER not in repr(vars(adapter))
 
 
-def test_offline_recognize_is_not_implemented(tmp_path: Path) -> None:
-    adapter = _adapter("127.0.0.1:1")
-    outcome = asyncio.run(
-        adapter.run(_request(_wav(tmp_path, 0.02), workload_mode="offline"))
-    )
-    assert outcome.terminal_status == "errored"
-    assert outcome.error_code == "UNSUPPORTED"
-    assert outcome.configured is False
+def test_offline_mode_sends_one_unary_recognize(tmp_path: Path) -> None:
+    server = RunningFake(FakeRiva(mode="two-finals"))
+    server.servicer.offline_delay_s = 0.05
+    try:
+        outcome = asyncio.run(
+            _adapter(server.endpoint).run(
+                _request(_wav(tmp_path, 0.5), workload_mode="offline")
+            )
+        )
+    finally:
+        server.stop()
+    assert server.servicer.streams == []
+    assert len(server.servicer.offline_requests) == 1
+    sent = server.servicer.offline_requests[0]
+    assert len(sent.audio) == 16000  # 0.5 s of PCM16 at 16 kHz
+    assert sent.config.model == "fake-model"
+    assert sent.config.language_code == "en-US"
+    assert sent.config.enable_automatic_punctuation is True
+    assert outcome.terminal_status == "completed"
+    assert outcome.configured is True
+    assert outcome.transcript == "AB C"
     assert outcome.ttfs_s is None
+    assert outcome.first_audio_sent_s == outcome.last_audio_sent_s
+    assert outcome.final_latency_s is not None
+    assert outcome.final_latency_s >= 0.05
+    assert outcome.final_latency_clock == FINALIZATION_CLOCK
+    assert outcome.chunk_send_times_s is None
+    assert outcome.protocol_extras["server_audio_processed_s"] == 0.5
+    echo = outcome.protocol_extras["recognition_request"]
+    assert echo["rpc"] == "Recognize"
+
+
+def test_offline_errors_are_classified_like_streaming(tmp_path: Path) -> None:
+    path = _wav(tmp_path, 0.02)
+    server = RunningFake(FakeRiva(mode="invalid"))
+    try:
+        invalid = asyncio.run(
+            _adapter(server.endpoint).run(
+                _request(path, workload_mode="offline")
+            )
+        )
+    finally:
+        server.stop()
+    assert invalid.terminal_status == "errored"
+    assert invalid.error_code == "INVALID_ARGUMENT"
+    closed = asyncio.run(
+        _adapter("127.0.0.1:1").run(
+            _request(path, workload_mode="offline", timeout_s=0.5)
+        )
+    )
+    assert closed.terminal_status == "lane_unavailable"
+    assert closed.final_latency_s is None
 
 
 def test_token_is_not_stored_on_the_adapter(

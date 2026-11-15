@@ -154,7 +154,7 @@ def _progress(
 
 
 class RivaGrpcAdapter:
-    """Drive one ``StreamingRecognize`` session over gRPC.
+    """Drive one Riva session over gRPC: streaming or unary ``Recognize``.
 
     Channel tuning is read from ``channel_options``. Everything else in
     ``transport_options`` is sent. Those options are warn-only identity.
@@ -171,6 +171,7 @@ class RivaGrpcAdapter:
             "diarization",
             "interim_results",
             "enable_word_time_offsets",
+            "mode",
         }
     )
 
@@ -277,9 +278,10 @@ class RivaGrpcAdapter:
         """Stream one clip and return what the server was observed to do.
 
         Args:
-            request: Offered work. ``workload_mode`` other than
-                ``streaming`` is reported on the outcome; offline
-                ``Recognize`` is not this adapter.
+            request: Offered work. ``workload_mode`` ``streaming`` runs
+                ``StreamingRecognize``; ``offline`` runs one unary
+                ``Recognize`` with the whole clip, as
+                ``riva_asr_client`` does.
             admission_barrier: Released after ``streaming_config`` is
                 sent and before the first audio chunk.
             progress_callback: Bounded lifecycle edges only.
@@ -290,10 +292,10 @@ class RivaGrpcAdapter:
             false, and no latency samples.
         """
         outcome = _new_outcome(request)
-        if request.workload_mode != "streaming":
+        if request.workload_mode not in ("streaming", "offline"):
             outcome.error_code = "UNSUPPORTED"
             outcome.error_detail = (
-                "riva-grpc implements StreamingRecognize only"
+                "riva-grpc implements streaming and offline modes only"
             )
             outcome.terminal_status = "errored"
             return outcome
@@ -342,6 +344,20 @@ class RivaGrpcAdapter:
             if outcome.terminal_status == "lane_unavailable":
                 return
             if outcome.terminal_status == "errored":
+                return
+            if request.workload_mode == "offline":
+                await self._recognize(
+                    request,
+                    outcome,
+                    channel,
+                    rasr,
+                    rasr_grpc,
+                    raudio,
+                    pcm,
+                    audio_s,
+                    admission_barrier,
+                    progress_callback,
+                )
                 return
             await self._stream(
                 request,
@@ -554,6 +570,102 @@ class RivaGrpcAdapter:
         outcome.connected = True
         if outcome.transcript is not None and not outcome.error_code:
             outcome.terminal_status = "completed"
+        _progress(
+            progress_callback,
+            request.label,
+            "session.complete",
+            has_text=bool(outcome.transcript),
+        )
+
+    async def _recognize(
+        self,
+        request: SessionRequest,
+        outcome: SessionOutcome,
+        channel: Any,
+        rasr: Any,
+        rasr_grpc: Any,
+        raudio: Any,
+        pcm: bytes,
+        audio_s: float,
+        admission_barrier: SessionAdmissionBarrier | None,
+        progress_callback: SessionProgressCallback | None,
+    ) -> None:
+        """Send the whole clip in one unary ``Recognize``.
+
+        First and last audio sent are both the call start, so
+        ``final_latency_s`` is the request latency ``riva_asr_client``
+        reports. There is no partial, so TTFS stays empty. The server's
+        ``audio_processed`` on the last result is kept as residue.
+        """
+        outcome.protocol_extras["recognition_request"] = _recognition_echo(
+            self, request
+        )
+        if admission_barrier is not None:
+            _progress(progress_callback, request.label, "barrier.waiting")
+            try:
+                released = await admission_barrier.wait(request.label)
+            except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
+                outcome.timed_out = True
+                outcome.terminal_status = "timed_out"
+                outcome.error_code = "DEADLINE_EXCEEDED"
+                outcome.error_detail = "TimeoutError: cohort barrier"
+                _progress(progress_callback, request.label, "barrier.timeout")
+                return
+            outcome.protocol_extras.setdefault("markers", {}).update(released)
+            _progress(progress_callback, request.label, "barrier.released")
+        stub = rasr_grpc.RivaSpeechRecognitionStub(channel)
+        message = rasr.RecognizeRequest(
+            config=_recognition_config(self, request, rasr, raudio),
+            audio=pcm,
+        )
+        metadata = self._metadata() or None
+        marks: dict[str, float | None] = {
+            "first": None,
+            "latest": None,
+            "audio_sent_s": audio_s,
+        }
+        start = time.monotonic()
+        marks["first"] = start
+        marks["latest"] = start
+        outcome.first_audio_sent_s = start
+        outcome.last_audio_sent_s = start
+        _progress(
+            progress_callback,
+            request.label,
+            "first_audio.sent",
+            bytes=len(pcm),
+        )
+        try:
+            response = await stub.Recognize(
+                message,
+                metadata=metadata,
+                timeout=request.timeout_s,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - the lane stays data
+            self._fail_stream(outcome, error, marks, request, progress_callback)
+            return
+        now = time.monotonic()
+        outcome.connected = True
+        outcome.configured = True
+        parts: list[str] = []
+        processed: list[float] = []
+        for result in response.results:
+            if result.alternatives:
+                parts.append(result.alternatives[0].transcript)
+            _note_words(outcome, result, now)
+            value = float(result.audio_processed)
+            if value > 0.0:
+                processed.append(value)
+        outcome.transcript = "".join(parts)
+        outcome.final_received_s = now
+        outcome.final_latency_s = now - start
+        outcome.final_latency_clock = FINALIZATION_CLOCK
+        outcome.interim_texts = []
+        if processed:
+            outcome.protocol_extras["server_audio_processed_s"] = processed[-1]
+        outcome.terminal_status = "completed"
         _progress(
             progress_callback,
             request.label,
@@ -909,6 +1021,18 @@ def _streaming_config(
     rasr: Any,
     raudio: Any,
 ) -> Any:
+    return rasr.StreamingRecognitionConfig(
+        config=_recognition_config(adapter, request, rasr, raudio),
+        interim_results=request.interim_results,
+    )
+
+
+def _recognition_config(
+    adapter: RivaGrpcAdapter,
+    request: SessionRequest,
+    rasr: Any,
+    raudio: Any,
+) -> Any:
     config = rasr.RecognitionConfig(
         encoding=raudio.AudioEncoding.LINEAR_PCM,
         sample_rate_hertz=SAMPLE_RATE,
@@ -924,16 +1048,18 @@ def _streaming_config(
     if request.diarization:
         config.diarization_config.enable_speaker_diarization = True
         config.diarization_config.max_speaker_count = adapter._max_speakers
-    return rasr.StreamingRecognitionConfig(
-        config=config,
-        interim_results=request.interim_results,
-    )
+    return config
 
 
 def _recognition_echo(
     adapter: RivaGrpcAdapter, request: SessionRequest
 ) -> dict[str, Any]:
     return {
+        "rpc": (
+            "Recognize"
+            if request.workload_mode == "offline"
+            else "StreamingRecognize"
+        ),
         "language_code": request.language,
         "model": request.model,
         "sample_rate_hertz": SAMPLE_RATE,

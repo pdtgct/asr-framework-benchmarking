@@ -15,8 +15,10 @@ from asrbench.definitions import (
     FINALIZATION_CLOCK,
     FRONTIER_DEFINITION,
     NATIVE_LATENCY_CLOCK,
+    NVIDIA_OFFLINE_ROW_DEFINITION,
     NVIDIA_STREAMING_ROW_DEFINITION,
     PERCENTILE_METHOD_FLOOR_INDEX,
+    RTFX_VALIDITY_NOT_APPLICABLE,
     SUSTAINED_STREAMS_DEFINITION,
     VLLM_FORMAT_NOTE,
 )
@@ -449,6 +451,8 @@ def nvidia_streaming_row(
     every trial measured the statistic and the percentile policy is
     ``floor_index``, NVIDIA's ``sorted[floor(q * n / 100)]``.
 
+    An offline receipt is projected by :func:`nvidia_offline_row`.
+
     Args:
         receipt: A receipt object.
         source: Name printed in the ``source`` column.
@@ -457,6 +461,8 @@ def nvidia_streaming_row(
         One row keyed by :data:`NVIDIA_TABLE_COLUMNS`.
     """
     workload = receipt["resolved_config"]["workload"]
+    if workload["mode"] == "offline":
+        return nvidia_offline_row(receipt, source)
     method = receipt["resolved_config"]["run"]["percentile_method"]
     reductions = [trial["reduction"] for trial in receipt["trials"]]
     compat = [item["riva_client_compat_s"] for item in reductions]
@@ -508,6 +514,63 @@ def nvidia_streaming_row(
     return row
 
 
+def nvidia_offline_row(receipt: dict[str, Any], source: str) -> dict[str, Any]:
+    """Project one offline receipt onto NVIDIA's offline row.
+
+    ``streams`` is parallel requests (lanes). Latency columns are the
+    trial mean of ``finalization_s`` in ms: for riva-grpc offline that is
+    the unary request latency. ``compat_status`` names whether every
+    request completed, the condition under which ``riva_asr_client``
+    prints throughput at all.
+
+    Args:
+        receipt: An offline receipt.
+        source: Name printed in the ``source`` column.
+
+    Returns:
+        One row keyed by :data:`NVIDIA_TABLE_COLUMNS`.
+    """
+    workload = receipt["resolved_config"]["workload"]
+    method = receipt["resolved_config"]["run"]["percentile_method"]
+    reductions = [trial["reduction"] for trial in receipt["trials"]]
+    complete = [
+        item
+        for item in reductions
+        if item["counts"]["attempted"] > 0
+        and item["counts"]["completed"] == item["counts"]["attempted"]
+    ]
+    row: dict[str, Any] = {
+        "source": source,
+        "mode": "offline",
+        "chunk_ms": None,
+        "streams": workload["lanes"],
+    }
+    for column, stat in _NVIDIA_STATS:
+        row[column] = _ms(
+            _mean_of([item["finalization_s"][stat] for item in complete])
+        )
+    row["throughput_rtfx"] = _mean_of(
+        [item["aggregate_rtfx"]["value"] for item in reductions]
+    )
+    row["compat_status"] = (
+        "all_requests_completed"
+        if reductions and len(complete) == len(reductions)
+        else "requests_failed"
+    )
+    row["trials_measured"] = f"{len(complete)}/{len(reductions)}"
+    row["percentile_method"] = method
+    row["comparable"] = (
+        bool(reductions)
+        and len(complete) == len(reductions)
+        and method == PERCENTILE_METHOD_FLOOR_INDEX
+    )
+    row["pacing_validity"] = RTFX_VALIDITY_NOT_APPLICABLE
+    row["trailing_extra_ignored"] = None
+    row["intermediate_avg_ms"] = None
+    row["final_avg_ms"] = None
+    return row
+
+
 def nvidia_table_tsv(rows: list[dict[str, Any]]) -> str:
     """Render NVIDIA-layout rows as TSV with the definition as a comment.
 
@@ -517,10 +580,10 @@ def nvidia_table_tsv(rows: list[dict[str, Any]]) -> str:
     Returns:
         A comment, a header, and one line per row.
     """
-    lines = [
-        "# " + NVIDIA_STREAMING_ROW_DEFINITION,
-        "\t".join(NVIDIA_TABLE_COLUMNS),
-    ]
+    lines = ["# " + NVIDIA_STREAMING_ROW_DEFINITION]
+    if any(row.get("mode") == "offline" for row in rows):
+        lines.append("# " + NVIDIA_OFFLINE_ROW_DEFINITION)
+    lines.append("\t".join(NVIDIA_TABLE_COLUMNS))
     for row in rows:
         lines.append(
             "\t".join(

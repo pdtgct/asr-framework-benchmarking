@@ -508,6 +508,31 @@ RIVA_CLIENT_COMPAT_SPLIT_DEFINITION = (
     "tolerated trailing extra response is dropped, as NVIDIA drops it."
 )
 RIVA_CLIENT_COMPAT_SPLIT_UNAVAILABLE_REASON = "response_final_flags_absent"
+RIVA_OFFLINE_RECOGNIZE_DEFINITION = (
+    "In offline mode riva-grpc sends the whole clip in one unary "
+    "Recognize, as riva_asr_client does. First and last audio sent are "
+    "both the call start and the final is the response, so "
+    "finalization_s is that client's per-request latency and TTFS is "
+    "empty. Lanes are requests kept in flight. aggregate_rtfx is offered "
+    "audio over the trial span, the analogue of the client's throughput "
+    "RTFX, biased low: the asrbench span also covers each session's "
+    "channel open and GetRivaSpeechRecognitionConfig call and the lane "
+    "barrier, which riva_asr_client does once before its timer starts. "
+    "offline_rtfx counts productive audio only. word_latency_s is "
+    "not_applicable offline. The client sums the "
+    "server's audio_processed; asrbench uses the clip duration and keeps "
+    "the server value as server_audio_processed_s residue."
+)
+NVIDIA_OFFLINE_ROW_DEFINITION = (
+    "One row per offline receipt in NVIDIA's offline table layout: "
+    "parallel requests (lanes) and throughput, the trial mean of "
+    "aggregate_rtfx. Latency columns are finalization_s in milliseconds, "
+    "the request latency riva_asr_client prints, each the mean over "
+    "trials; they are not NVIDIA offline table columns, which publish "
+    "only streams and throughput. Comparable only when every request "
+    "completed in every trial and percentile_method is floor_index; "
+    "riva_asr_client prints no throughput when any request failed."
+)
 NVIDIA_STREAMING_ROW_DEFINITION = (
     "One row per receipt in NVIDIA's ASR NIM streaming table layout. "
     "Latency avg, p50, p90, p95, and p99 are riva_client_compat_s in "
