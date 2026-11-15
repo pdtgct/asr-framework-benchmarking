@@ -244,7 +244,7 @@ RIVA_PACING_SCHEDULE_DEFINITION = (
     "late wake-up does not delay every later chunk. Here stream start is "
     "taken after the config write and the cohort barrier release, not "
     "before the config write as in the NVIDIA client, so chunk 0 waits "
-    "one full chunk from that point."
+    "its own duration from that point."
 )
 STREAMING_RTFX_CLOCK = "client_monotonic/cell_wall_span"
 STREAMING_RTFX_DEFINITION = (

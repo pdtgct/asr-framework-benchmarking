@@ -133,3 +133,13 @@ def test_row_is_not_comparable_without_floor_index_or_samples() -> None:
     assert nvidia_streaming_row(receipt, "x")["comparable"] is False
     text = nvidia_table_tsv([row])
     assert "\tfalse\t" in text
+
+
+def test_nvidia_table_rounds_floats_to_five_significant_figures() -> None:
+    row: dict[str, Any] = {name: None for name in NVIDIA_TABLE_COLUMNS}
+    row["avg_ms"] = 9.423456789012345
+    row["streams"] = 4
+    text = nvidia_table_tsv([row])
+    cells = text.splitlines()[2].split("\t")
+    assert cells[NVIDIA_TABLE_COLUMNS.index("avg_ms")] == "9.4235"
+    assert cells[NVIDIA_TABLE_COLUMNS.index("streams")] == "4"

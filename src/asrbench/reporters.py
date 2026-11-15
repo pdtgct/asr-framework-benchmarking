@@ -523,7 +523,9 @@ def nvidia_table_tsv(rows: list[dict[str, Any]]) -> str:
     ]
     for row in rows:
         lines.append(
-            "\t".join(_cell(row.get(name)) for name in NVIDIA_TABLE_COLUMNS)
+            "\t".join(
+                _nvidia_cell(row.get(name)) for name in NVIDIA_TABLE_COLUMNS
+            )
         )
     return "\n".join(lines) + "\n"
 
@@ -809,6 +811,11 @@ def _cell(value: object) -> str:
         return ""
     if isinstance(value, bool):
         return "true" if value else "false"
+    return str(value)
+
+
+def _nvidia_cell(value: object) -> str:
+    """Like ``_cell``, with floats at 5 significant figures."""
     if isinstance(value, float):
         return format(value, ".5g")
-    return str(value)
+    return _cell(value)

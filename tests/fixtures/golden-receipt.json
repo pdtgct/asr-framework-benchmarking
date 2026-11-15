@@ -95,7 +95,7 @@
     "RIVA_CLIENT_COMPAT_SPLIT_UNAVAILABLE_REASON": "response_final_flags_absent",
     "RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON": "chunk_or_response_times_absent",
     "RIVA_PACING_SCHEDULE": "absolute_from_stream_start",
-    "RIVA_PACING_SCHEDULE_DEFINITION": "riva-grpc paces against an absolute schedule from stream start, as riva_streaming_asr_client does: chunk i is sent no earlier than stream start plus i times chunk_ms plus the duration of chunk i, so audio is never sent before it would have been recorded and a late wake-up does not delay every later chunk. Here stream start is taken after the config write and the cohort barrier release, not before the config write as in the NVIDIA client, so chunk 0 waits one full chunk from that point.",
+    "RIVA_PACING_SCHEDULE_DEFINITION": "riva-grpc paces against an absolute schedule from stream start, as riva_streaming_asr_client does: chunk i is sent no earlier than stream start plus i times chunk_ms plus the duration of chunk i, so audio is never sent before it would have been recorded and a late wake-up does not delay every later chunk. Here stream start is taken after the config write and the cohort barrier release, not before the config write as in the NVIDIA client, so chunk 0 waits its own duration from that point.",
     "RTFX_VALIDITY_NOT_APPLICABLE": "not_this_mode",
     "RTFX_VALIDITY_PACED": "paced",
     "RTFX_VALIDITY_PACING_DISABLED": "pacing_disabled",
