@@ -613,7 +613,7 @@ Each cell takes about `trials * iterations * (clip length + finalization)`, abou
 | average of three runs | `--trials 3`, then `asrbench nvidia-table` (section 8.4) |
 | `1272-135031-0000.wav` | the clip from section 2.4 |
 | `sorted[floor(q*n/100)]` percentiles | `--percentile-method floor_index` |
-| one row per stream count | one receipt per `--lanes` value |
+| one row per stream count | `asrbench sweep`: one receipt per stream count |
 
 Choose `C` from the table you are matching. On the NIM side, the mode in
 `NIM_TAGS_SELECTOR` must match: `mode=str` for "Streaming, low-latency",
@@ -621,23 +621,27 @@ Choose `C` from the table you are matching. On the NIM side, the mode in
 language model, and the diarization setting the table states.
 
 Run the stream-count sweep from `work/`, with `IDENT` set as in section 5.4. Use
-NVIDIA's stream counts for the table you match:
+NVIDIA's stream counts for the table you match. `asrbench sweep` runs one cell per
+count, in order, each resolved exactly as `asrbench run --lanes N` would be, and
+writes `c<chunk>-n<N>.json` (plus its `.tsv` and `.console.txt`) for each count and
+`c<chunk>-nvidia-layout.tsv` for the whole sweep:
 
 ```bash
 CHUNK=160
 RUN=$(date +%Y%m%d)-c$CHUNK
 mkdir -p "receipts/$RUN/identity"
 cp identity/* "receipts/$RUN/identity/" 2>/dev/null
-for N in 1 8 16 32 64; do
-  asrbench run --preset presets/nim-site-streaming.json "${IDENT[@]}" \
-    --chunk-ms "$CHUNK" --cadence-ms "$CHUNK" \
-    --lanes "$N" --iterations 3 --warmup 0 --trials 3 \
-    --out "receipts/$RUN/c$CHUNK-n$N.json" \
-    > "receipts/$RUN/c$CHUNK-n$N.console.txt"
-done
+asrbench sweep --preset presets/nim-site-streaming.json "${IDENT[@]}" \
+  --chunk-ms "$CHUNK" --cadence-ms "$CHUNK" \
+  --streams 1,8,16,32,64 --iterations 3 --warmup 0 --trials 3 \
+  --out-dir "receipts/$RUN"
 ```
 
-A failed cell still exits `0`. The failure is a result and stays on the receipt.
+Without `--streams`, the sweep reads `workload.performance_streams` from the
+preset. `--lanes` and `--out` are refused; the sweep sets both per count.
+
+A failed cell still exits `0` and the sweep continues. The failure is a result and
+stays on the receipt.
 Exit code `2` means a configuration error.
 
 Things that differ from NVIDIA even with these settings:
@@ -860,6 +864,7 @@ as an issue. Where a change has since addressed one, it is named under the gap.
    recorded but not executed. Each stream count is a separate run, looped in the
    shell.
    Issue: "run: execute a lanes sweep from performance_streams and emit one receipt per stream count"
+   Addressed: `asrbench sweep` (section 6).
 3. **Riva compat refuses the chunks + 1 case.** The Riva client accepts one extra
    trailing response and ignores it. asrbench marks the session, and so the whole
    statistic, invalid.
