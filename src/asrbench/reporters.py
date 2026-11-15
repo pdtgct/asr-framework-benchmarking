@@ -517,11 +517,18 @@ def _latency_choice(
         if "chunk_latency_s" in item
     ]
     states = {item["availability"] for item in chunk}
+    # A trial where a session sent chunks and got no response carries
+    # numbers but does not count as measured, as an invalid compat trial.
+    answered = [
+        item
+        for item in chunk
+        if not (item.get("n_sessions_by_coverage") or {}).get("no_responses")
+    ]
     if chunk and len(chunk) == len(reductions):
         if states == {"measured"}:
-            return "chunk_coverage/audio_processed", chunk, chunk
+            return "chunk_coverage/audio_processed", chunk, answered
         if states <= {"measured", "measured_lower_bound"}:
-            return "chunk_coverage/send_watermark", chunk, chunk
+            return "chunk_coverage/send_watermark", chunk, answered
     if compat_measured:
         return "riva_compat", compat, compat_measured
     if chunk and states == {"final_only"}:

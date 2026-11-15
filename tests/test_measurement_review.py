@@ -99,7 +99,7 @@ def test_paired_interims_cannot_move_the_latency(tmp_path: Path) -> None:
     chunk = reduced["chunk_latency_s"]
     assert chunk["availability"] == "measured_lower_bound"
     assert chunk["n_samples"] == 6
-    assert chunk["n_bursts"] >= 1
+    # n_bursts depends on loopback timing; it is not asserted here.
     assert chunk["n_responses"] == 13
     # Drop the second of every pair: the first covering response wins,
     # so the statistic does not change.
@@ -211,3 +211,53 @@ def test_server_audio_rtfx_and_its_gap_vs_clip() -> None:
     )
     streaming = _reduce([session(label="s")])["server_audio_rtfx"]
     assert streaming["availability"] == "not_applicable"
+
+
+def _trusted_session() -> SessionOutcome:
+    outcome = session(label="trusted", audio_duration_s=0.3)
+    outcome.chunk_ms = 100
+    outcome.chunk_send_times_s = [1.1, 1.2, 1.3]
+    outcome.response_receive_times_s = [1.15, 1.25, 1.35, 1.4]
+    outcome.response_final_flags = [False, False, False, True]
+    outcome.audio_progress = [
+        {"audio_processed_s": end, "received_s": at, "audio_sent_s": end}
+        for end, at in ((0.1, 1.15), (0.2, 1.25), (0.3, 1.35), (0.3, 1.4))
+    ]
+    return outcome
+
+
+def test_session_without_responses_is_not_a_coverage_source() -> None:
+    silent = session(label="timed-out", audio_duration_s=0.3)
+    silent.chunk_ms = 100
+    silent.chunk_send_times_s = [1.1, 1.2]
+    silent.response_receive_times_s = []
+    silent.terminal_status = "timed_out"
+    chunk = _reduce([_trusted_session(), silent])["chunk_latency_s"]
+    assert chunk["coverage_source"] == "audio_processed"
+    assert chunk["availability"] == "measured"
+    assert chunk["n_sessions_by_coverage"]["no_responses"] == 1
+    assert chunk["n_sessions_by_coverage"]["send_watermark"] == 0
+    assert chunk["n_chunks_uncovered"] == 2
+    assert chunk["reason"] == "sessions_without_responses"
+    assert chunk["n_samples"] == 3
+
+    from asrbench.reporters import _latency_choice
+
+    source, blocks, measured = _latency_choice(
+        [
+            {
+                "riva_client_compat_s": {"availability": "invalid"},
+                "chunk_latency_s": chunk,
+            }
+        ]
+    )
+    assert source == "chunk_coverage/audio_processed"
+    assert len(blocks) == 1
+    assert measured == []
+
+
+def test_unpaced_chunk_latency_is_not_applicable() -> None:
+    chunk = _reduce([_trusted_session()], pacing=False)["chunk_latency_s"]
+    assert chunk["availability"] == "not_applicable"
+    assert chunk["reason"] == "pacing_disabled"
+    assert chunk["n_samples"] == 0

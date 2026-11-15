@@ -55,7 +55,7 @@ _RTFX = (
         "streaming_rtfx",
         d.STREAMING_RTFX_DEFINITION,
         d.MODE_STREAMING,
-        "mode_is_offline",
+        d.MODE_IS_OFFLINE_REASON,
         False,
     ),
     (
@@ -239,7 +239,9 @@ def reduce_trial(
         paced=paced_streaming,
         mode=mode,
     )
-    chunk_latency = _chunk_latency(outcomes, percentile_method, mode=mode)
+    chunk_latency = _chunk_latency(
+        outcomes, percentile_method, mode=mode, pacing=pacing
+    )
     server_audio_rtfx = _server_audio_rtfx(
         outcomes, wall_span_s=wall_span_s, mode=mode
     )
@@ -878,7 +880,7 @@ def _word_latency(
     block["audio_clock_origin_definition"] = d.AUDIO_CLOCK_ORIGIN_DEFINITION
     if offline:
         block["availability"] = "not_applicable"
-        block["reason"] = "mode_is_offline"
+        block["reason"] = d.MODE_IS_OFFLINE_REASON
     return block
 
 
@@ -989,7 +991,7 @@ def _riva_compat(
     if mode == d.MODE_OFFLINE or not paced:
         availability = "not_applicable"
         reason: str | None = (
-            "mode_is_offline"
+            d.MODE_IS_OFFLINE_REASON
             if mode == d.MODE_OFFLINE
             else d.RIVA_CLIENT_COMPAT_NOT_PACED_REASON
         )
@@ -1089,8 +1091,9 @@ def _trusted_frontier(
 def _chunk_coverage(outcome: SessionOutcome) -> dict[str, Any]:
     """Per-chunk coverage latency for one session.
 
-    Returns a dict with ``status`` (``unavailable``, ``final_only``, or
-    ``measured``), ``source``, ``latencies``, and diagnostics.
+    Returns a dict with ``status`` (``unavailable``, ``no_responses``,
+    ``final_only``, or ``measured``), ``source``, ``latencies``, and
+    diagnostics.
     """
     sends = outcome.chunk_send_times_s
     receives = outcome.response_receive_times_s
@@ -1120,6 +1123,13 @@ def _chunk_coverage(outcome: SessionOutcome) -> dict[str, Any]:
         1 for index in range(1, len(texts)) if texts[index] == texts[index - 1]
     )
     found["n_chunks"] = len(sends)
+    if not receives:
+        # Chunks went out and nothing came back (an error or timeout before
+        # the first response). That says nothing about where coverage came
+        # from, so it is its own status, not a coverage source.
+        found["status"] = "no_responses"
+        found["n_uncovered"] = len(sends)
+        return found
     flags, inferred = _response_flags(outcome, len(receives))
     found["flags_inferred"] = inferred
     if receives and all(flags):
@@ -1163,6 +1173,7 @@ def _chunk_latency(
     method: str,
     *,
     mode: str = d.MODE_STREAMING,
+    pacing: bool = True,
 ) -> dict[str, Any]:
     """Reduce per-chunk coverage latency (``chunk_latency_s``)."""
     sessions = [_chunk_coverage(outcome) for outcome in outcomes]
@@ -1170,6 +1181,7 @@ def _chunk_latency(
         "audio_processed": 0,
         "send_watermark": 0,
         "final_only": 0,
+        "no_responses": 0,
         "unavailable": 0,
     }
     samples: list[float] = []
@@ -1185,7 +1197,14 @@ def _chunk_latency(
     measured = by_source["audio_processed"] + by_source["send_watermark"]
     if mode == d.MODE_OFFLINE:
         availability = "not_applicable"
-        reason: str | None = "mode_is_offline"
+        reason: str | None = d.MODE_IS_OFFLINE_REASON
+        samples = []
+    elif not pacing:
+        # Unpaced, every chunk leaves at about once, so coverage collapses
+        # to first-response-minus-send. NVIDIA's client prints no latency
+        # without --simulate_realtime; mirror riva_client_compat_s.
+        availability = "not_applicable"
+        reason = d.RIVA_CLIENT_COMPAT_NOT_PACED_REASON
         samples = []
     elif measured == 0 and by_source["final_only"]:
         availability = "final_only"
@@ -1203,7 +1222,11 @@ def _chunk_latency(
     else:
         availability = "measured"
         reason = None
-    if reason is None and (by_source["final_only"] or by_source["unavailable"]):
+    if reason is None and by_source["no_responses"]:
+        reason = d.CHUNK_LATENCY_NO_RESPONSES_REASON
+    elif reason is None and (
+        by_source["final_only"] or by_source["unavailable"]
+    ):
         reason = (
             d.CHUNK_LATENCY_FINAL_ONLY_REASON
             if by_source["final_only"]
@@ -1368,7 +1391,7 @@ def _pacing_fidelity(
     reason: str | None = None
     if offline:
         availability = "not_applicable"
-        reason = "mode_is_offline"
+        reason = d.MODE_IS_OFFLINE_REASON
         validity = d.RTFX_VALIDITY_NOT_APPLICABLE
     elif not pacing:
         availability = "not_applicable"

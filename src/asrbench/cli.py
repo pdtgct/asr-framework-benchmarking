@@ -257,6 +257,7 @@ def _sweep(args: argparse.Namespace) -> int:
             "no stream counts: set workload.performance_streams in the "
             "preset or pass --streams"
         )
+    # --streams is checked by argparse; this covers performance_streams.
     if len(set(streams)) != len(streams):
         raise ConfigError(
             "stream counts repeat; each would overwrite the last receipt"
