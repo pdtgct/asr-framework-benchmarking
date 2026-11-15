@@ -34,6 +34,7 @@ from asrbench.definitions import (
     CLIENT_LOCATION_SAME_REGION,
     CLIENT_LOCATION_WAN,
     CLIP_ASSIGNMENT_ROUND_ROBIN,
+    DEFAULT_CORPUS_NORMALIZER,
     LATENCY_METRIC_FINALIZATION,
     LATENCY_METRIC_FRONTIER_LAG,
     LATENCY_METRIC_RESPONSE,
@@ -49,6 +50,8 @@ from asrbench.definitions import (
     SUSTAINABILITY_STEADY_INTERVAL,
 )
 from asrbench.manifest import Manifest, ManifestError, load_manifest
+from asrbench.normalizers import CORPUS_NORMALIZERS, NormalizerUnavailable
+from asrbench.normalizers import check as check_normalizer
 from asrbench.percentile import PERCENTILE_METHODS
 from asrbench.spec import (
     ClipSpec,
@@ -312,6 +315,11 @@ def _bindings() -> tuple[Binding, ...]:
         (
             ("run", "pass_policy", "normalization_policy"),
             "named WER normalization policy",
+        ),
+        (
+            ("run", "pass_policy", "corpus_normalizer"),
+            "text normalizer under corpus_reference: en_cardinals_v1, "
+            "open_asr_english_v1, or open_asr_multilingual_v1",
         ),
         (
             ("run", "pass_policy", "sustainability_policy"),
@@ -608,6 +616,7 @@ def validate(config: ResolvedConfig, *, pin: bool = True) -> ResolvedConfig:
     if run.verbosity < 0:
         raise ConfigError("verbosity must be zero or positive")
     _validate_policy(run.pass_policy)
+    _validate_normalizer(run.pass_policy, workload.language, pin=pin)
     _validate_operating_point(workload)
     _validate_word_offsets(workload, config.target)
     _validate_checkpoint(config.target)
@@ -917,6 +926,7 @@ _ADDED_WITH_NULL_DEFAULT = frozenset(
         "nim_tags_selector",
         "manifest",
         "audio_condition",
+        "corpus_normalizer",
     }
 )
 
@@ -1111,6 +1121,41 @@ def _check_population_agreement(workload: WorkloadSpec) -> None:
         {entry.att_context_right for entry in population},
         "att_context_right",
     )
+
+
+def _validate_normalizer(
+    policy: PassPolicy, language: str, *, pin: bool
+) -> None:
+    """Refuse a corpus normalizer that cannot score this run.
+
+    The name is always checked. The language fit and the optional extra
+    are checked only when resolving a run (``pin``): comparing a stored
+    receipt needs neither.
+
+    Raises:
+        ConfigError: Unknown, used without corpus_reference, wrong
+            language, or its extra is missing.
+    """
+    name = policy.corpus_normalizer
+    if name not in CORPUS_NORMALIZERS:
+        raise ConfigError(
+            f"unknown corpus normalizer {name!r}; one of "
+            f"{', '.join(sorted(CORPUS_NORMALIZERS))}"
+        )
+    if (
+        policy.normalization_policy != NORMALIZATION_CORPUS_REFERENCE
+        and name != DEFAULT_CORPUS_NORMALIZER
+    ):
+        raise ConfigError(
+            f"corpus_normalizer {name!r} applies only under "
+            "normalization_policy corpus_reference"
+        )
+    if not pin or policy.normalization_policy != NORMALIZATION_CORPUS_REFERENCE:
+        return
+    try:
+        check_normalizer(name, language)
+    except NormalizerUnavailable as error:
+        raise ConfigError(str(error)) from error
 
 
 def _validate_policy(policy: PassPolicy) -> None:

@@ -32,6 +32,9 @@ _PACKAGE = _ROOT / "src" / "asrbench"
 _TRANSPORT_EXTRAS = {
     "websocket": Path("adapters"),
     "riva": Path("adapters"),
+    # Not a transport: the vendored Open ASR normalizers, imported only
+    # through importlib by asrbench.normalizers when a run names them.
+    "wer-multilingual": Path("normalizers") / "_vendor",
 }
 
 #: Distribution name -> importable module, where they differ.

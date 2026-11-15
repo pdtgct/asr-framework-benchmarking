@@ -36,7 +36,15 @@ THIRD_PARTY.md.
    comparable to their published tables. Referenced from public documentation and
    the public nvidia-riva/python-clients repository only.
 
-3. Corpora - CC BY 4.0, attribution required
+3. Vendored code - Open ASR Leaderboard text normalizers (Apache License 2.0)
+   Copyright 2022 The OpenAI team and The HuggingFace Team.
+   src/asrbench/normalizers/_vendor/open_asr/ carries normalizer.py,
+   english_abbreviations.py, and excerpts of data_utils.py and eval_utils.py
+   from https://github.com/huggingface/open_asr_leaderboard at commit
+   c21a412f2dd7cbe3af658d69fbf3d0dd536a264e. Modifications are stated in each
+   file's header.
+
+4. Corpora - CC BY 4.0, attribution required
    - LibriSpeech ASR corpus. V. Panayotov, G. Chen, D. Povey, S. Khudanpur,
      "Librispeech: An ASR corpus based on public domain audio books," ICASSP 2015.
      https://www.openslr.org/12
