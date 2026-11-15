@@ -77,12 +77,6 @@ _UNAVAILABLE = (
         d.LAG_EXCESS_DEFINITION,
     ),
     (
-        "pacing_fidelity",
-        d.PACING_FIDELITY_UNAVAILABLE_REASON,
-        d.PACING_FIDELITY_CLOCK,
-        d.PACING_FIDELITY_DEFINITION,
-    ),
-    (
         "interim_cadence_conformance",
         d.INTERIM_CADENCE_UNAVAILABLE_REASON,
         d.INTERIM_CADENCE_CLOCK,
@@ -223,6 +217,13 @@ def reduce_trial(
         wall_span_s=wall_span_s,
     )
     riva_compat = _riva_compat(outcomes, percentile_method)
+    riva_intermediate = _riva_compat(
+        outcomes, percentile_method, split="intermediate"
+    )
+    riva_final = _riva_compat(outcomes, percentile_method, split="final")
+    pacing_fidelity = _pacing_fidelity(
+        outcomes, pacing=pacing, method=percentile_method
+    )
     rtfx = _rtfx_blocks(
         mode=mode,
         pacing=pacing,
@@ -231,6 +232,7 @@ def reduce_trial(
         wall_span_s=wall_span_s,
         span_pooling=span_pooling,
         simulated=_clocks_are_simulated(outcomes),
+        pacing_validity=pacing_fidelity["validity"],
     )
     counts = _counts(outcomes, warmup_excluded)
     conjunction = _conjunction(
@@ -264,6 +266,9 @@ def reduce_trial(
         "word_latency_s": word_latency,
         "aggregate_rtfx": aggregate,
         "riva_client_compat_s": riva_compat,
+        "riva_client_compat_intermediate_s": riva_intermediate,
+        "riva_client_compat_final_s": riva_final,
+        "pacing_fidelity": pacing_fidelity,
         "wer": wer,
         "streaming_rtfx": rtfx["streaming_rtfx"],
         "offline_rtfx": rtfx["offline_rtfx"],
@@ -825,33 +830,76 @@ def _aggregate_rtfx(
     }
 
 
-def _riva_pairs(outcome: SessionOutcome) -> tuple[str, list[float]]:
+def _riva_pairs(
+    outcome: SessionOutcome,
+) -> tuple[str, list[float], list[bool] | None, bool]:
+    """Pair response i with chunk i, as riva_streaming_asr_client does.
+
+    Returns:
+        Status (``measured``, ``invalid``, or ``unavailable``), one
+        latency per chunk, the matching final flags or ``None`` when they
+        were not recorded, and whether a trailing extra response was
+        ignored.
+    """
     sends = outcome.chunk_send_times_s
     receives = outcome.response_receive_times_s
     if sends is None or receives is None:
-        return "unavailable", []
-    if len(receives) != len(sends):
-        return "invalid", []
-    return "measured", [
-        receives[index] - sends[index] for index in range(len(sends))
-    ]
+        return "unavailable", [], None, False
+    if len(receives) not in (len(sends), len(sends) + 1):
+        return "invalid", [], None, False
+    pairs = [receives[index] - sends[index] for index in range(len(sends))]
+    flags = outcome.response_final_flags
+    paired_flags = (
+        list(flags[: len(sends)])
+        if flags is not None and len(flags) == len(receives)
+        else None
+    )
+    return "measured", pairs, paired_flags, len(receives) == len(sends) + 1
 
 
-def _riva_compat(outcomes: list[SessionOutcome], method: str) -> dict[str, Any]:
+def _riva_compat(
+    outcomes: list[SessionOutcome],
+    method: str,
+    *,
+    split: str | None = None,
+) -> dict[str, Any]:
+    """Reduce Riva compat, pooled or one side of the is_final split.
+
+    Args:
+        outcomes: Measured sessions.
+        method: Percentile policy.
+        split: ``None`` for every pair, or ``intermediate`` / ``final``
+            for the pairs whose response carried that is_final value.
+    """
     invalid = 0
     absent = 0
+    trailing = 0
     measured_sessions = 0
     samples: list[float] = []
     for outcome in outcomes:
-        status, pairs = _riva_pairs(outcome)
+        status, pairs, flags, extra = _riva_pairs(outcome)
         if status == "invalid":
             invalid += 1
             continue
-        if status == "unavailable":
+        if status == "unavailable" or (split is not None and flags is None):
             absent += 1
             continue
         measured_sessions += 1
-        samples.extend(pairs)
+        trailing += int(extra)
+        if split is None or flags is None:
+            samples.extend(pairs)
+            continue
+        wanted = split == "final"
+        samples.extend(
+            value
+            for value, final in zip(pairs, flags, strict=True)
+            if final is wanted
+        )
+    absent_reason = (
+        d.RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON
+        if split is None
+        else d.RIVA_CLIENT_COMPAT_SPLIT_UNAVAILABLE_REASON
+    )
     if invalid:
         availability = "invalid"
         reason: str | None = d.RIVA_CLIENT_COMPAT_INVALID_REASON
@@ -859,12 +907,12 @@ def _riva_compat(outcomes: list[SessionOutcome], method: str) -> dict[str, Any]:
         with_measure = 0
     elif measured_sessions == 0:
         availability = "unavailable"
-        reason = d.RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON
+        reason = absent_reason
         shown = []
         with_measure = 0
     elif absent:
         availability = "partial" if samples else "no_samples"
-        reason = d.RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON
+        reason = absent_reason
         shown = samples
         with_measure = measured_sessions
     elif samples:
@@ -878,11 +926,16 @@ def _riva_compat(outcomes: list[SessionOutcome], method: str) -> dict[str, Any]:
         shown = []
         with_measure = measured_sessions
     stats = _percentiles(shown, method) if shown else _blank_stats()
+    name = "riva_client_compat_s"
+    definition = d.RIVA_CLIENT_COMPAT_DEFINITION
+    if split is not None:
+        name = f"riva_client_compat_{split}_s"
+        definition = d.RIVA_CLIENT_COMPAT_SPLIT_DEFINITION
     return {
-        "name": "riva_client_compat_s",
+        "name": name,
         "label": d.RIVA_CLIENT_COMPAT_LABEL,
         "clock": d.RIVA_CLIENT_COMPAT_CLOCK,
-        "definition": d.RIVA_CLIENT_COMPAT_DEFINITION,
+        "definition": definition,
         "percentile_method": method,
         "availability": availability,
         "reason": reason,
@@ -893,6 +946,75 @@ def _riva_compat(outcomes: list[SessionOutcome], method: str) -> dict[str, Any]:
         "n_samples": len(shown),
         "n_invalid_sessions": invalid,
         "n_unavailable_sessions": absent,
+        "n_trailing_extra_ignored": trailing,
+        "population_definition": d.POPULATION_DEFINITION,
+    }
+
+
+def _pacing_lags(outcome: SessionOutcome) -> list[float] | None:
+    """Return per-chunk send lags, last chunk excluded, or ``None``."""
+    sends = outcome.chunk_send_times_s
+    if sends is None or not sends:
+        return None
+    step = outcome.chunk_ms / 1000
+    first = sends[0]
+    return [
+        (sends[index] - first) - index * step for index in range(len(sends) - 1)
+    ]
+
+
+def _pacing_fidelity(
+    outcomes: list[SessionOutcome], *, pacing: bool, method: str
+) -> dict[str, Any]:
+    """Measure how closely paced sessions kept to the chunk schedule."""
+    lags: list[float] = []
+    session_max: list[float] = []
+    tolerance = 0.0
+    absent = 0
+    for outcome in outcomes:
+        found = _pacing_lags(outcome) if pacing else None
+        if found is None:
+            absent += 1
+            continue
+        tolerance = max(tolerance, outcome.chunk_ms / 1000)
+        lags.extend(found)
+        session_max.append(max(found) if found else 0.0)
+    measured = len(session_max)
+    reason: str | None = None
+    if not pacing:
+        availability = "not_applicable"
+        reason = d.PACING_FIDELITY_NOT_PACED_REASON
+        validity = d.RTFX_VALIDITY_PACING_DISABLED
+    elif measured == 0:
+        availability = "unavailable"
+        reason = d.PACING_FIDELITY_UNAVAILABLE_REASON
+        validity = d.RTFX_VALIDITY_UNQUALIFIED
+    else:
+        availability = "partial" if absent else "measured"
+        if absent:
+            reason = d.PACING_FIDELITY_UNAVAILABLE_REASON
+        worst = max(session_max)
+        validity = (
+            d.RTFX_VALIDITY_PACED
+            if worst <= tolerance
+            else d.RTFX_VALIDITY_PACING_LAGGED
+        )
+    stats = _percentiles(lags, method) if lags else _blank_stats()
+    return {
+        "name": "pacing_fidelity",
+        "availability": availability,
+        "reason": reason,
+        "validity": validity,
+        "clock": d.PACING_FIDELITY_CLOCK,
+        "definition": d.PACING_FIDELITY_DEFINITION,
+        "tolerance_definition": d.PACING_FIDELITY_TOLERANCE_DEFINITION,
+        "percentile_method": method,
+        "unit": "s",
+        "lag_s": stats,
+        "max_session_lag_s": max(session_max) if session_max else None,
+        "n_with_measure": measured,
+        "n_total": len(outcomes),
+        "n_samples": len(lags),
         "population_definition": d.POPULATION_DEFINITION,
     }
 
@@ -1391,6 +1513,7 @@ def _rtfx_blocks(
     wall_span_s: float,
     span_pooling: str,
     simulated: bool,
+    pacing_validity: str = d.RTFX_VALIDITY_UNQUALIFIED,
 ) -> dict[str, dict[str, Any]]:
     built: dict[str, dict[str, Any]] = {}
     for name, definition, applicable_mode, reason, offline in _RTFX:
@@ -1406,6 +1529,7 @@ def _rtfx_blocks(
             span_pooling=span_pooling,
             offline=offline,
             simulated=simulated,
+            pacing_validity=pacing_validity,
         )
     return built
 
@@ -1423,6 +1547,7 @@ def _rtfx(
     span_pooling: str,
     offline: bool,
     simulated: bool,
+    pacing_validity: str,
 ) -> dict[str, Any]:
     availability = "unavailable"
     reason: str | None = inapplicable_reason
@@ -1442,7 +1567,7 @@ def _rtfx(
         elif not pacing:
             validity = d.RTFX_VALIDITY_PACING_DISABLED
         else:
-            validity = d.RTFX_VALIDITY_UNQUALIFIED
+            validity = pacing_validity
     return {
         "name": name,
         "availability": availability,

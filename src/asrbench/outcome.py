@@ -199,3 +199,7 @@ class SessionOutcome:
     chunk_send_times_s: list[float] | None = None
     #: Client-monotonic receive time of each streaming response.
     response_receive_times_s: list[float] | None = None
+    #: One flag per entry of :attr:`response_receive_times_s`: whether
+    #: that response carried a result with ``is_final`` true. ``None``
+    #: means the adapter did not record it.
+    response_final_flags: list[bool] | None = None

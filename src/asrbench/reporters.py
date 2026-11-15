@@ -15,6 +15,8 @@ from asrbench.definitions import (
     FINALIZATION_CLOCK,
     FRONTIER_DEFINITION,
     NATIVE_LATENCY_CLOCK,
+    NVIDIA_STREAMING_ROW_DEFINITION,
+    PERCENTILE_METHOD_FLOOR_INDEX,
     SUSTAINED_STREAMS_DEFINITION,
     VLLM_FORMAT_NOTE,
 )
@@ -46,6 +48,7 @@ def console_report(receipt: dict[str, Any]) -> str:
     words = pooled["word_latency_s"]
     aggregate = pooled["aggregate_rtfx"]
     compat = pooled["riva_client_compat_s"]
+    pacing = pooled.get("pacing_fidelity", {})
     wer = pooled["wer"]
     rtfx = pooled["streaming_rtfx"]
     counts = pooled["counts"]
@@ -117,7 +120,14 @@ def console_report(receipt: dict[str, Any]) -> str:
         (
             f"riva_client_compat label={compat['label']} "
             f"availability={compat['availability']} "
-            f"p50={compat['p50']} n_total={compat['n_total']}"
+            f"p50={compat['p50']} n_total={compat['n_total']} "
+            f"trailing_extra_ignored={compat.get('n_trailing_extra_ignored')}"
+        ),
+        (
+            f"pacing_fidelity availability={pacing.get('availability')} "
+            f"validity={pacing.get('validity')} "
+            f"max_session_lag_s={pacing.get('max_session_lag_s')} "
+            f"n_with_measure={pacing.get('n_with_measure')}"
         ),
         (
             "outcomes "
@@ -399,6 +409,140 @@ def perf_table_tsv(receipt: dict[str, Any]) -> str:
     return comment + "\n" + header + "\n" + row + "\n"
 
 
+_NVIDIA_STATS = (
+    ("avg_ms", "mean"),
+    ("p50_ms", "p50"),
+    ("p90_ms", "p90"),
+    ("p95_ms", "p95"),
+    ("p99_ms", "p99"),
+)
+NVIDIA_TABLE_COLUMNS = (
+    "source",
+    "mode",
+    "chunk_ms",
+    "streams",
+    "avg_ms",
+    "p50_ms",
+    "p90_ms",
+    "p95_ms",
+    "p99_ms",
+    "throughput_rtfx",
+    "compat_status",
+    "trials_measured",
+    "percentile_method",
+    "comparable",
+    "pacing_validity",
+    "trailing_extra_ignored",
+    "intermediate_avg_ms",
+    "final_avg_ms",
+)
+
+
+def nvidia_streaming_row(
+    receipt: dict[str, Any], source: str
+) -> dict[str, Any]:
+    """Project one receipt onto NVIDIA's streaming table row.
+
+    Latency columns are ``riva_client_compat_s`` in milliseconds, each the
+    mean over trials whose compat statistic was measured. Throughput is
+    the trial mean of ``aggregate_rtfx``. ``comparable`` is true only when
+    every trial measured the statistic and the percentile policy is
+    ``floor_index``, NVIDIA's ``sorted[floor(q * n / 100)]``.
+
+    Args:
+        receipt: A receipt object.
+        source: Name printed in the ``source`` column.
+
+    Returns:
+        One row keyed by :data:`NVIDIA_TABLE_COLUMNS`.
+    """
+    workload = receipt["resolved_config"]["workload"]
+    method = receipt["resolved_config"]["run"]["percentile_method"]
+    reductions = [trial["reduction"] for trial in receipt["trials"]]
+    compat = [item["riva_client_compat_s"] for item in reductions]
+    measured = [item for item in compat if item["availability"] == "measured"]
+    statuses = sorted({item["availability"] for item in compat})
+    row: dict[str, Any] = {
+        "source": source,
+        "mode": workload["mode"],
+        "chunk_ms": workload["chunk_ms"],
+        "streams": workload["lanes"],
+    }
+    for column, stat in _NVIDIA_STATS:
+        row[column] = _ms(_mean_of([item[stat] for item in measured]))
+    row["throughput_rtfx"] = _mean_of(
+        [item["aggregate_rtfx"]["value"] for item in reductions]
+    )
+    row["compat_status"] = ",".join(statuses)
+    row["trials_measured"] = f"{len(measured)}/{len(compat)}"
+    row["percentile_method"] = method
+    row["comparable"] = (
+        bool(compat)
+        and len(measured) == len(compat)
+        and method == PERCENTILE_METHOD_FLOOR_INDEX
+    )
+    pacing = sorted(
+        {
+            item.get("pacing_fidelity", {}).get("validity", "absent")
+            for item in reductions
+        }
+    )
+    row["pacing_validity"] = ",".join(pacing)
+    row["trailing_extra_ignored"] = sum(
+        item.get("n_trailing_extra_ignored", 0) for item in compat
+    )
+    for column, key in (
+        ("intermediate_avg_ms", "riva_client_compat_intermediate_s"),
+        ("final_avg_ms", "riva_client_compat_final_s"),
+    ):
+        blocks = [item[key] for item in reductions if key in item]
+        row[column] = _ms(
+            _mean_of(
+                [
+                    block["mean"]
+                    for block in blocks
+                    if block["availability"] == "measured"
+                ]
+            )
+        )
+    return row
+
+
+def nvidia_table_tsv(rows: list[dict[str, Any]]) -> str:
+    """Render NVIDIA-layout rows as TSV with the definition as a comment.
+
+    Args:
+        rows: Rows from :func:`nvidia_streaming_row`.
+
+    Returns:
+        A comment, a header, and one line per row.
+    """
+    lines = [
+        "# " + NVIDIA_STREAMING_ROW_DEFINITION,
+        "\t".join(NVIDIA_TABLE_COLUMNS),
+    ]
+    for row in rows:
+        lines.append(
+            "\t".join(
+                _nvidia_cell(row.get(name)) for name in NVIDIA_TABLE_COLUMNS
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _mean_of(values: list[object]) -> float | None:
+    present = [
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    ]
+    return sum(present) / len(present) if present else None
+
+
+def _ms(value: float | None) -> float | None:
+    return None if value is None else value * 1000.0
+
+
 def _trial_mean(
     trials: list[dict[str, Any]], section: str, field: str
 ) -> tuple[float | None, int]:
@@ -668,3 +812,10 @@ def _cell(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _nvidia_cell(value: object) -> str:
+    """Like ``_cell``, with floats at 5 significant figures."""
+    if isinstance(value, float):
+        return format(value, ".5g")
+    return _cell(value)

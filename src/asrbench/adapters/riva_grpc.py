@@ -4,8 +4,11 @@ Public protocol, from the ``nvidia.riva.asr.RivaSpeechRecognition`` service
 in nvidia-riva/common and the streaming client in nvidia-riva/python-clients:
 the first ``StreamingRecognizeRequest`` carries ``streaming_config`` and no
 audio, and every later request carries ``audio_content`` only. Audio here is
-mono PCM16 at 16 kHz, paced at one ``chunk_ms`` per chunk when the session
-asks for real time.
+mono PCM16 at 16 kHz. When the session asks for real time, chunk ``i``
+is sent no earlier than stream start plus ``i * chunk_ms`` plus the
+duration of chunk ``i``: an absolute schedule, as
+``riva_streaming_asr_client`` paces, so a late wake-up does not delay
+every later chunk.
 
 ``riva.client.Auth`` is not used. It keeps metadata, including a bearer
 token, on the auth object. This adapter builds metadata for the RPC and
@@ -47,6 +50,7 @@ from asrbench.audio import (
     read_pcm16,
 )
 from asrbench.config import ConfigError
+from asrbench.definitions import RIVA_PACING_SCHEDULE
 from asrbench.outcome import (
     FINALIZATION_CLOCK,
     NATIVE_LATENCY_CLOCK,
@@ -454,6 +458,9 @@ class RivaGrpcAdapter:
         }
         outcome.chunk_send_times_s = []
         outcome.response_receive_times_s = []
+        outcome.response_final_flags = []
+        if request.pace:
+            outcome.protocol_extras["pacing_schedule"] = RIVA_PACING_SCHEDULE
         streaming = _streaming_config(self, request, rasr, raudio)
         outcome.protocol_extras["recognition_request"] = _recognition_echo(
             self, request
@@ -490,7 +497,19 @@ class RivaGrpcAdapter:
                     released
                 )
                 _progress(progress_callback, request.label, "barrier.released")
-            for index, chunk in enumerate(chunks):
+            start = time.monotonic()
+            scheduled_ms = 0.0
+            for chunk in chunks:
+                chunk_ms = len(chunk) / BYTES_PER_SAMPLE / SAMPLE_RATE * 1000
+                if request.pace:
+                    # Absolute schedule from stream start, as
+                    # riva_streaming_asr_client paces: chunk i goes no
+                    # earlier than start + i * chunk_ms + its duration.
+                    target = start + (scheduled_ms + chunk_ms) / 1000
+                    wait = target - time.monotonic()
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                    scheduled_ms += request.chunk_ms
                 now = time.monotonic()
                 if marks["first"] is None:
                     marks["first"] = now
@@ -509,8 +528,6 @@ class RivaGrpcAdapter:
                 sent += len(chunk) / BYTES_PER_SAMPLE / SAMPLE_RATE
                 marks["audio_sent_s"] = sent
                 yield rasr.StreamingRecognizeRequest(audio_content=chunk)
-                if request.pace and index + 1 < len(chunks):
-                    await asyncio.sleep(request.chunk_ms / 1000)
 
         call = stub.StreamingRecognize(
             outgoing(), metadata=metadata, timeout=deadline_s
@@ -683,6 +700,10 @@ def _consume(
     now = time.monotonic()
     if outcome.response_receive_times_s is not None:
         outcome.response_receive_times_s.append(now)
+    if outcome.response_final_flags is not None:
+        outcome.response_final_flags.append(
+            any(result.is_final for result in response.results)
+        )
     sent = marks.get("audio_sent_s")
     audio_sent = float(sent) if isinstance(sent, float) else 0.0
     parts: list[str] = []
@@ -783,6 +804,7 @@ def _mark_lane_unavailable(
     outcome.word_timings = None
     outcome.chunk_send_times_s = None
     outcome.response_receive_times_s = None
+    outcome.response_final_flags = None
     outcome.timed_out = False
     outcome.error_code = code
     outcome.error_detail = detail

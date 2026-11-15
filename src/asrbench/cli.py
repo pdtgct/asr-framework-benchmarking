@@ -30,6 +30,8 @@ from asrbench.reporters import (
     console_report,
     frontier_report,
     frontier_text,
+    nvidia_streaming_row,
+    nvidia_table_tsv,
     perf_table_tsv,
     sustained_streams_report,
     vendor_tsv,
@@ -79,6 +81,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     sustained_parser.add_argument("receipts", nargs="+", type=Path)
 
+    nvidia_parser = sub.add_parser(
+        "nvidia-table",
+        help="one NVIDIA ASR NIM performance-table row per receipt",
+    )
+    nvidia_parser.add_argument("receipts", nargs="+", type=Path)
+    nvidia_parser.add_argument("--out", type=Path)
+
     report_parser = sub.add_parser("report", help="project one receipt")
     report_parser.add_argument("receipt", type=Path)
     report_parser.add_argument(
@@ -116,6 +125,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _sustained(args)
     if args.command == "report":
         return _report(args)
+    if args.command == "nvidia-table":
+        return _nvidia_table(args)
     raise ConfigError(f"unknown command {args.command}")
 
 
@@ -177,6 +188,18 @@ def _sustained(args: argparse.Namespace) -> int:
     report = sustained_streams_report(receipts, sources)
     json.dump(report, sys.stdout, indent=2)
     sys.stdout.write("\n")
+    return 0
+
+
+def _nvidia_table(args: argparse.Namespace) -> int:
+    rows = [
+        nvidia_streaming_row(load_json_object(path), str(path))
+        for path in args.receipts
+    ]
+    text = nvidia_table_tsv(rows)
+    if args.out is not None:
+        args.out.write_text(text, encoding="utf-8")
+    sys.stdout.write(text)
     return 0
 
 

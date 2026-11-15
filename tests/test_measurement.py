@@ -31,7 +31,7 @@ def _reduce(outcomes: list[Any], **kwargs: Any) -> dict[str, Any]:
         outcomes,
         wall_span_s=kwargs.get("wall_span_s", 2.0),
         mode="streaming",
-        pacing=True,
+        pacing=kwargs.get("pacing", True),
         lanes=len(outcomes) or 1,
         reference="hello",
         pass_policy=PassPolicy(),
@@ -299,7 +299,7 @@ def test_aggregate_rtfx_keeps_failed_audio_in_the_numerator() -> None:
     assert block["successful_audio_s"] == pytest.approx(1.6)
 
 
-def test_riva_client_compat_requires_matching_counts() -> None:
+def test_riva_client_compat_accepts_chunks_or_chunks_plus_one() -> None:
     paired = session(label="paired")
     paired.chunk_send_times_s = [1.0, 2.0]
     paired.response_receive_times_s = [1.1, 2.3]
@@ -313,10 +313,21 @@ def test_riva_client_compat_requires_matching_counts() -> None:
     extra.chunk_send_times_s = [1.0, 2.0]
     extra.response_receive_times_s = [1.1, 2.3, 3.0]
     plus_one = _reduce([extra])["riva_client_compat_s"]
-    assert plus_one["availability"] == "invalid"
-    assert plus_one["n_samples"] == 0
-    assert plus_one["n_with_measure"] == 0
+    # riva_streaming_asr_client ignores one trailing extra response.
+    assert plus_one["availability"] == "measured"
+    assert plus_one["n_samples"] == 2
+    assert plus_one["maximum"] == pytest.approx(0.3)
+    assert plus_one["n_trailing_extra_ignored"] == 1
+    assert plus_one["n_with_measure"] == 1
     assert plus_one["n_total"] == 1
+
+    two_extra = session(label="two-extra")
+    two_extra.chunk_send_times_s = [1.0, 2.0]
+    two_extra.response_receive_times_s = [1.1, 2.3, 3.0, 3.1]
+    plus_two = _reduce([two_extra])["riva_client_compat_s"]
+    assert plus_two["availability"] == "invalid"
+    assert plus_two["reason"] == "response_count_not_chunks_or_chunks_plus_one"
+    assert plus_two["n_samples"] == 0
 
     short = session(label="short")
     short.chunk_send_times_s = [1.0, 2.0]
@@ -577,3 +588,68 @@ def test_finalization_uses_last_audio_and_keeps_a_negative() -> None:
     assert pooled["mean"] == pytest.approx(0.4)
     assert pooled["n_with_measure"] == 1
     assert pooled["n_total"] == 2
+
+
+def test_riva_client_compat_splits_intermediate_and_final() -> None:
+    outcome = session(label="split")
+    outcome.chunk_send_times_s = [1.0, 2.0, 3.0]
+    outcome.response_receive_times_s = [1.1, 2.2, 3.4, 3.9]
+    outcome.response_final_flags = [False, True, False, True]
+    reduced = _reduce([outcome])
+    pooled = reduced["riva_client_compat_s"]
+    intermediate = reduced["riva_client_compat_intermediate_s"]
+    final = reduced["riva_client_compat_final_s"]
+    assert pooled["n_samples"] == 3
+    # The trailing fourth response is ignored, flag and all.
+    assert intermediate["n_samples"] == 2
+    assert intermediate["maximum"] == pytest.approx(0.4)
+    assert final["n_samples"] == 1
+    assert final["p50"] == pytest.approx(0.2)
+    assert final["name"] == "riva_client_compat_final_s"
+
+    unflagged = session(label="unflagged")
+    unflagged.chunk_send_times_s = [1.0]
+    unflagged.response_receive_times_s = [1.1]
+    reduced = _reduce([unflagged])
+    assert reduced["riva_client_compat_s"]["availability"] == "measured"
+    split = reduced["riva_client_compat_final_s"]
+    assert split["availability"] == "unavailable"
+    assert split["reason"] == "response_final_flags_absent"
+
+
+def test_pacing_fidelity_from_the_send_trace() -> None:
+    steady = session(label="steady")
+    steady.chunk_ms = 100
+    steady.chunk_send_times_s = [5.0, 5.1, 5.2, 5.3]
+    late = session(label="late")
+    late.chunk_ms = 100
+    # Chunk 2 is 50 ms late. The last chunk is not scored.
+    late.chunk_send_times_s = [7.0, 7.1, 7.25, 9.9]
+    reduced = _reduce([steady, late, session(label="none")], pacing=True)
+    block = reduced["pacing_fidelity"]
+    assert block["availability"] == "partial"
+    assert block["n_with_measure"] == 2
+    assert block["n_total"] == 3
+    assert block["n_samples"] == 6
+    assert block["max_session_lag_s"] == pytest.approx(0.05)
+    assert block["validity"] == "paced"
+    assert reduced["streaming_rtfx"]["validity"] == "paced"
+    names = {item["name"] for item in reduced["unavailable"]}
+    assert "pacing_fidelity" not in names
+
+    behind = session(label="behind")
+    behind.chunk_ms = 100
+    behind.chunk_send_times_s = [1.0, 1.1, 1.45, 1.5]
+    lagged = _reduce([behind], pacing=True)
+    assert lagged["pacing_fidelity"]["validity"] == "pacing_lagged"
+    assert lagged["streaming_rtfx"]["validity"] == "pacing_lagged"
+
+    unpaced = _reduce([steady], pacing=False)["pacing_fidelity"]
+    assert unpaced["availability"] == "not_applicable"
+    assert unpaced["n_with_measure"] == 0
+
+    untraced = _reduce([session(label="none")], pacing=True)
+    assert untraced["pacing_fidelity"]["availability"] == "unavailable"
+    assert (
+        untraced["streaming_rtfx"]["validity"] == "pacing_fidelity_unavailable"
+    )

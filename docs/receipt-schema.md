@@ -3,7 +3,7 @@
 Generated from `asrbench.schema_doc`. Do not edit by hand.
 Regenerate with `uv run python -m asrbench.schema_doc`.
 
-Schema version: `asrbench-receipt/5`
+Schema version: `asrbench-receipt/6`
 
 Clock and definition strings below are the constants the receipt
 writes. Where `docs/metrics.md` and a constant disagree, the
@@ -113,7 +113,7 @@ compared and reported; a mismatch does not refuse:
 | `FINALIZATION_DEFINITION` | Seconds from the last audio sample sent to the final result received, on the client monotonic clock. A session that did not complete stays in n_total and contributes no sample. A negative on a completed session is kept. |
 | `FRONTIER_DEFINITION` | Accuracy against measured latency, one point per receipt, identified by lookahead frame count and the cadence that sets it. The millisecond label is carried beside the point and is not the identity. Latency is pooled TTFS p50 and accuracy is pooled micro WER, each under the clock and normalization policy the receipt already names. The Pareto edge is the set of points with no other point both faster and more accurate. A dominated point is a finding, not a pass failure. Cross-cadence transcript agreement is not computed. Points are grouped by comparison identity with lookahead frame count and cadence removed, so a lookahead sweep that also changes cadence is one series, and different hardware or checkpoints are not drawn on one edge. |
 | `FRONTIER_LAG_CLOCK` | client_monotonic/response_receive_minus_audio_processed |
-| `FRONTIER_LAG_DEFINITION` | For each audio_processed sample, client-monotonic receive time minus the sum of first-audio-sent and audio_processed at that sample. Negatives are kept. Invalid when audio_processed decreases on that stream. Unavailable when audio_processed or the first-audio timestamp is absent. An invalid or absent session stays in n_total and contributes no sample. Not response latency and not the Riva 1:1 statistic. |
+| `FRONTIER_LAG_DEFINITION` | For each audio_processed sample, client-monotonic receive time minus the sum of first-audio-sent and audio_processed at that sample. Negatives are kept. Invalid when audio_processed decreases on that stream. Unavailable when audio_processed or the first-audio timestamp is absent. An invalid or absent session stays in n_total and contributes no sample. Not response latency and not the Riva client compat statistic. |
 | `FRONTIER_LAG_INVALID_REASON` | audio_processed_decreased |
 | `FRONTIER_LAG_UNAVAILABLE_REASON` | audio_processed_or_first_audio_absent |
 | `FRONTIER_RTFX_CLOCK` | client_monotonic/audio_processed_delta_over_receive_delta |
@@ -138,17 +138,20 @@ compared and reported; a mismatch does not refuse:
 | `LOOKAHEAD_IDENTITY_CLIENT_DECLARED` | client_declared |
 | `LOOKAHEAD_IDENTITY_DEFINITION` | An operating point is identified by lookahead frame count. The millisecond label is carried beside it and is not identity, because vendors disagree on that convention by one frame. Policy client_declared uses the frame count the workload requested. Policy server_reported_when_present uses a server-reported frame count when an outcome carries one; none do yet, so the client count is used and server_reported_lookahead_frames is null. The policy name is warn-only until an adapter reports a frame count, so naming the unused policy does not refuse a comparison. |
 | `LOOKAHEAD_IDENTITY_SERVER_REPORTED` | server_reported_when_present |
-| `MEASUREMENT_SEMANTICS_VERSION` | 5 |
+| `MEASUREMENT_SEMANTICS_VERSION` | 6 |
 | `MODE_OFFLINE` | offline |
 | `MODE_STREAMING` | streaming |
 | `NATIVE_LATENCY_CLOCK` | client_monotonic/first_audio_append_to_nonempty_transcription_delta |
 | `NORMALIZATION_CORPUS_REFERENCE` | corpus_reference |
 | `NORMALIZATION_ENGINE_VS_OWN_ORACLE` | engine_vs_own_oracle |
+| `NVIDIA_STREAMING_ROW_DEFINITION` | One row per receipt in NVIDIA's ASR NIM streaming table layout. Latency avg, p50, p90, p95, and p99 are riva_client_compat_s in milliseconds, each the mean over trials of the per-trial value, as NVIDIA averages three runs. Throughput is the trial mean of aggregate_rtfx, offered audio over the trial wall span. A latency column is comparable only when compat_status is measured on every trial and percentile_method is floor_index. |
 | `OFFLINE_RTFX_DEFINITION` | Successfully transcribed audio seconds divided by the wall-clock span of an unpaced offline cell. A throughput ratio. Not interchangeable with streaming RTFX. A streaming cell with pacing disabled is not this measure. |
 | `ORACLE_NORMALIZATION_DEFINITION` | engine_vs_own_oracle compares raw text after whitespace tokenization only. No case-folding, no punctuation stripping, no tag stripping, and no number normalization. |
 | `OUTCOME_ACCOUNTING_DEFINITION` | Counts over every measured session. attempted is the population. admitted is configured. completed is a terminal transcript without timeout or protocol error, including an empty transcript. productive is completed with a non-empty transcript. timed-out and errored are mutually exclusive, and a timeout wins when both signals are present. no-first-partial overlaps those buckets. lane_unavailable counts sessions the adapter labeled as an entitled lane this process could not open. Warmup sessions are excluded from attempted and recorded as warmup_excluded. |
 | `PACING_FIDELITY_CLOCK` | client_monotonic/intended_vs_actual_chunk_send |
-| `PACING_FIDELITY_DEFINITION` | Deviation between intended and actual chunk send times, from the client send trace. A validity check on every other latency in the cell, not a performance number. |
+| `PACING_FIDELITY_DEFINITION` | Per paced session with a client send trace, the lag of chunk i is its send time minus the first chunk's send time, minus i times chunk_ms. Positive is late. The last chunk is left out because its intended offset depends on its shorter duration. Lags from every measured session are pooled. max_session_lag_s is the largest lag in any session. A validity check on every other latency in the cell, not a performance number. A session without a send trace stays in n_total and contributes no lag. |
+| `PACING_FIDELITY_NOT_PACED_REASON` | pacing_disabled |
+| `PACING_FIDELITY_TOLERANCE_DEFINITION` | A paced cell is paced when every measured lag is at most one chunk_ms. Otherwise it is pacing_lagged: the client fell behind real time by more than one chunk, so throughput and latency describe the client as well as the server. |
 | `PACING_FIDELITY_UNAVAILABLE_REASON` | client_send_trace_not_in_outcome |
 | `PASS_CONJUNCTION_DEFINITION` | A cell passes only when every clause passes on that cell: admission fraction, first-partial presence, the latency SLO at the declared percentile of the named latency metric, the named sustainability policy, and accuracy within tolerance under the named normalization policy. The named latency metric is ttfs, response_latency, finalization, or frontier_lag. TTFS stays selectable and is secondary. The headline latency measures are finalization and frontier lag. An unevaluable clause fails the conjunction. The report names the clause. Cross-cadence transcript agreement is not a clause. |
 | `PERCENTILE_FLOOR_INDEX_DEFINITION` | floor_index: zero-based index = min(floor(q / 100 * n), n - 1) into the sorted sample. Empty input is absent, not zero. Named for a table placed next to Riva's published percentiles. Not the default. |
@@ -166,16 +169,22 @@ compared and reported; a mismatch does not refuse:
 | `RESPONSE_LATENCY_DEFINITION` | Seconds from the most recent audio transmitted to each non-empty interim, on one client monotonic clock. One sample per response, not per stream. Not TTFS. Client and server clocks are never subtracted. |
 | `REVISION_RATE_DEFINITION` | Revised whitespace tokens divided by newly emitted whitespace tokens. The first interim contributes every token; each later interim contributes only tokens past the common token prefix of the previous interim. A revised token falls outside the common token prefix of the following interim, or of the final for the last interim. Not a word error rate. Cross-cadence transcript agreement is not this metric and is not a pass condition. |
 | `RIVA_CLIENT_COMPAT_CLOCK` | client_monotonic/response_i_minus_chunk_i |
-| `RIVA_CLIENT_COMPAT_DEFINITION` | Labelled Riva client compat only. Receive time of response i minus send time of chunk i. Valid only when the response count equals the chunk count. An adapter may omit a protocol event from those lists before pairing; the reducer does not drop a trailing response. Not a headline. Not frontier lag, not finalization, and not TTFS. |
-| `RIVA_CLIENT_COMPAT_INVALID_REASON` | response_count_not_one_to_one |
+| `RIVA_CLIENT_COMPAT_DEFINITION` | Labelled Riva client compat only. Receive time of response i minus send time of chunk i, for every chunk i. Valid when the response count equals the chunk count or the chunk count plus one; the trailing extra response is ignored, as riva_streaming_asr_client does. Any other count makes the session, and so the statistic, invalid. An adapter may omit a protocol event from those lists before pairing. Not a headline. Not frontier lag, not finalization, and not TTFS. |
+| `RIVA_CLIENT_COMPAT_INVALID_REASON` | response_count_not_chunks_or_chunks_plus_one |
 | `RIVA_CLIENT_COMPAT_LABEL` | Riva client compat |
+| `RIVA_CLIENT_COMPAT_SPLIT_DEFINITION` | The riva_client_compat_s pairs, split by whether response i carried a result with is_final true (final) or not (intermediate), as riva_streaming_asr_client splits its intermediate and final latency lists. Same validity as the pooled statistic. Unavailable when the adapter did not record one final flag per response. The final split is not finalization_s: a final that arrives as the tolerated trailing extra response is dropped, as NVIDIA drops it. |
+| `RIVA_CLIENT_COMPAT_SPLIT_UNAVAILABLE_REASON` | response_final_flags_absent |
 | `RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON` | chunk_or_response_times_absent |
+| `RIVA_PACING_SCHEDULE` | absolute_from_stream_start |
+| `RIVA_PACING_SCHEDULE_DEFINITION` | riva-grpc paces against an absolute schedule from stream start, as riva_streaming_asr_client does: chunk i is sent no earlier than stream start plus i times chunk_ms plus the duration of chunk i, so audio is never sent before it would have been recorded and a late wake-up does not delay every later chunk. Here stream start is taken after the config write and the cohort barrier release, not before the config write as in the NVIDIA client, so chunk 0 waits its own duration from that point. |
 | `RTFX_VALIDITY_NOT_APPLICABLE` | not_this_mode |
+| `RTFX_VALIDITY_PACED` | paced |
 | `RTFX_VALIDITY_PACING_DISABLED` | pacing_disabled |
+| `RTFX_VALIDITY_PACING_LAGGED` | pacing_lagged |
 | `RTFX_VALIDITY_SIMULATED` | simulated |
 | `RTFX_VALIDITY_UNQUALIFIED` | pacing_fidelity_unavailable |
 | `RUNNER_HANG_GUARD_DEFINITION` | The runner hang guard waits twice timeout_s, plus one timeout_s for the cohort barrier, plus the clip duration when pacing, plus 0.25 seconds. realtime-ws may spend timeout_s waiting for session.updated and timeout_s again waiting for the final, and a peer may spend timeout_s at the barrier on the slowest handshake. The adapter owns each timeout_s and may return a partial outcome. The guard replaces the outcome only when the adapter does not return. |
-| `SCHEMA_VERSION` | asrbench-receipt/5 |
+| `SCHEMA_VERSION` | asrbench-receipt/6 |
 | `SDI_DEFINITION` | Alignment substitutions, deletions, and insertions counted separately from deletions_from_missing_transcript. The backtrace is deterministic: on a cost tie it prefers a substitution, then a deletion, then an insertion. |
 | `STEADY_INTERVAL_DEFINITION` | Sustainability over a declared steady interval of the cell. Unevaluable until outcomes carry that interval. Fail-closed: the clause does not pass. |
 | `STEADY_INTERVAL_UNAVAILABLE_REASON` | steady_interval_not_in_outcome |
@@ -187,7 +196,7 @@ compared and reported; a mismatch does not refuse:
 | `SUSTAINED_STREAMS_UNAVAILABLE_REASON` | single_cell_cannot_identify_the_largest_passing_concurrency |
 | `TTFS_CLOCK` | client_monotonic/first_audio_append_to_nonempty_transcription_delta |
 | `TTFS_DEFINITION` | Seconds from the first audio sample transmitted to the first non-empty partial, on one client monotonic clock. Connection, configuration, and admission wait are not included. A session with no non-empty partial stays in n_total and is absent from n_with_measure. This is not a vendor response latency and not vLLM TTFT. |
-| `VLLM_FORMAT_NOTE` | Shaped like a vLLM serving-benchmark summary so a serving engineer can read the counts. ttfs_s is this project's time to first non-empty partial. response_latency_s is per response. e2e_rtfx is offered audio divided by first-audio-to-final. None of these is vLLM TTFT, and none is a vendor per-chunk latency. riva_client_compat_s is the labelled 1:1 statistic and is not a headline. |
+| `VLLM_FORMAT_NOTE` | Shaped like a vLLM serving-benchmark summary so a serving engineer can read the counts. ttfs_s is this project's time to first non-empty partial. response_latency_s is per response. e2e_rtfx is offered audio divided by first-audio-to-final. None of these is vLLM TTFT, and none is a vendor per-chunk latency. riva_client_compat_s is the labelled chunk-i/response-i Riva client compat statistic and is not a headline. |
 | `WARN_ONLY_COMPARISON_DEFINITION` | Warn-only mismatches are recorded and do not refuse: target.model, transport_options, batch_size, max_num_seqs, gpu_memory_utilization, CUDA version, torch version, GPU driver version, client_location, Python version, asrbench git commit and dirty bit, endpoint_url, tls_verify, auth_env, package version, lookahead identity policy, client CPU, host, probe status, and channel_options. channel_options are keepalive and maximum message size. A checkpoint whose source is unverified is flagged and does not by itself refuse when the declared checkpoint matches. |
 | `WER_DEFINITION` | Word error rate (substitutions + alignment deletions + insertions + deletions_from_missing_transcript) / reference words, micro-averaged, under the named normalization policy. A session with a reference and no transcript stays in the denominator as deletions_from_missing_transcript and is not an alignment deletion. n_failed counts those sessions. A received empty transcript is an empty hypothesis and its deletions are alignment deletions. A session with no reference stays in n_total and is absent from n_with_measure. Undefined when the reference-word denominator is zero and any edit remains. |
 | `WORD_LATENCY_CLOCK` | client_monotonic/final_receive_minus_word_end |
@@ -446,6 +455,7 @@ object is named once and then cited by path.
         - `word_timings`: null
         - `chunk_send_times_s`: null
         - `response_receive_times_s`: null
+        - `response_final_flags`: null
     - `warmup_outcomes`: list[object] (same item shape as outcomes)
     - `reduction`: object
       - `counts`: object
@@ -558,6 +568,32 @@ object is named once and then cited by path.
         - `n_samples`: int
         - `n_invalid_sessions`: int
         - `n_unavailable_sessions`: int
+        - `n_trailing_extra_ignored`: int
+        - `population_definition`: string
+      - `riva_client_compat_intermediate_s`: same shape as `trials[].reduction.riva_client_compat_s`
+      - `riva_client_compat_final_s`: same shape as `trials[].reduction.riva_client_compat_s`
+      - `pacing_fidelity`: object
+        - `name`: string
+        - `availability`: string
+        - `reason`: string
+        - `validity`: string
+        - `clock`: string
+        - `definition`: string
+        - `tolerance_definition`: string
+        - `percentile_method`: string
+        - `unit`: string
+        - `lag_s`: object
+          - `mean`: null
+          - `minimum`: null
+          - `maximum`: null
+          - `p50`: null
+          - `p90`: null
+          - `p95`: null
+          - `p99`: null
+        - `max_session_lag_s`: null
+        - `n_with_measure`: int
+        - `n_total`: int
+        - `n_samples`: int
         - `population_definition`: string
       - `wer`: object
         - `policy`: string

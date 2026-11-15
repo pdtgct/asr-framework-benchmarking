@@ -126,7 +126,13 @@ score.
 ### Receipt and reporters
 
 The receipt is JSON, authoritative, and one per run. Schema
-`asrbench-receipt/5` and measurement semantics `4`. Schema 5 records the
+`asrbench-receipt/6` and measurement semantics `6`. Schema 6 adds the
+Riva compat intermediate/final split, `n_trailing_extra_ignored`, and a
+measured `pacing_fidelity` block (it leaves the `unavailable` list), and
+records `response_final_flags` on each outcome. Semantics 6 accepts a
+trailing extra Riva response, qualifies streaming RTFx by pacing
+fidelity, and paces riva-grpc on an absolute schedule; a consumer of
+semantics 5 must re-run. Schema 5 records the
 adapter with the transport instead of hashing it. Semantics 3 keeps a
 failed or timed-out session out of E2E RTFx and reads finalization as
 final-receive minus last-audio-sent when both stamps exist. Semantics 4

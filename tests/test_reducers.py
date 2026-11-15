@@ -253,10 +253,14 @@ def test_unavailable_metrics_are_emitted_and_not_zero() -> None:
     by_name = {item["name"]: item for item in unavailable}
     assert by_name["emission_lag"]["availability"] == "unavailable"
     assert by_name["lag_excess"]["reason"] == "emission_lag_unavailable"
-    assert (
-        by_name["pacing_fidelity"]["reason"]
-        == "client_send_trace_not_in_outcome"
-    )
+    # Pacing fidelity is measured now. Without a send trace it is its own
+    # block reading unavailable, never a zero.
+    assert "pacing_fidelity" not in by_name
+    pacing = reduction["pacing_fidelity"]
+    assert isinstance(pacing, dict)
+    assert pacing["availability"] == "unavailable"
+    assert pacing["reason"] == "client_send_trace_not_in_outcome"
+    assert pacing["max_session_lag_s"] is None
     assert (
         by_name["interim_cadence_conformance"]["reason"]
         == "interim_arrival_timestamps_not_in_outcome"
