@@ -214,7 +214,6 @@ def test_offline_mode_sends_one_unary_recognize(tmp_path: Path) -> None:
     assert outcome.final_latency_s >= 0.05
     assert outcome.final_latency_clock == FINALIZATION_CLOCK
     assert outcome.chunk_send_times_s is None
-    assert outcome.protocol_extras["rpc"] == "Recognize"
     assert outcome.protocol_extras["server_audio_processed_s"] == 0.5
     echo = outcome.protocol_extras["recognition_request"]
     assert echo["rpc"] == "Recognize"

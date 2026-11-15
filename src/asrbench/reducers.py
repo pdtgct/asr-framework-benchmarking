@@ -210,7 +210,7 @@ def reduce_trial(
     e2e["unit"] = "ratio"
     frontier_rtfx = _frontier_rtfx(outcomes, percentile_method)
     frontier_lag = _frontier_lag(outcomes, percentile_method)
-    word_latency = _word_latency(outcomes, percentile_method)
+    word_latency = _word_latency(outcomes, percentile_method, mode=mode)
     aggregate = _aggregate_rtfx(
         attempted=attempted,
         successful=successful,
@@ -790,17 +790,28 @@ def _word_offsets(outcome: SessionOutcome) -> list[float] | None:
 
 
 def _word_latency(
-    outcomes: list[SessionOutcome], method: str
+    outcomes: list[SessionOutcome],
+    method: str,
+    *,
+    mode: str = d.MODE_STREAMING,
 ) -> dict[str, Any]:
-    return _pooled_clock(
+    offline = mode == d.MODE_OFFLINE
+    block = _pooled_clock(
         name="word_latency_s",
         clock=d.WORD_LATENCY_CLOCK,
         definition=d.WORD_LATENCY_DEFINITION,
         method=method,
         outcomes=outcomes,
-        read=_word_offsets,
+        # Offline sends all audio at the call start, so there is no paced
+        # audio clock to measure word ends against. Word timings stay on
+        # the outcomes as raw data.
+        read=(lambda _outcome: None) if offline else _word_offsets,
         absent_reason=d.WORD_LATENCY_UNAVAILABLE_REASON,
     )
+    if offline:
+        block["availability"] = "not_applicable"
+        block["reason"] = "mode_is_offline"
+    return block
 
 
 def _aggregate_rtfx(

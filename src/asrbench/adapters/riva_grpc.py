@@ -154,7 +154,7 @@ def _progress(
 
 
 class RivaGrpcAdapter:
-    """Drive one ``StreamingRecognize`` session over gRPC.
+    """Drive one Riva session over gRPC: streaming or unary ``Recognize``.
 
     Channel tuning is read from ``channel_options``. Everything else in
     ``transport_options`` is sent. Those options are warn-only identity.
@@ -600,7 +600,6 @@ class RivaGrpcAdapter:
         outcome.protocol_extras["recognition_request"] = _recognition_echo(
             self, request
         )
-        outcome.protocol_extras["rpc"] = "Recognize"
         if admission_barrier is not None:
             _progress(progress_callback, request.label, "barrier.waiting")
             try:

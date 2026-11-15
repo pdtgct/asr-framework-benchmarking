@@ -514,8 +514,12 @@ RIVA_OFFLINE_RECOGNIZE_DEFINITION = (
     "both the call start and the final is the response, so "
     "finalization_s is that client's per-request latency and TTFS is "
     "empty. Lanes are requests kept in flight. aggregate_rtfx is offered "
-    "audio over the trial span, the client's throughput RTFX; "
-    "offline_rtfx counts productive audio only. The client sums the "
+    "audio over the trial span, the analogue of the client's throughput "
+    "RTFX, biased low: the asrbench span also covers each session's "
+    "channel open and GetRivaSpeechRecognitionConfig call and the lane "
+    "barrier, which riva_asr_client does once before its timer starts. "
+    "offline_rtfx counts productive audio only. word_latency_s is "
+    "not_applicable offline. The client sums the "
     "server's audio_processed; asrbench uses the clip duration and keeps "
     "the server value as server_audio_processed_s residue."
 )
@@ -524,9 +528,10 @@ NVIDIA_OFFLINE_ROW_DEFINITION = (
     "parallel requests (lanes) and throughput, the trial mean of "
     "aggregate_rtfx. Latency columns are finalization_s in milliseconds, "
     "the request latency riva_asr_client prints, each the mean over "
-    "trials. Comparable only when every request completed in every trial "
-    "and percentile_method is floor_index; riva_asr_client prints no "
-    "throughput when any request failed."
+    "trials; they are not NVIDIA offline table columns, which publish "
+    "only streams and throughput. Comparable only when every request "
+    "completed in every trial and percentile_method is floor_index; "
+    "riva_asr_client prints no throughput when any request failed."
 )
 NVIDIA_STREAMING_ROW_DEFINITION = (
     "One row per receipt in NVIDIA's ASR NIM streaming table layout. "

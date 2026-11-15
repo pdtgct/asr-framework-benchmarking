@@ -18,6 +18,7 @@ from asrbench.definitions import (
     NVIDIA_OFFLINE_ROW_DEFINITION,
     NVIDIA_STREAMING_ROW_DEFINITION,
     PERCENTILE_METHOD_FLOOR_INDEX,
+    RTFX_VALIDITY_NOT_APPLICABLE,
     SUSTAINED_STREAMS_DEFINITION,
     VLLM_FORMAT_NOTE,
 )
@@ -563,7 +564,7 @@ def nvidia_offline_row(receipt: dict[str, Any], source: str) -> dict[str, Any]:
         and len(complete) == len(reductions)
         and method == PERCENTILE_METHOD_FLOOR_INDEX
     )
-    row["pacing_validity"] = "not_this_mode"
+    row["pacing_validity"] = RTFX_VALIDITY_NOT_APPLICABLE
     row["trailing_extra_ignored"] = None
     row["intermediate_avg_ms"] = None
     row["final_avg_ms"] = None

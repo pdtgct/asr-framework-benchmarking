@@ -193,7 +193,9 @@ cp asrbench/clips/1272-135031-0000.{flac,wav} asrbench-airgap/clips/
 The script checks the FLAC against the lock digest and prints the WAV digest. It
 should print `sha256:1fb7b660d79a51208a05678efb176d79b8fb59019e8e5cd014ad96b065bd8556`.
 Add `--repeat 5` to also write `clips/1272-135031-0000x5.wav`, the five-times
-concatenation NVIDIA's offline table uses, and print its digest.
+concatenation NVIDIA's offline table uses, and print its digest. Copy it too
+(`cp asrbench/clips/1272-135031-0000x5.wav asrbench-airgap/clips/`) and record
+the printed digest so the site can check the file.
 
 For your own audio, convert each file the same way and keep its reference
 transcript beside it:
@@ -691,8 +693,8 @@ the full rule.
 | Latency when responses = chunks + 1 | trailing response ignored, rest kept | same field; `n_trailing_extra_ignored` counts those sessions | same | **Matches** since semantics `6`. Any other count is still `invalid` (`response_count_not_chunks_or_chunks_plus_one`), where NVIDIA's client prints no statistics. |
 | Intermediate and final latency | split by `is_final` | `riva_client_compat_intermediate_s`, `riva_client_compat_final_s` (`RIVA_CLIENT_COMPAT_SPLIT_DEFINITION`) | same | **Matches** since semantics `6`. NVIDIA's tables publish the pooled list. |
 | Throughput (RTFX), streaming | total audio sent / run wall time | per-trial `aggregate_rtfx.value` (`AGGREGATE_RTFX_DEFINITION`); also `streaming_rtfx` (`STREAMING_RTFX_DEFINITION`) | `client_monotonic/benchmark_wall_span`; `client_monotonic/cell_wall_span` | **Close.** `aggregate_rtfx` counts offered audio, as NVIDIA does. `streaming_rtfx` counts productive sessions only. Both track the stream count under pacing. The span also covers channel setup (see section 6). |
-| Throughput (RTFX), offline | total audio / run time, unpaced, unary `Recognize` | per-trial `aggregate_rtfx.value`, shown by `asrbench nvidia-table` for an offline receipt; also `offline_rtfx` (`OFFLINE_RTFX_DEFINITION`) | `client_monotonic/benchmark_wall_span` | **Close.** NVIDIA sums the server's `audio_processed`; asrbench uses the clip duration and keeps the server value as `server_audio_processed_s` on each outcome. |
-| Offline request latency | `Finish` minus request start, per request | `finalization_s` in offline mode (`RIVA_OFFLINE_RECOGNIZE_DEFINITION`) | `client_monotonic/last_audio_sample_sent_to_final_result_received` | **Matches** in definition with `floor_index`. |
+| Throughput (RTFX), offline | total audio / run time, unpaced, unary `Recognize` | per-trial `aggregate_rtfx.value`, shown by `asrbench nvidia-table` for an offline receipt; also `offline_rtfx` (`OFFLINE_RTFX_DEFINITION`) | `client_monotonic/benchmark_wall_span` | **Close.** NVIDIA sums the server's `audio_processed`; asrbench uses the clip duration and keeps the server value as `server_audio_processed_s` on each outcome. The asrbench span also covers each session's channel open and config fetch and the lane barrier, which `riva_asr_client` does once before its timer, so asrbench reads low. |
+| Offline request latency | `Finish` minus request start, per request | `finalization_s` in offline mode (`RIVA_OFFLINE_RECOGNIZE_DEFINITION`) | `client_monotonic/last_audio_sample_sent_to_final_result_received` | **Matches** in definition with `floor_index`. Printed by the client, not an NVIDIA offline table column. |
 | WER (accuracy table) | full test set, per model and mode | `wer.micro_wer` (`WER_DEFINITION`) under a named normalization policy | none | **Differs.** asrbench scores one clip per receipt. Comparable only as a sanity check on that clip. |
 | none | none | `ttfs_s` (`TTFS_DEFINITION`) | `client_monotonic/first_audio_append_to_nonempty_transcription_delta` | asrbench only. Not a vendor latency. Empty when interims are off. |
 | none | none | `response_latency_s` (`RESPONSE_LATENCY_DEFINITION`) | `client_monotonic/latest_audio_append_to_nonempty_transcription_delta` | asrbench only. Counts non-empty interims, measured from the latest chunk sent, so it is not the Riva per-chunk pairing. |
