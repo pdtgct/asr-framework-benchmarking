@@ -1987,7 +1987,7 @@ def _corpus_block(
         "complete": len(per_clip) == clip_count,
         "plays_per_clip_min": min(plays) if plays else 0,
         "plays_per_clip_max": max(plays) if plays else 0,
-        "balanced": len(set(plays)) <= 1,
+        "balanced": bool(plays) and len(set(plays)) <= 1,
         "per_clip_mean_wer": sum(rates) / len(rates) if rates else None,
         "per_clip_mean_definition": d.PER_CLIP_MEAN_WER_DEFINITION,
         "per_clip_wer": _rate_distribution(

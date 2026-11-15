@@ -153,8 +153,10 @@ rather than the 26 MB source, and is byte-identical for a given recipe.
 A manifest (`asrbench-manifest/1`) names a set of clips and the corpus's own
 reference transcript for each. `asrbench run --manifest manifest.json` plays the
 clips across lanes and scores every session against its clip's corpus transcript,
-so one receipt carries the test-set WER NVIDIA and the Open ASR Leaderboard
-publish. Builders write the manifest from locally staged corpus files; nothing is
+so one receipt carries a test-set WER with the same reduction NVIDIA and the Open
+ASR Leaderboard use (pooled edits over pooled reference words). It is scored under
+the `corpus_reference` normalization policy, so it is not numerically comparable to
+leaderboard or NVIDIA figures until a matching normalization policy is used. Builders write the manifest from locally staged corpus files; nothing is
 fetched at run time.
 
 ```json
@@ -212,7 +214,8 @@ scored clip was played the same number of times.
 
 - `corpus_wer`: edits summed over every session divided by reference words summed
   over every session (`pooled_errors_over_reference_words`). This is the leaderboard
-  and NVIDIA definition. When `complete` and `balanced` hold it equals the test-set
+  and NVIDIA reduction; the number matches theirs only under the same
+  normalization. When `complete` and `balanced` hold it equals the test-set
   WER; with uneven plays, clips played more often weigh more.
 - `per_clip_mean_wer`, and a `per_clip_wer` distribution: each clip's own pooled WER,
   averaged with equal weight. A secondary view for short-utterance sets.
@@ -262,8 +265,8 @@ without saying so.
 **`ami-excerpts` is the streaming path.** It cuts fixed windows (20.16 s, 60 s) from
 whole headset channels per a committed recipe. The built-in recipe
 `ami-ihm-excerpts-v1` is the eleven-excerpt set from the author's
-nemotron-omni-port project (its `examples/ami-streaming-eval.recipe.json`), with the per-excerpt WAV sha256s it
-published; the builder refuses a cut whose bytes differ, which catches a different
+nemotron-omni-port work, with the per-excerpt WAV sha256s it published (re-measure
+any of them with `asrbench corpus ami-survey` and `ami-excerpts`); the builder refuses a cut whose bytes differ, which catches a different
 corpus release or channel. Each excerpt records its qualifying pauses and speech
 fraction (same -50 dBFS absolute floor and 20 ms frames as the omni-port survey). Its
 reference is the headset's own speaker's words whose midpoint lies in the window.

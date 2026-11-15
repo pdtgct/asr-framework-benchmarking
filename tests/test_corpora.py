@@ -42,6 +42,28 @@ def test_ami_segments_carry_corpus_words(tmp_path: Path, zipped: bool) -> None:
     assert (provenance["annotations_sha256"] is not None) is zipped
 
 
+def test_ami_segment_range_may_end_on_a_vocalsound(tmp_path: Path) -> None:
+    import tests.corpus_fixtures as fixtures
+
+    members = fixtures.annotation_members()
+    # B's words file: okay (words0), then the vocalsound (words99).
+    members[f"segments/{MEETING}.B.segments.xml"] = fixtures._segments(
+        "B", [(1.1, 1.7, 0, 99)]
+    )
+    audio_root, _ = stage_ami(tmp_path, zipped=False)
+    notes = tmp_path / "annotations"
+    for name, text in members.items():
+        (notes / name).write_text(text, encoding="utf-8")
+    result = ami.build_segments(
+        meetings=[f"{MEETING}:1"],
+        audio_root=audio_root,
+        annotations=notes,
+        out_dir=tmp_path / "out",
+        manifest_id="ami-b",
+    )
+    assert [clip.reference for clip in result.manifest.clips] == ["okay"]
+
+
 def test_ami_segments_one_channel_and_cap(tmp_path: Path) -> None:
     audio_root, notes = stage_ami(tmp_path, zipped=False)
     result = ami.build_segments(

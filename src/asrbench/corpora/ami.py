@@ -234,6 +234,25 @@ class Annotations:
             raise AmiError(f"{meeting} is not in meetings.xml")
         return sorted(found)
 
+    def element_ids(self, meeting: str, agent: str) -> list[tuple[str, bool]]:
+        """Return every element's id in the words file, in file order.
+
+        ``<vocalsound>``, ``<disfmarker>``, ``<gap>`` and the like share the
+        ``wordsN`` id sequence with ``<w>``, and a segment's href range may
+        start or end on one. The flag says whether the element is a ``<w>``.
+
+        Raises:
+            AmiError: The words file is missing.
+        """
+        member = f"words/{meeting}.{agent}.words.xml"
+        raw = self._read(member)
+        if raw is None:
+            raise AmiError(f"{member} is missing")
+        return [
+            (element.get(f"{_NITE}id", ""), element.tag == "w")
+            for element in ElementTree.fromstring(raw)
+        ]
+
     def words(self, meeting: str, agent: str) -> list[Word]:
         """Return one participant's words in file order.
 
@@ -724,7 +743,17 @@ def build_segments(
         for channel in chosen:
             agent = notes.agent(meeting, channel)
             words = notes.words(meeting, agent)
-            index = {word.id: position for position, word in enumerate(words)}
+            # Position of every element (not only <w>) in file order, and
+            # how many <w> precede each position, so a range that starts or
+            # ends on a vocalsound still selects the words inside it.
+            elements = notes.element_ids(meeting, agent)
+            index = {
+                element_id: position
+                for position, (element_id, _) in enumerate(elements)
+            }
+            words_before = [0]
+            for _, is_word in elements:
+                words_before.append(words_before[-1] + int(is_word))
             source = headset_path(audio_root, meeting, channel)
             audio = HeadsetAudio(source)
             for segment in notes.segments(meeting, agent):
@@ -738,7 +767,12 @@ def build_segments(
                 if first is None or last is None:
                     skipped_empty += 1
                     continue
-                reference = join_words(words[first : last + 1])
+                if last < first:
+                    skipped_empty += 1
+                    continue
+                reference = join_words(
+                    words[words_before[first] : words_before[last + 1]]
+                )
                 if not reference:
                     skipped_empty += 1
                     continue

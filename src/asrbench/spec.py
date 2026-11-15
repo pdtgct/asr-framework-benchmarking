@@ -16,6 +16,7 @@ from asrbench.audio import SAMPLE_RATE
 from asrbench.definitions import (
     AUDIO_CONDITION_NATIVE,
     CHECKPOINT_SOURCE_UNVERIFIED,
+    CLIP_ASSIGNMENT_ROUND_ROBIN,
     DEFAULT_LOOKAHEAD_IDENTITY_POLICY,
     DEFAULT_NORMALIZATION_POLICY,
     DEFAULT_PERCENTILE_METHOD,
@@ -71,7 +72,7 @@ class ManifestSpec:
     clip_count: int | None = None
     total_duration_s: float | None = None
     #: How sessions map to clips. Hard workload identity.
-    assignment: str = "round_robin"
+    assignment: str = CLIP_ASSIGNMENT_ROUND_ROBIN
 
 
 @dataclass(frozen=True)

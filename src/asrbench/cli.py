@@ -393,10 +393,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def _add_corpus_parsers(sub: Any) -> None:
     """``asrbench corpus ...``: build and check manifests from local files."""
     corpus = sub.add_parser(
@@ -563,3 +559,7 @@ def _corpus(args: argparse.Namespace) -> int:
         f"{len(manifest.clips)} clips {manifest.total_duration_s:.1f}s"
     )
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
