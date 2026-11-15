@@ -22,6 +22,18 @@ while the receipt says otherwise. Plaintext is both flags false. A bearer
 token is not put on that channel unless ``allow_insecure_auth`` is set.
 Loopback is not an implicit allow.
 
+For a private site CA, ``ssl_root_cert`` names a PEM bundle that replaces
+the default trust roots. ``ssl_client_cert`` and ``ssl_client_key`` name a
+PEM client certificate and key for mutual TLS; both or neither.
+``ssl_target_name_override`` is the name the server certificate is checked
+against when it differs from the endpoint host. All four need ``use_ssl``.
+Paths are recorded with the transport options; file contents are read once
+when the adapter is built and are never written to an outcome.
+
+``share_channel`` true opens one channel per event loop and reuses it for
+every session, as the Riva C++ client shares one channel across streams.
+The default opens a channel per session. Each outcome records which.
+
 An unreachable server, or ``UNAUTHENTICATED`` / ``PERMISSION_DENIED``, is
 a ``lane_unavailable`` outcome. It is not a crash and it does not invent a
 latency. A deadline after audio has started is a timeout. ``UNAVAILABLE``
@@ -71,8 +83,14 @@ _TRANSPORT_KEYS = frozenset(
         "custom_configuration",
         "max_speaker_count",
         "allow_insecure_auth",
+        "ssl_root_cert",
+        "ssl_client_cert",
+        "ssl_client_key",
+        "ssl_target_name_override",
+        "share_channel",
     }
 )
+_TLS_FILE_KEYS = ("ssl_root_cert", "ssl_client_cert", "ssl_client_key")
 _CHANNEL_FIELDS = {
     "keepalive_time_ms": "grpc.keepalive_time_ms",
     "keepalive_timeout_ms": "grpc.keepalive_timeout_ms",
@@ -187,11 +205,16 @@ class RivaGrpcAdapter:
         custom_configuration: dict[str, str],
         max_speaker_count: int,
         auth_env: str | None,
-        channel_args: tuple[tuple[str, int], ...],
+        channel_args: tuple[tuple[str, int | str], ...],
         tls_verify: bool,
         allow_insecure_auth: bool,
+        tls_material: dict[str, bytes] | None = None,
+        share_channel: bool = False,
     ) -> None:
         """Store endpoint and identity options. Not a token."""
+        self._tls_material = dict(tls_material or {})
+        self._share_channel = share_channel
+        self._shared: tuple[Any, Any] | None = None
         self._endpoint = endpoint
         self._use_ssl = use_ssl
         self._tls_verify = tls_verify
@@ -249,7 +272,22 @@ class RivaGrpcAdapter:
             options, "allow_insecure_auth", default=False
         )
         _require_tls_mode(use_ssl=use_ssl, tls_verify=target.tls_verify)
-        channel_args = _channel_args(target.channel_options)
+        channel_args: tuple[tuple[str, int | str], ...] = _channel_args(
+            target.channel_options
+        )
+        tls_material = _tls_material(options, use_ssl=use_ssl)
+        override = _optional_str(options, "ssl_target_name_override")
+        if override is not None:
+            if not use_ssl:
+                raise ConfigError(
+                    "riva transport_options.ssl_target_name_override "
+                    "needs use_ssl"
+                )
+            channel_args = (
+                *channel_args,
+                ("grpc.ssl_target_name_override", override),
+            )
+        share_channel = _bool_option(options, "share_channel", default=False)
         _import_riva()
         adapter = cls(
             target.endpoint_url,
@@ -264,9 +302,21 @@ class RivaGrpcAdapter:
             channel_args=channel_args,
             tls_verify=target.tls_verify,
             allow_insecure_auth=allow_insecure_auth,
+            tls_material=tls_material,
+            share_channel=share_channel,
         )
         adapter._refuse_plaintext_bearer()
         return adapter
+
+    async def aclose(self) -> None:
+        """Close the shared channel, if one is open. Safe to call twice."""
+        shared = self._shared
+        self._shared = None
+        if shared is None:
+            return
+        loop, channel = shared
+        if loop is asyncio.get_running_loop():
+            await _close_channel(channel)
 
     async def run(
         self,
@@ -331,7 +381,10 @@ class RivaGrpcAdapter:
         outcome.audio_duration_s = audio_s
         outcome.protocol_extras["adapter"] = self.name
         outcome.protocol_extras["audio_chunks"] = len(chunks)
-        channel = self._open_channel(grpc)
+        outcome.protocol_extras["channel"] = (
+            "shared" if self._share_channel else "per_session"
+        )
+        channel = self._channel(grpc)
         try:
             await self._prepare(
                 request,
@@ -373,15 +426,37 @@ class RivaGrpcAdapter:
                 holder,
             )
         finally:
-            await _close_channel(channel)
+            if not self._share_channel:
+                await _close_channel(channel)
+
+    def _channel(self, grpc: Any) -> Any:
+        """Return this session's channel: shared per loop, or a new one."""
+        if not self._share_channel:
+            return self._open_channel(grpc)
+        loop = asyncio.get_running_loop()
+        if self._shared is not None and self._shared[0] is loop:
+            return self._shared[1]
+        channel = self._open_channel(grpc)
+        self._shared = (loop, channel)
+        return channel
 
     def _open_channel(self, grpc: Any) -> Any:
         _require_tls_mode(use_ssl=self._use_ssl, tls_verify=self._tls_verify)
         options = list(self._channel_args) or None
         if self._use_ssl:
+            material = self._tls_material
+            credentials = (
+                grpc.ssl_channel_credentials(
+                    root_certificates=material.get("ssl_root_cert"),
+                    private_key=material.get("ssl_client_key"),
+                    certificate_chain=material.get("ssl_client_cert"),
+                )
+                if material
+                else grpc.ssl_channel_credentials()
+            )
             return grpc.aio.secure_channel(
                 self._endpoint,
-                grpc.ssl_channel_credentials(),
+                credentials,
                 options=options,
             )
         return grpc.aio.insecure_channel(self._endpoint, options=options)
@@ -1173,6 +1248,38 @@ def _custom_configuration(value: object) -> dict[str, str]:
             )
         built[key] = item
     return built
+
+
+def _tls_material(
+    options: Mapping[str, Any], *, use_ssl: bool
+) -> dict[str, bytes]:
+    """Read the PEM files named in transport options.
+
+    Raises:
+        ConfigError: A file option is set without ``use_ssl``, only one of
+            client cert and key is set, or a file cannot be read.
+    """
+    material: dict[str, bytes] = {}
+    for key in _TLS_FILE_KEYS:
+        path = _optional_str(options, key)
+        if path is None:
+            continue
+        if not use_ssl:
+            raise ConfigError(f"riva transport_options.{key} needs use_ssl")
+        try:
+            with open(path, "rb") as handle:
+                material[key] = handle.read()
+        except OSError as error:
+            raise ConfigError(
+                f"riva transport_options.{key}: cannot read {path}: "
+                f"{error.strerror}"
+            ) from None
+    if ("ssl_client_cert" in material) != ("ssl_client_key" in material):
+        raise ConfigError(
+            "riva transport_options.ssl_client_cert and ssl_client_key "
+            "must be set together"
+        )
+    return material
 
 
 def _channel_args(

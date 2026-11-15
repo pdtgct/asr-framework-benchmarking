@@ -28,6 +28,7 @@ import asyncio
 import tempfile
 import time
 import uuid
+import warnings
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -319,44 +320,47 @@ async def run_benchmark(
     audio_s = len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE
     start_marker = started_at if started_at is not None else utc_timestamp()
     trials: list[dict[str, Any]] = []
-    for trial_index in range(config.workload.trials):
-        warmup_groups = await _phase(
-            config,
-            chosen,
-            assigned,
-            trial_index=trial_index,
-            phase="warmup",
-            count=config.workload.warmup,
-            audio_s=audio_s,
-            wav_path=wav_path,
-            barrier=None,
-        )
-        barrier = CohortBarrier(
-            len(assigned), timeout_s=config.workload.timeout_s
-        )
-        span_start = chosen_clock.monotonic()
-        measured_groups = await _phase(
-            config,
-            chosen,
-            assigned,
-            trial_index=trial_index,
-            phase="measured",
-            count=config.workload.iterations,
-            audio_s=audio_s,
-            wav_path=wav_path,
-            barrier=barrier,
-        )
-        span_end = chosen_clock.monotonic()
-        warmup = [item for group in warmup_groups for item in group]
-        measured = [item for group in measured_groups for item in group]
-        trials.append(
-            {
-                "trial_index": trial_index,
-                "wall_span_s": span_end - span_start,
-                "outcomes": measured,
-                "warmup_outcomes": warmup,
-            }
-        )
+    try:
+        for trial_index in range(config.workload.trials):
+            warmup_groups = await _phase(
+                config,
+                chosen,
+                assigned,
+                trial_index=trial_index,
+                phase="warmup",
+                count=config.workload.warmup,
+                audio_s=audio_s,
+                wav_path=wav_path,
+                barrier=None,
+            )
+            barrier = CohortBarrier(
+                len(assigned), timeout_s=config.workload.timeout_s
+            )
+            span_start = chosen_clock.monotonic()
+            measured_groups = await _phase(
+                config,
+                chosen,
+                assigned,
+                trial_index=trial_index,
+                phase="measured",
+                count=config.workload.iterations,
+                audio_s=audio_s,
+                wav_path=wav_path,
+                barrier=barrier,
+            )
+            span_end = chosen_clock.monotonic()
+            warmup = [item for group in warmup_groups for item in group]
+            measured = [item for group in measured_groups for item in group]
+            trials.append(
+                {
+                    "trial_index": trial_index,
+                    "wall_span_s": span_end - span_start,
+                    "outcomes": measured,
+                    "warmup_outcomes": warmup,
+                }
+            )
+    finally:
+        await _close_adapter(chosen)
     finish_marker = finished_at if finished_at is not None else utc_timestamp()
     from asrbench import __version__
     from asrbench.config import secret_records
@@ -588,3 +592,14 @@ def _python_version() -> str:
     import platform
 
     return platform.python_version()
+
+
+async def _close_adapter(adapter: TransportAdapter) -> None:
+    """Await the adapter's optional ``aclose``; never lose a receipt to it."""
+    closer = getattr(adapter, "aclose", None)
+    if not callable(closer):
+        return
+    try:
+        await closer()
+    except Exception as exc:  # noqa: BLE001
+        warnings.warn(f"adapter aclose failed: {exc!r}", stacklevel=2)

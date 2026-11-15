@@ -1,6 +1,7 @@
 """Mock lanes, warmup exclusion, timeouts, and the transport seam."""
 
 import asyncio
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -697,3 +698,41 @@ def test_iterations_per_stream_runs_factor_times_lanes_not_squared(
     counts = receipt["summary"]["pooled"]["counts"]
     assert counts["attempted"] == 12
     assert counts["completed"] == 12
+
+
+class _ClosingAdapter:
+    """Wraps the mock adapter and records ``aclose``; may raise in it."""
+
+    def __init__(self, config: ResolvedConfig, *, fail_close: bool) -> None:
+        self._inner = load_adapter(config.target)
+        self.name = self._inner.name
+        self.closed = 0
+        self._fail_close = fail_close
+
+    async def run(self, request: SessionRequest, **kwargs: Any) -> Any:
+        return await self._inner.run(request, **kwargs)
+
+    async def aclose(self) -> None:
+        self.closed += 1
+        if self._fail_close:
+            raise RuntimeError("close failed")
+
+
+@pytest.mark.parametrize("fail_close", [False, True])
+def test_runner_awaits_aclose_once_and_keeps_the_receipt(
+    tmp_path: Path, fail_close: bool
+) -> None:
+    config = _config()
+    adapter = _ClosingAdapter(config, fail_close=fail_close)
+    with pytest.warns(UserWarning) if fail_close else contextlib.nullcontext():
+        receipt = asyncio.run(
+            run_benchmark(
+                config,
+                adapter=adapter,
+                clock=AdvancingClock(1.0),
+                materialize_dir=tmp_path,
+                env={},
+            )
+        )
+    assert adapter.closed == 1
+    assert len(receipt["trials"]) == 2
