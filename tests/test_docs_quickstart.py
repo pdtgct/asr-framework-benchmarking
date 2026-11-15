@@ -18,8 +18,11 @@ from pathlib import Path
 import pytest
 
 _ROOT = Path(__file__).parents[1]
-#: Text uv prints when it could not reach a package index. Matched only
-#: on a failed probe, so a working online sync is never skipped.
+#: Text uv prints when it could not resolve from a package index. This is
+#: broader than "unreachable": ``Failed to fetch`` also covers a private
+#: index answering 401/403/5xx. Matched only on a failed probe, and every
+#: such failure happens before any asrbench code runs, so a working online
+#: sync is never skipped.
 _OFFLINE = re.compile(
     r"network was disabled|Failed to fetch|dns error|"
     r"failed to lookup address|Temporary failure in name resolution|"
@@ -71,6 +74,9 @@ def test_offline_skip_reason_only_matches_resolution_failures() -> None:
     assert reason is not None and "offline" in reason
     hint = "hint: Packages were unavailable because the network was disabled."
     assert offline_skip_reason(1, hint) is not None
+    dns = "error: dns error: failed to lookup address information"
+    assert offline_skip_reason(1, dns) is not None
+    assert offline_skip_reason(1, "") is None
 
 
 def test_readme_quickstart_block_runs() -> None:
