@@ -143,3 +143,38 @@ def test_nvidia_table_rounds_floats_to_five_significant_figures() -> None:
     cells = text.splitlines()[2].split("\t")
     assert cells[NVIDIA_TABLE_COLUMNS.index("avg_ms")] == "9.4235"
     assert cells[NVIDIA_TABLE_COLUMNS.index("streams")] == "4"
+
+
+def test_offline_receipt_projects_to_an_offline_row(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    receipt = _run(
+        tmp_path,
+        "final",
+        "--mode",
+        "offline",
+        "--no-pacing",
+        "--lanes",
+        "4",
+        "--iterations",
+        "2",
+    )
+    pooled = receipt["summary"]["pooled"]
+    assert pooled["counts"]["attempted"] == 24
+    assert pooled["counts"]["completed"] == 24
+    assert pooled["offline_rtfx"]["availability"] == "measured"
+    assert pooled["offline_rtfx"]["validity"] == "offline_cell"
+    assert pooled["streaming_rtfx"]["availability"] == "unavailable"
+    assert pooled["finalization_s"]["n_with_measure"] == 24
+    assert pooled["riva_client_compat_s"]["availability"] == "unavailable"
+    assert pooled["pacing_fidelity"]["reason"] == "mode_is_offline"
+    row = nvidia_streaming_row(receipt, "offline.json")
+    assert row["mode"] == "offline"
+    assert row["streams"] == 4
+    assert row["compat_status"] == "all_requests_completed"
+    assert row["trials_measured"] == "3/3"
+    assert row["comparable"] is True
+    assert isinstance(row["p99_ms"], float) and row["p99_ms"] > 0
+    assert isinstance(row["throughput_rtfx"], float)
+    text = nvidia_table_tsv([row])
+    assert "# One row per offline receipt" in text

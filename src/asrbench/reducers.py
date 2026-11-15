@@ -222,7 +222,7 @@ def reduce_trial(
     )
     riva_final = _riva_compat(outcomes, percentile_method, split="final")
     pacing_fidelity = _pacing_fidelity(
-        outcomes, pacing=pacing, method=percentile_method
+        outcomes, pacing=pacing, method=percentile_method, mode=mode
     )
     rtfx = _rtfx_blocks(
         mode=mode,
@@ -964,9 +964,15 @@ def _pacing_lags(outcome: SessionOutcome) -> list[float] | None:
 
 
 def _pacing_fidelity(
-    outcomes: list[SessionOutcome], *, pacing: bool, method: str
+    outcomes: list[SessionOutcome],
+    *,
+    pacing: bool,
+    method: str,
+    mode: str = d.MODE_STREAMING,
 ) -> dict[str, Any]:
     """Measure how closely paced sessions kept to the chunk schedule."""
+    offline = mode == d.MODE_OFFLINE
+    pacing = pacing and not offline
     lags: list[float] = []
     session_max: list[float] = []
     tolerance = 0.0
@@ -981,7 +987,11 @@ def _pacing_fidelity(
         session_max.append(max(found) if found else 0.0)
     measured = len(session_max)
     reason: str | None = None
-    if not pacing:
+    if offline:
+        availability = "not_applicable"
+        reason = "mode_is_offline"
+        validity = d.RTFX_VALIDITY_NOT_APPLICABLE
+    elif not pacing:
         availability = "not_applicable"
         reason = d.PACING_FIDELITY_NOT_PACED_REASON
         validity = d.RTFX_VALIDITY_PACING_DISABLED

@@ -14,6 +14,10 @@ pass it as ``--model``. The adapter copies that string into
 Run from the repository root:
 
     uv run python scripts/prepare_librispeech_clip.py
+
+NVIDIA's offline table uses the same clip concatenated five times
+(``1272-135031-0000x5.wav``). ``--repeat 5`` also writes that file, next
+to the WAV with an ``x5`` suffix, and prints its digest.
 """
 
 from __future__ import annotations
@@ -230,6 +234,38 @@ def prepare(lock: Path, name: str, flac: Path, wav: Path, ffmpeg: str) -> str:
     return digest
 
 
+def repeat_wav(source: Path, times: int, destination: Path) -> str:
+    """Write ``source`` concatenated ``times`` times and return its digest.
+
+    Args:
+        source: A 16 kHz PCM16 mono WAV.
+        times: How many copies, at least 1.
+        destination: Output WAV.
+
+    Returns:
+        ``sha256:`` digest of the written file.
+
+    Raises:
+        PrepareError: ``times`` is below 1 or the source is not PCM16.
+    """
+    if times < 1:
+        raise PrepareError("--repeat must be at least 1")
+    _require_pcm16(source)
+    with wave.open(str(source), "rb") as handle:
+        frames = handle.readframes(handle.getnframes())
+    with wave.open(str(destination), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(16000)
+        out.writeframes(frames * times)
+    return sha256_file(destination)
+
+
+def repeated_path(wav: Path, times: int) -> Path:
+    """Return ``clips/name.wav`` as ``clips/namex<times>.wav``."""
+    return wav.with_name(f"{wav.stem}x{times}{wav.suffix}")
+
+
 def _require_pcm16(path: Path) -> None:
     """Raise unless ``path`` is 16 kHz, mono, 16-bit PCM."""
     with wave.open(str(path), "rb") as handle:
@@ -265,6 +301,12 @@ def main(argv: list[str] | None = None) -> int:
         help="print the FLAC pin and exit",
     )
     parser.add_argument("--ffmpeg", default="")
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=0,
+        help="also write the WAV concatenated N times (NVIDIA offline: 5)",
+    )
     args = parser.parse_args(argv)
     try:
         entry = load_entry(args.lock, args.name)
@@ -281,12 +323,19 @@ def main(argv: list[str] | None = None) -> int:
         if not ffmpeg:
             raise PrepareError("ffmpeg is not on PATH")
         wav_digest = prepare(args.lock, args.name, args.flac, args.wav, ffmpeg)
+        repeated: tuple[Path, str] | None = None
+        if args.repeat:
+            target = repeated_path(args.wav, args.repeat)
+            repeated = (target, repeat_wav(args.wav, args.repeat, target))
     except PrepareError as error:
         print(f"prepare_librispeech_clip: {error}", file=sys.stderr)
         return 1
     print(f"flac {args.flac} verified")
     print(f"wav {args.wav}")
     print(f"sha256 {wav_digest}")
+    if repeated is not None:
+        print(f"wav {repeated[0]}")
+        print(f"sha256 {repeated[1]}")
     print(_MODEL_HELP)
     return 0
 

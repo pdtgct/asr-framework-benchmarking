@@ -19,8 +19,9 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
     """A scripted recognition service on one process.
 
     The generated base is untyped, so the subclass suppression is local
-    to that missing stub. Offline ``Recognize`` stays the base
-    implementation.
+    to that missing stub. Offline ``Recognize`` answers the whole clip
+    after ``offline_delay_s`` and reports its duration as
+    ``audio_processed``.
     """
 
     def __init__(self, mode: str = "final", transcript: str = "HELLO") -> None:
@@ -31,6 +32,8 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
         self.saw_authorization = False
         self.function_id: str | None = None
         self.saw_cancelled = False
+        self.offline_requests: list[Any] = []
+        self.offline_delay_s = 0.01
         self._lock = threading.Lock()
 
     def _note_metadata(self, context: Any) -> None:
@@ -55,6 +58,34 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
         return riva_asr_pb2.RivaSpeechRecognitionConfigResponse(
             model_config=[config]
         )
+
+    def Recognize(self, request: Any, context: Any) -> Any:
+        """Unary offline recognition. Records the request, then answers."""
+        self._note_metadata(context)
+        with self._lock:
+            self.offline_requests.append(request)
+        if self.mode == "denied":
+            context.abort(grpc.StatusCode.PERMISSION_DENIED, "denied")
+        if self.mode == "invalid":
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bad audio")
+        if self.mode == "hang":
+            self._wait_until_inactive(context)
+            return riva_asr_pb2.RecognizeResponse()
+        seconds = len(request.audio) / 2 / 16000
+        time.sleep(self.offline_delay_s)
+        parts = [self.transcript]
+        if self.mode == "two-finals":
+            parts = ["AB ", "C"]
+        results = [
+            riva_asr_pb2.SpeechRecognitionResult(
+                alternatives=[
+                    riva_asr_pb2.SpeechRecognitionAlternative(transcript=text)
+                ],
+                audio_processed=seconds,
+            )
+            for text in parts
+        ]
+        return riva_asr_pb2.RecognizeResponse(results=results)
 
     def StreamingRecognize(self, request_iterator: Any, context: Any) -> Any:
         self._note_metadata(context)

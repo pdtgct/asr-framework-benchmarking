@@ -121,3 +121,18 @@ def test_transcode_writes_16k_pcm16_mono(tmp_path: Path) -> None:
         assert handle.getnchannels() == 1
         assert handle.getframerate() == 16000
         assert handle.getsampwidth() == 2
+
+
+def test_repeat_writes_the_offline_concatenation(tmp_path: Path) -> None:
+    module = _load()
+    source = tmp_path / "1272-135031-0000.wav"
+    source.write_bytes(pcm16_wav(silence_pcm16(0.25)))
+    target = module.repeated_path(source, 5)
+    assert target.name == "1272-135031-0000x5.wav"
+    digest = module.repeat_wav(source, 5, target)
+    assert digest.startswith("sha256:")
+    with wave.open(str(target), "rb") as handle:
+        assert handle.getnframes() == 5 * 4000
+        assert handle.getframerate() == 16000
+    with pytest.raises(module.PrepareError):
+        module.repeat_wav(source, 0, target)

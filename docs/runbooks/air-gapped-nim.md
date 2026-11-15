@@ -16,10 +16,10 @@ Scope:
 
 - Covered: Riva `StreamingRecognize` over gRPC, the protocol behind NVIDIA's
   streaming tables (Parakeet, Conformer, Nemotron ASR Streaming, and other Riva
-  ASR NIMs).
-- Not covered today: the offline throughput tables (`riva_asr_client`, unary
-  `Recognize`), and the Nemotron Transcribe tables (HTTP only, concurrent
-  requests). Both are listed in [Gaps](#10-gaps).
+  ASR NIMs), and unary `Recognize`, the protocol behind the offline throughput
+  tables (`riva_asr_client`; section 6.1).
+- Not covered today: the Nemotron Transcribe tables (HTTP only, concurrent
+  requests). Listed in [Gaps](#10-gaps).
 
 Contents:
 
@@ -89,7 +89,9 @@ riva_streaming_asr_client \
 
 **Offline tables.** `riva_asr_client` with `--num_parallel_requests=32`,
 `--num_iterations=96`, and `1272-135031-0000x5.wav` (the same clip concatenated five
-times). Throughput is RTFX. asrbench cannot run this today.
+times). Throughput is RTFX: total audio processed over run time, printed only
+when every request succeeded. The client also prints per-request latency
+percentiles. Section 6.1 reproduces this run.
 
 **Accuracy table.** WER (or CER, or cpWER) on full public test sets per model and
 locale, for "best latency", "best throughput", and offline modes. asrbench scores
@@ -190,6 +192,8 @@ cp asrbench/clips/1272-135031-0000.{flac,wav} asrbench-airgap/clips/
 
 The script checks the FLAC against the lock digest and prints the WAV digest. It
 should print `sha256:1fb7b660d79a51208a05678efb176d79b8fb59019e8e5cd014ad96b065bd8556`.
+Add `--repeat 5` to also write `clips/1272-135031-0000x5.wav`, the five-times
+concatenation NVIDIA's offline table uses, and print its digest.
 
 For your own audio, convert each file the same way and keep its reference
 transcript beside it:
@@ -535,10 +539,11 @@ as failed.
 
 ### 5.3 Streaming and offline
 
-`--mode offline` is refused for `riva-grpc` ("riva-grpc does not send mode"). The
-transport implements `StreamingRecognize` only. `--no-pacing` on a streaming run
-sends audio as fast as possible through the streaming path. That is not NVIDIA's
-offline measurement and its throughput is not comparable to the offline tables.
+`--mode offline --no-pacing` on `riva-grpc` sends the whole clip in one unary
+`Recognize` per session (`RIVA_OFFLINE_RECOGNIZE_DEFINITION`), as
+`riva_asr_client` does. Section 6.1 has the full offline run. `--no-pacing` on a
+*streaming* run still goes through `StreamingRecognize` as fast as possible; that
+is not NVIDIA's offline measurement and is not comparable to the offline tables.
 
 ### 5.4 One run
 
@@ -635,6 +640,43 @@ Things that differ from NVIDIA even with these settings:
   bottleneck. Watch the client host's CPU and treat a rising `e2e_rtfx` shortfall
   as a client limit until shown otherwise.
 
+### 6.1 Offline tables
+
+NVIDIA's offline row is `riva_asr_client --num_parallel_requests=32
+--num_iterations=96` over `1272-135031-0000x5.wav`. In asrbench, 32 lanes of 3
+iterations each keep 32 requests in flight for 96 requests.
+
+Derive an offline preset from the site preset, so the receipt names the
+concatenated clip and its reference:
+
+```bash
+python - <<'PY'
+import json
+p = json.load(open("presets/nim-site-streaming.json"))
+w = p["workload"]
+w["clip"].update(
+    id="librispeech-1272-135031-0000x5",
+    duration_s=round(w["clip"]["duration_s"] * 5, 3),
+    path="clips/1272-135031-0000x5.wav",
+    note="NVIDIA offline perf clip (5x). Air-gapped site run.",
+)
+w["clip"].pop("digest", None)
+w["reference_transcript"] = " ".join([w["reference_transcript"]] * 5)
+w.update(mode="offline", pacing=False, timeout_s=120)
+json.dump(p, open("presets/nim-site-offline.json", "w"), indent=2)
+PY
+asrbench run --preset presets/nim-site-offline.json "${IDENT[@]}" \
+  --model "<offline model_name from 4.2>" \
+  --lanes 32 --iterations 3 --warmup 0 --trials 3 \
+  --out "receipts/$RUN/offline-n32.json"
+asrbench nvidia-table "receipts/$RUN/offline-n32.json"
+```
+
+Offline and streaming are usually separate `model_name`s on a NIM. The offline
+row reads `compat_status=all_requests_completed` when every request succeeded,
+the only case in which NVIDIA's client prints throughput. Its latency columns are
+per-request latency, from `finalization_s`.
+
 ## 7. Metric mapping
 
 asrbench's definitions are emitted constants in `asrbench.definitions`. Every
@@ -649,7 +691,8 @@ the full rule.
 | Latency when responses = chunks + 1 | trailing response ignored, rest kept | same field; `n_trailing_extra_ignored` counts those sessions | same | **Matches** since semantics `6`. Any other count is still `invalid` (`response_count_not_chunks_or_chunks_plus_one`), where NVIDIA's client prints no statistics. |
 | Intermediate and final latency | split by `is_final` | `riva_client_compat_intermediate_s`, `riva_client_compat_final_s` (`RIVA_CLIENT_COMPAT_SPLIT_DEFINITION`) | same | **Matches** since semantics `6`. NVIDIA's tables publish the pooled list. |
 | Throughput (RTFX), streaming | total audio sent / run wall time | per-trial `aggregate_rtfx.value` (`AGGREGATE_RTFX_DEFINITION`); also `streaming_rtfx` (`STREAMING_RTFX_DEFINITION`) | `client_monotonic/benchmark_wall_span`; `client_monotonic/cell_wall_span` | **Close.** `aggregate_rtfx` counts offered audio, as NVIDIA does. `streaming_rtfx` counts productive sessions only. Both track the stream count under pacing. The span also covers channel setup (see section 6). |
-| Throughput (RTFX), offline | total audio / run time, unpaced, unary `Recognize` | `offline_rtfx` (`OFFLINE_RTFX_DEFINITION`) | `client_monotonic/cell_wall_span` | **Not runnable.** `riva-grpc` has no offline mode. |
+| Throughput (RTFX), offline | total audio / run time, unpaced, unary `Recognize` | per-trial `aggregate_rtfx.value`, shown by `asrbench nvidia-table` for an offline receipt; also `offline_rtfx` (`OFFLINE_RTFX_DEFINITION`) | `client_monotonic/benchmark_wall_span` | **Close.** NVIDIA sums the server's `audio_processed`; asrbench uses the clip duration and keeps the server value as `server_audio_processed_s` on each outcome. |
+| Offline request latency | `Finish` minus request start, per request | `finalization_s` in offline mode (`RIVA_OFFLINE_RECOGNIZE_DEFINITION`) | `client_monotonic/last_audio_sample_sent_to_final_result_received` | **Matches** in definition with `floor_index`. |
 | WER (accuracy table) | full test set, per model and mode | `wer.micro_wer` (`WER_DEFINITION`) under a named normalization policy | none | **Differs.** asrbench scores one clip per receipt. Comparable only as a sanity check on that clip. |
 | none | none | `ttfs_s` (`TTFS_DEFINITION`) | `client_monotonic/first_audio_append_to_nonempty_transcription_delta` | asrbench only. Not a vendor latency. Empty when interims are off. |
 | none | none | `response_latency_s` (`RESPONSE_LATENCY_DEFINITION`) | `client_monotonic/latest_audio_append_to_nonempty_transcription_delta` | asrbench only. Counts non-empty interims, measured from the latest chunk sent, so it is not the Riva per-chunk pairing. |
@@ -669,7 +712,8 @@ In short:
 - The #177 metrics (finalization, frontier lag, frontier RTFx) and TTFS answer
   different questions. Report them beside NVIDIA's numbers, never in NVIDIA's
   columns.
-- Offline throughput and test-set WER cannot be compared today.
+- Offline throughput is runnable (section 6.1). Test-set WER cannot be compared
+  today.
 
 ## 8. Read and export receipts
 
@@ -788,6 +832,7 @@ as an issue. Where a change has since addressed one, it is named under the gap.
    with 32 parallel requests over a 5x concatenated clip. `riva-grpc` refuses
    `--mode offline`.
    Issue: "riva-grpc: implement offline Recognize so offline_rtfx can match riva_asr_client"
+   Addressed: `--mode offline` sends unary `Recognize` (section 6.1).
 2. **No stream-count sweep in one command.** `performance_streams` in a preset is
    recorded but not executed. Each stream count is a separate run, looped in the
    shell.
