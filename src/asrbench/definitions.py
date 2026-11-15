@@ -24,7 +24,7 @@ from asrbench.outcome import (
 # reader does not have to know the outcome field's historical name.
 TTFS_CLOCK = NATIVE_LATENCY_CLOCK
 
-SCHEMA_VERSION = "asrbench-receipt/5"
+SCHEMA_VERSION = "asrbench-receipt/6"
 
 #: Bumped when reducer or comparison-key semantics change. Replaces the
 #: git commit in the hard comparison key, so a docs-only commit does not
@@ -40,8 +40,16 @@ SCHEMA_VERSION = "asrbench-receipt/5"
 #: ratio, pairs Riva compat only at equal send and response counts, and
 #: hashes word_time_offsets_sent so a transport that does not send
 #: offsets does not match one that does. A consumer of ``1`` through
-#: ``4`` must re-run.
-MEASUREMENT_SEMANTICS_VERSION = "5"
+#: ``4`` must re-run. ``6`` pairs Riva compat at a response count of
+#: chunks or chunks plus one and ignores the trailing extra response, as
+#: riva_streaming_asr_client does; splits that statistic into
+#: intermediate and final by the response's is_final flag; measures
+#: pacing fidelity from the client send trace and qualifies streaming
+#: RTFx with it; and, on riva-grpc, paces chunks against an absolute
+#: schedule from stream start. A consumer of ``5`` must re-run: a
+#: chunks-plus-one session that read invalid now reads measured, and a
+#: paced riva-grpc cell no longer accumulates sleep drift.
+MEASUREMENT_SEMANTICS_VERSION = "6"
 
 GPU_IDENTITY_SERVER_DECLARED = "server_declared"
 GPU_IDENTITY_CLIENT_PROBE = "client_probe"
@@ -210,11 +218,31 @@ LAG_EXCESS_DEFINITION = (
 LAG_EXCESS_UNAVAILABLE_REASON = "emission_lag_unavailable"
 PACING_FIDELITY_CLOCK = "client_monotonic/intended_vs_actual_chunk_send"
 PACING_FIDELITY_DEFINITION = (
-    "Deviation between intended and actual chunk send times, from the "
-    "client send trace. A validity check on every other latency in the "
-    "cell, not a performance number."
+    "Per paced session with a client send trace, the lag of chunk i is "
+    "its send time minus the first chunk's send time, minus i times "
+    "chunk_ms. Positive is late. The last chunk is left out because its "
+    "intended offset depends on its shorter duration. Lags from every "
+    "measured session are pooled. max_session_lag_s is the largest lag "
+    "in any session. A validity check on every other latency in the "
+    "cell, not a performance number. A session without a send trace "
+    "stays in n_total and contributes no lag."
+)
+PACING_FIDELITY_TOLERANCE_DEFINITION = (
+    "A paced cell is paced when every measured lag is at most one "
+    "chunk_ms. Otherwise it is pacing_lagged: the client fell behind "
+    "real time by more than one chunk, so throughput and latency "
+    "describe the client as well as the server."
 )
 PACING_FIDELITY_UNAVAILABLE_REASON = "client_send_trace_not_in_outcome"
+PACING_FIDELITY_NOT_PACED_REASON = "pacing_disabled"
+RIVA_PACING_SCHEDULE = "absolute_from_stream_start"
+RIVA_PACING_SCHEDULE_DEFINITION = (
+    "riva-grpc paces against an absolute schedule from stream start, as "
+    "riva_streaming_asr_client does: chunk i is sent no earlier than "
+    "stream start plus i times chunk_ms plus the duration of chunk i, "
+    "so audio is never sent before it would have been recorded and a "
+    "late wake-up does not delay every later chunk."
+)
 STREAMING_RTFX_CLOCK = "client_monotonic/cell_wall_span"
 STREAMING_RTFX_DEFINITION = (
     "Successfully transcribed audio seconds divided by the wall-clock "
@@ -393,6 +421,8 @@ RTFX_VALIDITY_UNQUALIFIED = "pacing_fidelity_unavailable"
 RTFX_VALIDITY_PACING_DISABLED = "pacing_disabled"
 RTFX_VALIDITY_NOT_APPLICABLE = "not_this_mode"
 RTFX_VALIDITY_SIMULATED = "simulated"
+RTFX_VALIDITY_PACED = "paced"
+RTFX_VALIDITY_PACING_LAGGED = "pacing_lagged"
 DIGEST_COVERS_PCM16 = "pcm16_payload"
 
 E2E_RTFX_CLOCK = "client_monotonic/first_audio_sent_to_final_received"
@@ -452,14 +482,36 @@ AGGREGATE_RTFX_DEFINITION = (
 RIVA_CLIENT_COMPAT_CLOCK = "client_monotonic/response_i_minus_chunk_i"
 RIVA_CLIENT_COMPAT_DEFINITION = (
     "Labelled Riva client compat only. Receive time of response i minus "
-    "send time of chunk i. Valid only when the response count equals the "
-    "chunk count. An adapter may omit a protocol event from those lists "
-    "before pairing; the reducer does not drop a trailing response. Not "
-    "a headline. Not frontier lag, not finalization, and not TTFS."
+    "send time of chunk i, for every chunk i. Valid when the response "
+    "count equals the chunk count or the chunk count plus one; the "
+    "trailing extra response is ignored, as riva_streaming_asr_client "
+    "does. Any other count makes the session, and so the statistic, "
+    "invalid. An adapter may omit a protocol event from those lists "
+    "before pairing. Not a headline. Not frontier lag, not "
+    "finalization, and not TTFS."
 )
 RIVA_CLIENT_COMPAT_LABEL = "Riva client compat"
-RIVA_CLIENT_COMPAT_INVALID_REASON = "response_count_not_one_to_one"
+RIVA_CLIENT_COMPAT_INVALID_REASON = (
+    "response_count_not_chunks_or_chunks_plus_one"
+)
 RIVA_CLIENT_COMPAT_UNAVAILABLE_REASON = "chunk_or_response_times_absent"
+RIVA_CLIENT_COMPAT_SPLIT_DEFINITION = (
+    "The riva_client_compat_s pairs, split by whether response i carried "
+    "a result with is_final true (final) or not (intermediate), as "
+    "riva_streaming_asr_client splits its intermediate and final "
+    "latency lists. Same validity as the pooled statistic. Unavailable "
+    "when the adapter did not record one final flag per response."
+)
+RIVA_CLIENT_COMPAT_SPLIT_UNAVAILABLE_REASON = "response_final_flags_absent"
+NVIDIA_STREAMING_ROW_DEFINITION = (
+    "One row per receipt in NVIDIA's ASR NIM streaming table layout. "
+    "Latency avg, p50, p90, p95, and p99 are riva_client_compat_s in "
+    "milliseconds, each the mean over trials of the per-trial value, as "
+    "NVIDIA averages three runs. Throughput is the trial mean of "
+    "aggregate_rtfx, offered audio over the trial wall span. A latency "
+    "column is comparable only when compat_status is measured on every "
+    "trial and percentile_method is floor_index."
+)
 
 
 def emitted_definitions() -> dict[str, str]:

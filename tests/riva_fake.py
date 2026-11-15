@@ -133,6 +133,17 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
                     )
                 elif len(audio_seen) == 2:
                     yield _frontier_response([(0.0, False, "")])
+            if self.mode == "per-chunk" and kind == "audio_content":
+                # One interim per audio chunk, sent as soon as it arrives.
+                yield _response("P", final=False)
+            if self.mode == "per-chunk-final-last" and kind == "audio_content":
+                # Answer chunk i when chunk i + 1 arrives; the last chunk
+                # gets the final, so responses == chunks.
+                audio_seen = [
+                    item for item in sequence if item[0] == "audio_content"
+                ]
+                if len(audio_seen) > 1:
+                    yield _response("P", final=False)
             if (
                 self.mode == "unavailable-after-audio"
                 and kind == "audio_content"
@@ -163,6 +174,11 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             yield _results_response([("AB", True), ("C", True)])
         elif self.mode == "frontier":
             yield _frontier_response([(1.0, True, "HELLO")])
+        elif self.mode == "per-chunk-final-last":
+            yield _response(self.transcript, final=True)
+        elif self.mode == "per-chunk":
+            # A trailing final: responses == chunks + 1.
+            yield _response(self.transcript, final=True)
 
     def _status(
         self,

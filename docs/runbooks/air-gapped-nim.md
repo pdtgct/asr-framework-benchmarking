@@ -8,7 +8,9 @@ at the site. The steps work the same for any model the NIM reports.
 
 Verified against asrbench `main` at `0e93681d0e882dd15557b2172d6b03cd3de95174`
 (receipt schema `asrbench-receipt/5`, measurement semantics `5`). How each step
-was checked is listed in [Verification notes](#11-verification-notes).
+was checked is listed in [Verification notes](#11-verification-notes). Sections
+since updated for receipt schema `asrbench-receipt/6` and measurement semantics
+`6` say so, and [Gaps](#10-gaps) names the change that closed each gap.
 
 Scope:
 
@@ -568,7 +570,10 @@ The console summary prints at the end. Check these before a sweep:
 
 - `outcomes attempted=1 admitted=1 completed=1 productive=1`
 - `riva_client_compat ... availability=measured`. If it reads `invalid`, the
-  server did not send exactly one response per chunk (see section 7).
+  server sent neither one response per chunk nor one per chunk plus one
+  trailing response (see section 7).
+- `pacing_fidelity ... validity=paced`. `pacing_lagged` means the client fell
+  more than one chunk behind real time; fix the client host before a sweep.
 - `wer ... micro=` is near the model's known accuracy for that clip.
 
 Each cell takes about `trials * iterations * (clip length + finalization)`, about
@@ -586,7 +591,7 @@ Each cell takes about `trials * iterations * (clip length + finalization)`, abou
 | `--num_parallel_requests=N` | `--lanes N` |
 | `--num_iterations=3*N` | `--iterations 3` (per lane) |
 | no warmup | `--warmup 0` |
-| average of three runs | `--trials 3`, then average per-trial values (section 8.4) |
+| average of three runs | `--trials 3`, then `asrbench nvidia-table` (section 8.4) |
 | `1272-135031-0000.wav` | the clip from section 2.4 |
 | `sorted[floor(q*n/100)]` percentiles | `--percentile-method floor_index` |
 | one row per stream count | one receipt per `--lanes` value |
@@ -618,10 +623,11 @@ Exit code `2` means a configuration error.
 
 Things that differ from NVIDIA even with these settings:
 
-- asrbench paces each chunk with a relative sleep after the send, so small delays
-  accumulate. NVIDIA's client paces against an absolute schedule. Check
-  `e2e_rtfx` on the receipt: values well below 1.0 at low stream counts mean the
-  stream ran slower than real time.
+- Since semantics `6`, `riva-grpc` paces against an absolute schedule from
+  stream start, as NVIDIA's client does (`RIVA_PACING_SCHEDULE_DEFINITION`), so
+  delays no longer accumulate. `pacing_fidelity` on each trial reports how late
+  the client actually sent each chunk; it must read `paced` before a row is
+  compared.
 - asrbench opens one gRPC channel per session. The Riva client shares one channel
   across streams. Connection setup is outside the latency clocks but inside the
   trial wall span.
@@ -639,10 +645,10 @@ the full rule.
 
 | NVIDIA column | NVIDIA formula | asrbench field | asrbench clock | Match |
 |---|---|---|---|---|
-| Latency avg, p50, p90, p95, p99 (ms) | per response: `recv[i] - send[i]`, pooled over streams and iterations, floor-index percentiles, then averaged over three runs | `trials[t].reduction.riva_client_compat_s` (`RIVA_CLIENT_COMPAT_DEFINITION`), averaged over trials by section 8.4 | `client_monotonic/response_i_minus_chunk_i` | **Matches** in definition when response count equals chunk count and `percentile_method` is `floor_index`. Units are seconds; multiply by 1000. |
-| Latency when responses = chunks + 1 | trailing response ignored, rest kept | same field | same | **Differs.** asrbench marks the session invalid and the whole statistic `invalid` (`response_count_not_one_to_one`). |
-| Intermediate and final latency | split by `is_final` | none | none | **Missing.** asrbench reports only the pooled list. NVIDIA's tables use the pooled list, so the headline still matches. |
-| Throughput (RTFX), streaming | total audio sent / run wall time | per-trial `aggregate_rtfx.value` (`AGGREGATE_RTFX_DEFINITION`); also `streaming_rtfx` (`STREAMING_RTFX_DEFINITION`) | `client_monotonic/benchmark_wall_span`; `client_monotonic/cell_wall_span` | **Close.** `aggregate_rtfx` counts offered audio, as NVIDIA does. `streaming_rtfx` counts productive sessions only. Both track the stream count under pacing. The span origin differs slightly (see section 6). |
+| Latency avg, p50, p90, p95, p99 (ms) | per response: `recv[i] - send[i]`, pooled over streams and iterations, floor-index percentiles, then averaged over three runs | `trials[t].reduction.riva_client_compat_s` (`RIVA_CLIENT_COMPAT_DEFINITION`), averaged over trials and converted to ms by `asrbench nvidia-table` (section 8.4) | `client_monotonic/response_i_minus_chunk_i` | **Matches** in definition when `percentile_method` is `floor_index`. |
+| Latency when responses = chunks + 1 | trailing response ignored, rest kept | same field; `n_trailing_extra_ignored` counts those sessions | same | **Matches** since semantics `6`. Any other count is still `invalid` (`response_count_not_chunks_or_chunks_plus_one`), where NVIDIA's client prints no statistics. |
+| Intermediate and final latency | split by `is_final` | `riva_client_compat_intermediate_s`, `riva_client_compat_final_s` (`RIVA_CLIENT_COMPAT_SPLIT_DEFINITION`) | same | **Matches** since semantics `6`. NVIDIA's tables publish the pooled list. |
+| Throughput (RTFX), streaming | total audio sent / run wall time | per-trial `aggregate_rtfx.value` (`AGGREGATE_RTFX_DEFINITION`); also `streaming_rtfx` (`STREAMING_RTFX_DEFINITION`) | `client_monotonic/benchmark_wall_span`; `client_monotonic/cell_wall_span` | **Close.** `aggregate_rtfx` counts offered audio, as NVIDIA does. `streaming_rtfx` counts productive sessions only. Both track the stream count under pacing. The span also covers channel setup (see section 6). |
 | Throughput (RTFX), offline | total audio / run time, unpaced, unary `Recognize` | `offline_rtfx` (`OFFLINE_RTFX_DEFINITION`) | `client_monotonic/cell_wall_span` | **Not runnable.** `riva-grpc` has no offline mode. |
 | WER (accuracy table) | full test set, per model and mode | `wer.micro_wer` (`WER_DEFINITION`) under a named normalization policy | none | **Differs.** asrbench scores one clip per receipt. Comparable only as a sanity check on that clip. |
 | none | none | `ttfs_s` (`TTFS_DEFINITION`) | `client_monotonic/first_audio_append_to_nonempty_transcription_delta` | asrbench only. Not a vendor latency. Empty when interims are off. |
@@ -650,16 +656,16 @@ the full rule.
 | none | none | `finalization_s` (`FINALIZATION_DEFINITION`) | `client_monotonic/last_audio_sample_sent_to_final_result_received` | asrbench #177 headline. No NVIDIA counterpart. The `.tsv` written beside each receipt is this metric in NVIDIA's column order, not NVIDIA's latency. |
 | none | none | `frontier_lag_s` (`FRONTIER_LAG_DEFINITION`), `frontier_rtfx` (`FRONTIER_RTFX_DEFINITION`) | `client_monotonic/response_receive_minus_audio_processed`, `client_monotonic/audio_processed_delta_over_receive_delta` | asrbench #177 headlines. Built on the server's `audio_processed` field. No NVIDIA counterpart. |
 | none | none | `e2e_rtfx` (`E2E_RTFX_DEFINITION`) | `client_monotonic/first_audio_sent_to_final_received` | asrbench only. Per-session "kept up" check, near 1.0 under pacing. |
+| none | none | `pacing_fidelity` (`PACING_FIDELITY_DEFINITION`) | `client_monotonic/intended_vs_actual_chunk_send` | asrbench only. Validity check on the client's pacing; qualifies `streaming_rtfx.validity`. |
 
 In short:
 
 - The Riva-compatible latency is the one asrbench number defined the same way as
-  NVIDIA's table latency. It exists only when the server sends exactly one response
-  per audio chunk. NVIDIA's own method relies on the server doing that when the
-  client chunk equals the server chunk, even with interims off. Confirm it on the
-  first smoke run at your site.
-- Streaming throughput agrees in meaning and should agree in value to within the
-  pacing drift.
+  NVIDIA's table latency. It exists only when the server sends one response per
+  audio chunk, optionally plus one trailing response, which is the same rule
+  NVIDIA's client applies. Confirm it on the first smoke run at your site.
+- Streaming throughput agrees in meaning. Check `pacing_fidelity` reads `paced`
+  before comparing values.
 - The #177 metrics (finalization, frontier lag, frontier RTFx) and TTFS answer
   different questions. Report them beside NVIDIA's numbers, never in NVIDIA's
   columns.
@@ -712,65 +718,28 @@ run twice or on two engines, not for neighbouring stream counts. `--force
 
 ### 8.4 NVIDIA-layout rows
 
-Save this as `work/tools/nvidia_row.py`:
-
-```python
-"""Project asrbench receipts onto NVIDIA's ASR NIM streaming table layout.
-
-One row per receipt: # of streams, latency avg/p50/p90/p95/p99 in ms, and
-throughput in RTFX. Each column is the mean over trials of the per-trial
-value, which is how NVIDIA averages its three trials. Latency is
-riva_client_compat_s (response i receive minus chunk i send). Throughput
-is the per-trial aggregate_rtfx (offered audio over trial wall span).
-"""
-
-import json
-import sys
-
-STATS = ("mean", "p50", "p90", "p95", "p99")
-
-
-def mean(values):
-    present = [v for v in values if v is not None]
-    return sum(present) / len(present) if present else None
-
-
-def fmt(value, scale=1.0):
-    return "n/a" if value is None else f"{value * scale:.5g}"
-
-
-print(
-    "receipt\tchunk_ms\tstreams\tavg_ms\tp50_ms\tp90_ms\tp95_ms\tp99_ms"
-    "\tthroughput_rtfx\tpercentile_method\tcompat_status\ttrials"
-)
-for path in sys.argv[1:]:
-    receipt = json.load(open(path))
-    workload = receipt["resolved_config"]["workload"]
-    method = receipt["resolved_config"]["run"]["percentile_method"]
-    reductions = [t["reduction"] for t in receipt["trials"]]
-    compat = [r["riva_client_compat_s"] for r in reductions]
-    status = sorted({c["availability"] for c in compat})
-    ok = [c for c in compat if c["availability"] == "measured"]
-    latency = [mean([c[s] for c in ok]) for s in STATS]
-    rtfx = mean([r["aggregate_rtfx"]["value"] for r in reductions])
-    print(
-        "\t".join(
-            [path, str(workload["chunk_ms"]), str(workload["lanes"])]
-            + [fmt(v, 1000.0) for v in latency]
-            + [fmt(rtfx), method, ",".join(status), f"{len(ok)}/{len(compat)}"]
-        )
-    )
-```
-
-Run it over a sweep:
+`asrbench nvidia-table` prints one row per receipt in NVIDIA's streaming table
+layout (`NVIDIA_STREAMING_ROW_DEFINITION`): stream count, latency avg/p50/p90/
+p95/p99 in milliseconds (each the trial mean of `riva_client_compat_s`), and
+throughput (the trial mean of `aggregate_rtfx`). Extra columns to the right say
+whether the row may be compared.
 
 ```bash
-python tools/nvidia_row.py receipts/$RUN/c160-n*.json | tee exports/$RUN/nvidia-layout.tsv
+asrbench nvidia-table receipts/$RUN/c160-n*.json --out exports/$RUN/nvidia-layout.tsv
 ```
 
-`compat_status` must read `measured` and `trials` must read `3/3` before a row is
-put next to NVIDIA's. Anything else means the latency columns are partial or
-`n/a`.
+| Column | Meaning |
+|---|---|
+| `compat_status` | Distinct `riva_client_compat_s` availabilities across trials. Must be `measured`. |
+| `trials_measured` | Trials whose compat statistic was measured, out of all trials. Must be `3/3` for a three-trial row. |
+| `comparable` | `true` only when every trial measured the statistic and `percentile_method` is `floor_index`. |
+| `pacing_validity` | Distinct `pacing_fidelity.validity` across trials. `paced` is required; `pacing_disabled` belongs to offline-style runs only. |
+| `trailing_extra_ignored` | Sessions whose one trailing extra response was ignored, as NVIDIA's client does. Informational. |
+| `intermediate_avg_ms`, `final_avg_ms` | Trial means of the `is_final` split. Not in NVIDIA's tables; matches the client's other two lists. |
+
+Put a row next to NVIDIA's only when `comparable` is `true` and
+`pacing_validity` is `paced`. Anything else means the latency columns are partial
+or empty.
 
 ## 9. Side-by-side comparison template
 
@@ -789,7 +758,7 @@ Site settings:
 - Model: <model_name>, checkpoint <id>:<revision>
 - GPU: <name>, <MiB> MiB, driver <version>, count <n>
 - Client: <host CPU>, location <loopback|same-region|wan>
-- asrbench: <git commit>, schema asrbench-receipt/5, semantics 5, percentile floor_index
+- asrbench: <git commit>, schema asrbench-receipt/6, semantics 6, percentile floor_index
 - Receipts: receipts/<RUN>/
 
 | Streams | NVIDIA avg | Site avg | NVIDIA p50 | Site p50 | NVIDIA p90 | Site p90 | NVIDIA p95 | Site p95 | NVIDIA p99 | Site p99 | NVIDIA RTFX | Site RTFX |
@@ -806,14 +775,14 @@ asrbench-only measures (not in NVIDIA's table), pooled over trials:
 |---|---|---|---|---|---|---|
 | 1 | | | | | | |
 
-Differences that apply to this comparison: <pacing drift, per-session channel,
+Differences that apply to this comparison: <pacing_fidelity, per-session channel,
 client host, network path, anything else>.
 ```
 
 ## 10. Gaps
 
-Things NVIDIA parity needs that asrbench cannot do at `0e93681`. None is fixed in
-this change. Each has a suggested issue title.
+Things NVIDIA parity needed that asrbench could not do at `0e93681`, each filed
+as an issue. Where a change has since addressed one, it is named under the gap.
 
 1. **No offline mode on Riva gRPC.** NVIDIA's offline RTFX uses unary `Recognize`
    with 32 parallel requests over a 5x concatenated clip. `riva-grpc` refuses
@@ -827,18 +796,23 @@ this change. Each has a suggested issue title.
    trailing response and ignores it. asrbench marks the session, and so the whole
    statistic, invalid.
    Issue: "reducers: accept responses == chunks + 1 in riva_client_compat_s, as riva_streaming_asr_client does"
+   Addressed by the streaming-parity change (semantics `6`).
 4. **No intermediate and final latency split.** The Riva client reports both.
    asrbench reports only the pooled list.
    Issue: "reducers: split riva_client_compat_s into intermediate and final by is_final"
+   Addressed by the streaming-parity change (semantics `6`).
 5. **No built-in NVIDIA-layout projection of the compat latency.** The perf TSV
-   uses finalization, in seconds. Section 8.4's script fills the gap.
+   uses finalization, in seconds.
    Issue: "reporters: NVIDIA streaming table row from riva_client_compat_s (ms, trial mean, aggregate RTFX)"
+   Addressed by `asrbench nvidia-table` (section 8.4).
 6. **Pacing drifts.** Each chunk is followed by a relative sleep, so delays add up
    over a session. The Riva client paces against an absolute schedule.
    Issue: "riva-grpc: pace chunks against an absolute schedule from first send"
+   Addressed by the streaming-parity change (semantics `6`).
 7. **Pacing fidelity is not computed.** Streaming RTFX validity reads
    `pacing_fidelity_unavailable` even though `chunk_send_times_s` is recorded.
    Issue: "reducers: compute pacing fidelity from chunk_send_times_s"
+   Addressed by the streaming-parity change (semantics `6`).
 8. **One gRPC channel per session.** The Riva client shares a channel across
    streams. Connection cost differs at high stream counts.
    Issue: "riva-grpc: option to share one channel across lanes like the Riva C++ client"
@@ -868,6 +842,7 @@ this change. Each has a suggested issue title.
 15. **The README quickstart test needs the network.** It shells out to `uv run`,
     which resolves packages online.
     Issue: "tests: skip the README quickstart test when uv cannot resolve offline"
+    Addressed: the test now skips with uv's reason when it cannot resolve.
 
 ## 11. Verification notes
 

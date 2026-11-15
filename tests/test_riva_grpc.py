@@ -680,3 +680,105 @@ def test_perf_table_tsv_refuses_a_mixed_population(tmp_path: Path) -> None:
         perf_table_tsv(receipt)
     with pytest.raises(NotHomogeneousError):
         frontier_report([receipt], ["mixed"])
+
+
+def _reduce_one(outcome: SessionOutcome, *, pacing: bool) -> dict[str, object]:
+    from asrbench.reducers import reduce_trial
+    from asrbench.spec import PassPolicy
+
+    return reduce_trial(
+        [outcome],
+        wall_span_s=1.0,
+        mode="streaming",
+        pacing=pacing,
+        lanes=1,
+        reference=None,
+        pass_policy=PassPolicy(),
+        percentile_method="floor_index",
+        warmup_excluded=0,
+    )
+
+
+def test_trailing_extra_response_is_paired_like_the_riva_client(
+    tmp_path: Path,
+) -> None:
+    path = _wav(tmp_path, 0.5)
+    server = RunningFake(FakeRiva(mode="per-chunk"))
+    try:
+        outcome = asyncio.run(_adapter(server.endpoint).run(_request(path)))
+    finally:
+        server.stop()
+    chunks = outcome.protocol_extras["audio_chunks"]
+    assert chunks == 5
+    assert len(outcome.response_receive_times_s or []) == chunks + 1
+    assert outcome.response_final_flags == [False] * chunks + [True]
+    reduced = _reduce_one(outcome, pacing=False)
+    compat = reduced["riva_client_compat_s"]
+    assert isinstance(compat, dict)
+    assert compat["availability"] == "measured"
+    assert compat["n_samples"] == chunks
+    assert compat["n_trailing_extra_ignored"] == 1
+    final = reduced["riva_client_compat_final_s"]
+    intermediate = reduced["riva_client_compat_intermediate_s"]
+    assert isinstance(final, dict) and isinstance(intermediate, dict)
+    # The final rode the ignored trailing response.
+    assert final["n_samples"] == 0
+    assert intermediate["n_samples"] == chunks
+
+
+def test_one_response_per_chunk_splits_the_last_as_final(
+    tmp_path: Path,
+) -> None:
+    path = _wav(tmp_path, 0.5)
+    server = RunningFake(FakeRiva(mode="per-chunk-final-last"))
+    try:
+        outcome = asyncio.run(_adapter(server.endpoint).run(_request(path)))
+    finally:
+        server.stop()
+    assert len(outcome.response_receive_times_s or []) == 5
+    reduced = _reduce_one(outcome, pacing=False)
+    compat = reduced["riva_client_compat_s"]
+    final = reduced["riva_client_compat_final_s"]
+    assert isinstance(compat, dict) and isinstance(final, dict)
+    assert compat["n_trailing_extra_ignored"] == 0
+    assert compat["n_samples"] == 5
+    assert final["n_samples"] == 1
+
+
+def test_pacing_is_an_absolute_schedule_from_stream_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_sleep = asyncio.sleep
+    slept: list[float] = []
+
+    async def oversleep(delay: float) -> None:
+        # Every wake-up is 30 ms late. A relative schedule would add that
+        # up; the absolute one absorbs it on the next chunk.
+        slept.append(delay)
+        await real_sleep(delay + 0.03)
+
+    monkeypatch.setattr(asyncio, "sleep", oversleep)
+    path = _wav(tmp_path, 0.6)
+    server = RunningFake(FakeRiva(mode="per-chunk-final-last"))
+    try:
+        outcome = asyncio.run(
+            _adapter(server.endpoint).run(_request(path, pace=True))
+        )
+    finally:
+        server.stop()
+    sends = outcome.chunk_send_times_s or []
+    assert len(sends) == 6
+    assert outcome.protocol_extras["pacing_schedule"] == (
+        "absolute_from_stream_start"
+    )
+    # Six chunks of 100 ms: the last send is about 500 ms after the first,
+    # plus at most one late wake-up, not six of them.
+    assert sends[-1] - sends[0] < 0.5 + 0.06
+    assert sends[-1] - sends[0] >= 0.5 - 0.005
+    # Each requested sleep is shorter than a chunk once a wake-up ran late.
+    assert any(delay < 0.09 for delay in slept[1:])
+    pacing = _reduce_one(outcome, pacing=True)["pacing_fidelity"]
+    assert isinstance(pacing, dict)
+    assert pacing["availability"] == "measured"
+    assert pacing["validity"] == "paced"
+    assert pacing["n_samples"] == 5
