@@ -177,7 +177,9 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
         half-closing its request stream, is sometimes reported to the
         client as ``INTERNAL`` ("Internal error from Core") by this grpc
         build. Draining the request stream, then ``set_code``, keeps the
-        status the test asked for.
+        status the test asked for. So this models a rejection the client
+        sees at stream end; ``unavailable-after-audio`` is the fake for an
+        error while the client is still sending.
         """
         for _request in request_iterator:
             pass
