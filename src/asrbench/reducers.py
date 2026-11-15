@@ -9,6 +9,7 @@ never filled with a zero.
 
 from __future__ import annotations
 
+import bisect
 import math
 from collections.abc import Callable
 from typing import Any
@@ -29,6 +30,8 @@ _ACROSS = (
     ("response_latency_p50_s", "response_latency_s", "p50"),
     ("response_latency_p99_s", "response_latency_s", "p99"),
     ("finalization_p50_s", "finalization_s", "p50"),
+    ("chunk_latency_p50_s", "chunk_latency_s", "p50"),
+    ("chunk_latency_p99_s", "chunk_latency_s", "p99"),
     ("e2e_rtfx_mean", "e2e_rtfx", "mean"),
     ("aggregate_rtfx", "aggregate_rtfx", "value"),
     ("micro_wer", "wer", "micro_wer"),
@@ -52,7 +55,7 @@ _RTFX = (
         "streaming_rtfx",
         d.STREAMING_RTFX_DEFINITION,
         d.MODE_STREAMING,
-        "mode_is_offline",
+        d.MODE_IS_OFFLINE_REASON,
         False,
     ),
     (
@@ -209,18 +212,39 @@ def reduce_trial(
     )
     e2e["unit"] = "ratio"
     frontier_rtfx = _frontier_rtfx(outcomes, percentile_method)
-    frontier_lag = _frontier_lag(outcomes, percentile_method)
-    word_latency = _word_latency(outcomes, percentile_method, mode=mode)
+    frontier_lag = _frontier_lag(outcomes, percentile_method, pacing=pacing)
+    word_latency = _word_latency(
+        outcomes, percentile_method, pacing=pacing, mode=mode
+    )
     aggregate = _aggregate_rtfx(
         attempted=attempted,
         successful=successful,
         wall_span_s=wall_span_s,
     )
-    riva_compat = _riva_compat(outcomes, percentile_method)
-    riva_intermediate = _riva_compat(
-        outcomes, percentile_method, split="intermediate"
+    paced_streaming = pacing and mode != d.MODE_OFFLINE
+    riva_compat = _riva_compat(
+        outcomes, percentile_method, paced=paced_streaming, mode=mode
     )
-    riva_final = _riva_compat(outcomes, percentile_method, split="final")
+    riva_intermediate = _riva_compat(
+        outcomes,
+        percentile_method,
+        split="intermediate",
+        paced=paced_streaming,
+        mode=mode,
+    )
+    riva_final = _riva_compat(
+        outcomes,
+        percentile_method,
+        split="final",
+        paced=paced_streaming,
+        mode=mode,
+    )
+    chunk_latency = _chunk_latency(
+        outcomes, percentile_method, mode=mode, pacing=pacing
+    )
+    server_audio_rtfx = _server_audio_rtfx(
+        outcomes, wall_span_s=wall_span_s, mode=mode
+    )
     pacing_fidelity = _pacing_fidelity(
         outcomes, pacing=pacing, method=percentile_method, mode=mode
     )
@@ -247,7 +271,7 @@ def reduce_trial(
             ),
             d.LATENCY_METRIC_FRONTIER_LAG: (
                 frontier_lag,
-                _lag_samples(outcomes),
+                _lag_samples(outcomes, pacing=pacing),
             ),
         },
         wer=wer,
@@ -268,6 +292,8 @@ def reduce_trial(
         "riva_client_compat_s": riva_compat,
         "riva_client_compat_intermediate_s": riva_intermediate,
         "riva_client_compat_final_s": riva_final,
+        "chunk_latency_s": chunk_latency,
+        "server_audio_rtfx": server_audio_rtfx,
         "pacing_fidelity": pacing_fidelity,
         "wer": wer,
         "streaming_rtfx": rtfx["streaming_rtfx"],
@@ -627,13 +653,42 @@ def _frontier_rtfx(
     }
 
 
-def _lags_for(outcome: SessionOutcome) -> tuple[str, list[float]]:
+def _audio_origin(
+    outcome: SessionOutcome, *, pacing: bool
+) -> tuple[float | None, str]:
+    """Return audio t=0 on the client clock and how it was found.
+
+    See :data:`asrbench.definitions.AUDIO_CLOCK_ORIGIN_DEFINITION`.
+    """
+    if outcome.audio_clock_origin_s is not None:
+        return outcome.audio_clock_origin_s, "schedule_origin"
+    first = outcome.first_audio_sent_s
+    if first is None:
+        return None, "absent"
+    if pacing:
+        first_chunk = min(outcome.chunk_ms / 1000, outcome.audio_duration_s)
+        return first - max(first_chunk, 0.0), "first_send_minus_first_chunk"
+    return first, "first_send"
+
+
+def _origin_counts(
+    outcomes: list[SessionOutcome], *, pacing: bool
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for outcome in outcomes:
+        _origin, source = _audio_origin(outcome, pacing=pacing)
+        counts[source] = counts.get(source, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _lags_for(
+    outcome: SessionOutcome, *, pacing: bool = True
+) -> tuple[str, list[float]]:
     """Return ``invalid``, ``unavailable``, or ``measured`` and lags.
 
-    Lag is receive time minus the sum of first-audio-sent and
+    Lag is receive time minus the sum of the audio clock origin and
     ``audio_processed``. A decrease is invalid. A missing frontier or
-    first-audio stamp is unavailable. The audio duration sent is not
-    this frontier.
+    origin is unavailable. The audio duration sent is not this frontier.
     """
     progress = outcome.audio_progress
     if progress is None:
@@ -641,19 +696,21 @@ def _lags_for(outcome: SessionOutcome) -> tuple[str, list[float]]:
     processed = [float(item["audio_processed_s"]) for item in progress]
     if _decreased(processed):
         return "invalid", []
-    if outcome.first_audio_sent_s is None:
+    origin, _source = _audio_origin(outcome, pacing=pacing)
+    if origin is None:
         return "unavailable", []
-    origin = outcome.first_audio_sent_s
     return "measured", [
         float(item["received_s"]) - (origin + processed[index])
         for index, item in enumerate(progress)
     ]
 
 
-def _lag_samples(outcomes: list[SessionOutcome]) -> list[float]:
+def _lag_samples(
+    outcomes: list[SessionOutcome], *, pacing: bool = True
+) -> list[float]:
     found: list[float] = []
     for outcome in outcomes:
-        status, lags = _lags_for(outcome)
+        status, lags = _lags_for(outcome, pacing=pacing)
         if status == "measured":
             found.extend(lags)
     return found
@@ -715,7 +772,7 @@ def _pooled_clock(
 
 
 def _frontier_lag(
-    outcomes: list[SessionOutcome], method: str
+    outcomes: list[SessionOutcome], method: str, *, pacing: bool = True
 ) -> dict[str, Any]:
     """Pool frontier lag. One decreasing stream publishes nothing."""
     invalid = 0
@@ -723,7 +780,7 @@ def _frontier_lag(
     measured_sessions = 0
     samples: list[float] = []
     for outcome in outcomes:
-        status, lags = _lags_for(outcome)
+        status, lags = _lags_for(outcome, pacing=pacing)
         if status == "invalid":
             invalid += 1
             continue
@@ -776,13 +833,19 @@ def _frontier_lag(
         "n_samples": len(shown),
         "n_unavailable_sessions": absent,
         "population_definition": d.POPULATION_DEFINITION,
+        "audio_clock_origin": _origin_counts(outcomes, pacing=pacing),
+        "audio_clock_origin_definition": d.AUDIO_CLOCK_ORIGIN_DEFINITION,
     }
 
 
-def _word_offsets(outcome: SessionOutcome) -> list[float] | None:
-    if outcome.word_timings is None or outcome.first_audio_sent_s is None:
+def _word_offsets(
+    outcome: SessionOutcome, *, pacing: bool = True
+) -> list[float] | None:
+    if outcome.word_timings is None:
         return None
-    origin = outcome.first_audio_sent_s
+    origin, _source = _audio_origin(outcome, pacing=pacing)
+    if origin is None:
+        return None
     return [
         float(item["final_received_s"]) - (origin + float(item["end_time_s"]))
         for item in outcome.word_timings
@@ -793,6 +856,7 @@ def _word_latency(
     outcomes: list[SessionOutcome],
     method: str,
     *,
+    pacing: bool = True,
     mode: str = d.MODE_STREAMING,
 ) -> dict[str, Any]:
     offline = mode == d.MODE_OFFLINE
@@ -805,12 +869,18 @@ def _word_latency(
         # Offline sends all audio at the call start, so there is no paced
         # audio clock to measure word ends against. Word timings stay on
         # the outcomes as raw data.
-        read=(lambda _outcome: None) if offline else _word_offsets,
+        read=(
+            (lambda _outcome: None)
+            if offline
+            else (lambda outcome: _word_offsets(outcome, pacing=pacing))
+        ),
         absent_reason=d.WORD_LATENCY_UNAVAILABLE_REASON,
     )
+    block["audio_clock_origin"] = _origin_counts(outcomes, pacing=pacing)
+    block["audio_clock_origin_definition"] = d.AUDIO_CLOCK_ORIGIN_DEFINITION
     if offline:
         block["availability"] = "not_applicable"
-        block["reason"] = "mode_is_offline"
+        block["reason"] = d.MODE_IS_OFFLINE_REASON
     return block
 
 
@@ -873,6 +943,8 @@ def _riva_compat(
     method: str,
     *,
     split: str | None = None,
+    paced: bool = True,
+    mode: str = d.MODE_STREAMING,
 ) -> dict[str, Any]:
     """Reduce Riva compat, pooled or one side of the is_final split.
 
@@ -881,6 +953,11 @@ def _riva_compat(
         method: Percentile policy.
         split: ``None`` for every pair, or ``intermediate`` / ``final``
             for the pairs whose response carried that is_final value.
+        paced: Whether the streaming workload was paced in real time.
+            ``riva_streaming_asr_client`` prints latency only under
+            ``--simulate_realtime``, so an unpaced cell is
+            ``not_applicable``.
+        mode: Workload mode. Offline is ``not_applicable``.
     """
     invalid = 0
     absent = 0
@@ -911,10 +988,19 @@ def _riva_compat(
         if split is None
         else d.RIVA_CLIENT_COMPAT_SPLIT_UNAVAILABLE_REASON
     )
-    if invalid:
-        availability = "invalid"
-        reason: str | None = d.RIVA_CLIENT_COMPAT_INVALID_REASON
+    if mode == d.MODE_OFFLINE or not paced:
+        availability = "not_applicable"
+        reason: str | None = (
+            d.MODE_IS_OFFLINE_REASON
+            if mode == d.MODE_OFFLINE
+            else d.RIVA_CLIENT_COMPAT_NOT_PACED_REASON
+        )
         shown: list[float] = []
+        with_measure = 0
+    elif invalid:
+        availability = "invalid"
+        reason = d.RIVA_CLIENT_COMPAT_INVALID_REASON
+        shown = []
         with_measure = 0
     elif measured_sessions == 0:
         availability = "unavailable"
@@ -962,16 +1048,323 @@ def _riva_compat(
     }
 
 
+_COVER_EPSILON_S = 1e-5
+
+
+def _response_flags(
+    outcome: SessionOutcome, count: int
+) -> tuple[list[bool], bool]:
+    """Per-response final flags, and whether they had to be inferred."""
+    flags = outcome.response_final_flags
+    if flags is not None and len(flags) == count:
+        return list(flags), False
+    return [outcome.interim_count == 0] * count, True
+
+
+def _trusted_frontier(
+    outcome: SessionOutcome, receives: list[float], flags: list[bool]
+) -> dict[float, float] | None:
+    """Map receive time to ``audio_processed`` when it can be trusted.
+
+    Trusted means present on every non-final response, never decreasing,
+    and never beyond the audio sent by then plus the slack.
+    """
+    progress = outcome.audio_progress
+    if not progress:
+        return None
+    slack = float(d.CHUNK_LATENCY_AUDIO_PROCESSED_SLACK_S)
+    processed = [float(item["audio_processed_s"]) for item in progress]
+    if _decreased(processed):
+        return None
+    by_time: dict[float, float] = {}
+    for item in progress:
+        value = float(item["audio_processed_s"])
+        if value > float(item["audio_sent_s"]) + slack:
+            return None
+        by_time[float(item["received_s"])] = value
+    for received, final in zip(receives, flags, strict=True):
+        if not final and received not in by_time:
+            return None
+    return by_time
+
+
+def _chunk_coverage(outcome: SessionOutcome) -> dict[str, Any]:
+    """Per-chunk coverage latency for one session.
+
+    Returns a dict with ``status`` (``unavailable``, ``no_responses``,
+    ``final_only``, or ``measured``), ``source``, ``latencies``, and
+    diagnostics.
+    """
+    sends = outcome.chunk_send_times_s
+    receives = outcome.response_receive_times_s
+    found: dict[str, Any] = {
+        "status": "unavailable",
+        "source": None,
+        "latencies": [],
+        "n_chunks": 0,
+        "n_uncovered": 0,
+        "n_by_final": 0,
+        "n_responses": 0,
+        "n_bursts": 0,
+        "n_text_repeats": 0,
+        "flags_inferred": False,
+    }
+    if sends is None or receives is None or not sends:
+        return found
+    burst_gap = float(d.CHUNK_LATENCY_BURST_GAP_S)
+    texts = outcome.interim_texts or []
+    found["n_responses"] = len(receives)
+    found["n_bursts"] = sum(
+        1
+        for index in range(1, len(receives))
+        if receives[index] - receives[index - 1] < burst_gap
+    )
+    found["n_text_repeats"] = sum(
+        1 for index in range(1, len(texts)) if texts[index] == texts[index - 1]
+    )
+    found["n_chunks"] = len(sends)
+    if not receives:
+        # Chunks went out and nothing came back (an error or timeout before
+        # the first response). That says nothing about where coverage came
+        # from, so it is its own status, not a coverage source.
+        found["status"] = "no_responses"
+        found["n_uncovered"] = len(sends)
+        return found
+    flags, inferred = _response_flags(outcome, len(receives))
+    found["flags_inferred"] = inferred
+    if receives and all(flags):
+        found["status"] = "final_only"
+        return found
+    ends = _chunk_ends(outcome, len(sends))
+    frontier = _trusted_frontier(outcome, receives, flags)
+    covered: list[float] = []
+    for received in receives:
+        value = frontier.get(received) if frontier is not None else None
+        if value is None:
+            last = bisect.bisect_right(sends, received) - 1
+            value = ends[last] if last >= 0 else 0.0
+        covered.append(value)
+    latencies: list[float] = []
+    for index, sent in enumerate(sends):
+        hit = next(
+            (
+                j
+                for j, received in enumerate(receives)
+                if received >= sent
+                and covered[j] >= ends[index] - _COVER_EPSILON_S
+            ),
+            None,
+        )
+        if hit is None:
+            found["n_uncovered"] += 1
+            continue
+        latencies.append(receives[hit] - sent)
+        found["n_by_final"] += int(flags[hit])
+    found["status"] = "measured"
+    found["source"] = (
+        "audio_processed" if frontier is not None else "send_watermark"
+    )
+    found["latencies"] = latencies
+    return found
+
+
+def _chunk_latency(
+    outcomes: list[SessionOutcome],
+    method: str,
+    *,
+    mode: str = d.MODE_STREAMING,
+    pacing: bool = True,
+) -> dict[str, Any]:
+    """Reduce per-chunk coverage latency (``chunk_latency_s``)."""
+    sessions = [_chunk_coverage(outcome) for outcome in outcomes]
+    by_source: dict[str, int] = {
+        "audio_processed": 0,
+        "send_watermark": 0,
+        "final_only": 0,
+        "no_responses": 0,
+        "unavailable": 0,
+    }
+    samples: list[float] = []
+    with_measure = 0
+    for item in sessions:
+        if item["status"] == "measured":
+            by_source[item["source"]] += 1
+            if item["latencies"]:
+                with_measure += 1
+                samples.extend(item["latencies"])
+        else:
+            by_source[item["status"]] += 1
+    measured = by_source["audio_processed"] + by_source["send_watermark"]
+    if mode == d.MODE_OFFLINE:
+        availability = "not_applicable"
+        reason: str | None = d.MODE_IS_OFFLINE_REASON
+        samples = []
+    elif not pacing:
+        # Unpaced, every chunk leaves at about once, so coverage collapses
+        # to first-response-minus-send. NVIDIA's client prints no latency
+        # without --simulate_realtime; mirror riva_client_compat_s.
+        availability = "not_applicable"
+        reason = d.RIVA_CLIENT_COMPAT_NOT_PACED_REASON
+        samples = []
+    elif measured == 0 and by_source["final_only"]:
+        availability = "final_only"
+        reason = d.CHUNK_LATENCY_FINAL_ONLY_REASON
+        samples = []
+    elif measured == 0:
+        availability = "unavailable"
+        reason = (
+            d.CHUNK_LATENCY_NO_RESPONSES_REASON
+            if by_source["no_responses"]
+            else d.CHUNK_LATENCY_UNAVAILABLE_REASON
+        )
+    elif not samples:
+        availability = "no_samples"
+        reason = None
+    elif by_source["send_watermark"]:
+        availability = "measured_lower_bound"
+        reason = None
+    else:
+        availability = "measured"
+        reason = None
+    if reason is None and by_source["no_responses"]:
+        reason = d.CHUNK_LATENCY_NO_RESPONSES_REASON
+    elif reason is None and (
+        by_source["final_only"] or by_source["unavailable"]
+    ):
+        reason = (
+            d.CHUNK_LATENCY_FINAL_ONLY_REASON
+            if by_source["final_only"]
+            else d.CHUNK_LATENCY_UNAVAILABLE_REASON
+        )
+    not_applicable = availability == "not_applicable"
+    if not_applicable:
+        with_measure = 0
+    if not_applicable:
+        source: str | None = None
+    elif by_source["audio_processed"] and by_source["send_watermark"]:
+        source = "mixed"
+    elif by_source["audio_processed"]:
+        source = "audio_processed"
+    elif by_source["send_watermark"]:
+        source = "send_watermark"
+    else:
+        source = None
+    stats = _percentiles(samples, method) if samples else _blank_stats()
+    return {
+        "name": "chunk_latency_s",
+        "label": d.CHUNK_LATENCY_LABEL,
+        "clock": d.CHUNK_LATENCY_CLOCK,
+        "definition": d.CHUNK_LATENCY_DEFINITION,
+        "percentile_method": method,
+        "availability": availability,
+        "reason": reason,
+        "coverage_source": source,
+        "unit": "s",
+        **stats,
+        "n_with_measure": with_measure,
+        "n_total": len(outcomes),
+        "n_samples": len(samples),
+        "n_sessions_by_coverage": by_source,
+        "n_chunks": sum(item["n_chunks"] for item in sessions),
+        "n_chunks_uncovered": sum(item["n_uncovered"] for item in sessions),
+        "n_chunks_covered_by_final": sum(
+            item["n_by_final"] for item in sessions
+        ),
+        "n_responses": sum(item["n_responses"] for item in sessions),
+        "n_bursts": sum(item["n_bursts"] for item in sessions),
+        "n_text_repeats": sum(item["n_text_repeats"] for item in sessions),
+        "n_sessions_final_flags_inferred": sum(
+            int(item["flags_inferred"]) for item in sessions
+        ),
+        "final_flags_inferred_definition": (
+            d.CHUNK_LATENCY_FINAL_FLAGS_INFERRED
+        ),
+        "population_definition": d.POPULATION_DEFINITION,
+    }
+
+
+def _server_audio_rtfx(
+    outcomes: list[SessionOutcome], *, wall_span_s: float, mode: str
+) -> dict[str, Any]:
+    """Offline throughput on the server's ``audio_processed`` sum."""
+    block: dict[str, Any] = {
+        "name": "server_audio_rtfx",
+        "clock": d.SERVER_AUDIO_RTFX_CLOCK,
+        "definition": d.SERVER_AUDIO_RTFX_DEFINITION,
+        "availability": "not_applicable",
+        "reason": "mode_is_streaming",
+        "value": None,
+        "server_audio_s": None,
+        "clip_audio_s": None,
+        "gap_vs_clip": None,
+        "mismatch": None,
+        "mismatch_tolerance": float(d.SERVER_AUDIO_RTFX_MISMATCH_TOLERANCE),
+        "n_completed": 0,
+        "n_without_server_audio": 0,
+        "benchmark_span_s": wall_span_s,
+    }
+    if mode != d.MODE_OFFLINE:
+        return block
+    completed = [item for item in outcomes if is_completed(item)]
+    values = [
+        item.protocol_extras.get("server_audio_processed_s")
+        for item in completed
+    ]
+    present = [
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    ]
+    block["n_completed"] = len(completed)
+    block["n_without_server_audio"] = len(completed) - len(present)
+    if not completed or len(present) != len(completed):
+        block["availability"] = "unavailable"
+        block["reason"] = d.SERVER_AUDIO_RTFX_UNAVAILABLE_REASON
+        return block
+    if wall_span_s <= 0:
+        block["availability"] = "unavailable"
+        block["reason"] = "benchmark_span_not_positive"
+        return block
+    server = sum(present)
+    clip = sum(item.audio_duration_s for item in completed)
+    block["availability"] = "measured"
+    block["reason"] = None
+    block["value"] = server / wall_span_s
+    block["server_audio_s"] = server
+    block["clip_audio_s"] = clip
+    if clip > 0:
+        gap = server / clip - 1.0
+        block["gap_vs_clip"] = gap
+        block["mismatch"] = abs(gap) > block["mismatch_tolerance"]
+    return block
+
+
+def _chunk_ends(outcome: SessionOutcome, count: int) -> list[float]:
+    """Cumulative audio end of each of ``count`` chunks, in seconds."""
+    step = outcome.chunk_ms / 1000
+    total = outcome.audio_duration_s
+    return [min(total, (index + 1) * step) for index in range(count)]
+
+
 def _pacing_lags(outcome: SessionOutcome) -> list[float] | None:
-    """Return per-chunk send lags, last chunk excluded, or ``None``."""
+    """Return every chunk's send lag behind origin + E_i, or ``None``."""
     sends = outcome.chunk_send_times_s
     if sends is None or not sends:
         return None
-    step = outcome.chunk_ms / 1000
-    first = sends[0]
+    origin, _source = _audio_origin(outcome, pacing=True)
+    if origin is None:
+        return None
+    ends = _chunk_ends(outcome, len(sends))
     return [
-        (sends[index] - first) - index * step for index in range(len(sends) - 1)
+        sends[index] - (origin + ends[index]) for index in range(len(sends))
     ]
+
+
+def _pacing_tolerance_s(chunk_ms: int) -> float:
+    return max(
+        float(d.PACING_FIDELITY_TOLERANCE_FLOOR_S),
+        float(d.PACING_FIDELITY_TOLERANCE_FRACTION) * chunk_ms / 1000,
+    )
 
 
 def _pacing_fidelity(
@@ -986,21 +1379,28 @@ def _pacing_fidelity(
     pacing = pacing and not offline
     lags: list[float] = []
     session_max: list[float] = []
-    tolerance = 0.0
+    tolerance: float | None = None
+    rank = 0
     absent = 0
     for outcome in outcomes:
         found = _pacing_lags(outcome) if pacing else None
         if found is None:
             absent += 1
             continue
-        tolerance = max(tolerance, outcome.chunk_ms / 1000)
         lags.extend(found)
-        session_max.append(max(found) if found else 0.0)
+        worst_here = max(found) if found else 0.0
+        session_max.append(worst_here)
+        allowed = _pacing_tolerance_s(outcome.chunk_ms)
+        tolerance = allowed if tolerance is None else min(tolerance, allowed)
+        if worst_here > outcome.chunk_ms / 1000:
+            rank = max(rank, 2)
+        elif worst_here > allowed:
+            rank = max(rank, 1)
     measured = len(session_max)
     reason: str | None = None
     if offline:
         availability = "not_applicable"
-        reason = "mode_is_offline"
+        reason = d.MODE_IS_OFFLINE_REASON
         validity = d.RTFX_VALIDITY_NOT_APPLICABLE
     elif not pacing:
         availability = "not_applicable"
@@ -1014,12 +1414,11 @@ def _pacing_fidelity(
         availability = "partial" if absent else "measured"
         if absent:
             reason = d.PACING_FIDELITY_UNAVAILABLE_REASON
-        worst = max(session_max)
         validity = (
-            d.RTFX_VALIDITY_PACED
-            if worst <= tolerance
-            else d.RTFX_VALIDITY_PACING_LAGGED
-        )
+            d.RTFX_VALIDITY_PACED,
+            d.RTFX_VALIDITY_PACING_LAGGED,
+            d.RTFX_VALIDITY_UNPACED,
+        )[rank]
     stats = _percentiles(lags, method) if lags else _blank_stats()
     return {
         "name": "pacing_fidelity",
@@ -1029,6 +1428,10 @@ def _pacing_fidelity(
         "clock": d.PACING_FIDELITY_CLOCK,
         "definition": d.PACING_FIDELITY_DEFINITION,
         "tolerance_definition": d.PACING_FIDELITY_TOLERANCE_DEFINITION,
+        "tolerance_s": tolerance,
+        "audio_clock_origin": _origin_counts(outcomes, pacing=True)
+        if pacing
+        else {},
         "percentile_method": method,
         "unit": "s",
         "lag_s": stats,

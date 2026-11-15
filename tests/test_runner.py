@@ -736,3 +736,26 @@ def test_runner_awaits_aclose_once_and_keeps_the_receipt(
         )
     assert adapter.closed == 1
     assert len(receipt["trials"]) == 2
+
+
+class _FailingClock(AdvancingClock):
+    """Raises from the trial loop itself, outside any adapter session."""
+
+    def monotonic(self) -> float:
+        raise RuntimeError("trial failed")
+
+
+def test_runner_closes_the_adapter_when_a_trial_raises(tmp_path: Path) -> None:
+    config = _config()
+    adapter = _ClosingAdapter(config, fail_close=False)
+    with pytest.raises(RuntimeError, match="trial failed"):
+        asyncio.run(
+            run_benchmark(
+                config,
+                adapter=adapter,
+                clock=_FailingClock(1.0),
+                materialize_dir=tmp_path,
+                env={},
+            )
+        )
+    assert adapter.closed == 1

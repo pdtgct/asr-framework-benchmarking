@@ -8,6 +8,7 @@ finding. Cross-cadence transcript agreement is not computed.
 
 from __future__ import annotations
 
+import statistics
 from typing import Any
 
 from asrbench.config import ConfigError, config_from_mapping, validate
@@ -17,8 +18,10 @@ from asrbench.definitions import (
     NATIVE_LATENCY_CLOCK,
     NVIDIA_OFFLINE_ROW_DEFINITION,
     NVIDIA_STREAMING_ROW_DEFINITION,
+    NVIDIA_TRIAL_STD_DEFINITION,
     PERCENTILE_METHOD_FLOOR_INDEX,
     RTFX_VALIDITY_NOT_APPLICABLE,
+    RTFX_VALIDITY_PACED,
     SUSTAINED_STREAMS_DEFINITION,
     VLLM_FORMAT_NOTE,
 )
@@ -429,18 +432,38 @@ NVIDIA_TABLE_COLUMNS = (
     "p95_ms",
     "p99_ms",
     "throughput_rtfx",
+    "latency_source",
+    "comparable",
+    "not_comparable",
     "compat_status",
     "trials_measured",
     "percentile_method",
-    "comparable",
     "pacing_validity",
+    "interim_results",
+    "word_time_offsets",
+    "iterations_per_lane",
     "trailing_extra_ignored",
     "intermediate_avg_ms",
     "final_avg_ms",
+    "finalization_p50_ms",
+    "avg_ms_std",
+    "p50_ms_std",
+    "p90_ms_std",
+    "p95_ms_std",
+    "p99_ms_std",
+    "throughput_rtfx_std",
+    "throughput_rtfx_server",
+    "throughput_server_gap",
     "engine_version",
     "nim_profile_id",
     "nim_tags_selector",
 )
+#: ``latency_source`` values a comparable streaming row may carry.
+NVIDIA_COMPARABLE_LATENCY_SOURCES = (
+    "riva_compat",
+    "chunk_coverage/audio_processed",
+)
+_MIN_ITERATIONS_PER_LANE = 3
 
 
 def _identity_columns(receipt: dict[str, Any]) -> dict[str, Any]:
@@ -461,16 +484,73 @@ def _identity_columns(receipt: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _numbers(values: list[object]) -> list[float]:
+    return [
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    ]
+
+
+def _std(values: list[object]) -> float | None:
+    present = _numbers(values)
+    return statistics.stdev(present) if len(present) >= 2 else None
+
+
+def _latency_choice(
+    reductions: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Pick the block that fills the latency columns.
+
+    Returns the ``latency_source`` name, the per-trial blocks it read,
+    and the trials of those blocks that carry numbers.
+    """
+    compat = [item["riva_client_compat_s"] for item in reductions]
+    compat_measured = [
+        item for item in compat if item["availability"] == "measured"
+    ]
+    if compat and len(compat_measured) == len(compat):
+        return "riva_compat", compat, compat_measured
+    chunk = [
+        item["chunk_latency_s"]
+        for item in reductions
+        if "chunk_latency_s" in item
+    ]
+    states = {item["availability"] for item in chunk}
+    # A trial where a session sent chunks and got no response carries
+    # numbers but does not count as measured, as an invalid compat trial.
+    answered = [
+        item
+        for item in chunk
+        if not (item.get("n_sessions_by_coverage") or {}).get("no_responses")
+    ]
+    if chunk and len(chunk) == len(reductions):
+        if states == {"measured"}:
+            return "chunk_coverage/audio_processed", chunk, answered
+        if states <= {"measured", "measured_lower_bound"}:
+            return "chunk_coverage/send_watermark", chunk, answered
+    if compat_measured:
+        return "riva_compat", compat, compat_measured
+    if chunk and states == {"final_only"}:
+        return "n/a:final_only", chunk, []
+    return "none", compat, []
+
+
 def nvidia_streaming_row(
     receipt: dict[str, Any], source: str
 ) -> dict[str, Any]:
     """Project one receipt onto NVIDIA's streaming table row.
 
-    Latency columns are ``riva_client_compat_s`` in milliseconds, each the
-    mean over trials whose compat statistic was measured. Throughput is
-    the trial mean of ``aggregate_rtfx``. ``comparable`` is true only when
-    every trial measured the statistic and the percentile policy is
-    ``floor_index``, NVIDIA's ``sorted[floor(q * n / 100)]``.
+    Latency columns are ``riva_client_compat_s`` in milliseconds when
+    every trial measured it, each the mean over trials. When the server
+    is not one response per chunk they fall back to ``chunk_latency_s``
+    and ``latency_source`` says so; a final-only server leaves them
+    empty. Throughput is the trial mean of ``aggregate_rtfx``.
+    ``comparable`` requires a comparable latency source on every trial,
+    ``floor_index`` percentiles (NVIDIA's ``sorted[floor(q * n / 100)]``),
+    ``paced`` pacing on every trial, interims and word offsets off, and
+    at least three iterations per lane. ``not_comparable`` names each
+    gate that failed.
 
     An offline receipt is projected by :func:`nvidia_offline_row`.
 
@@ -487,27 +567,30 @@ def nvidia_streaming_row(
     method = receipt["resolved_config"]["run"]["percentile_method"]
     reductions = [trial["reduction"] for trial in receipt["trials"]]
     compat = [item["riva_client_compat_s"] for item in reductions]
-    measured = [item for item in compat if item["availability"] == "measured"]
     statuses = sorted({item["availability"] for item in compat})
-    row: dict[str, Any] = {
-        "source": source,
-        "mode": workload["mode"],
-        "chunk_ms": workload["chunk_ms"],
-        "streams": workload["lanes"],
-    }
+    latency_source, blocks, measured = _latency_choice(reductions)
+    row: dict[str, Any] = {name: None for name in NVIDIA_TABLE_COLUMNS}
+    row.update(
+        {
+            "source": source,
+            "mode": workload["mode"],
+            "chunk_ms": workload["chunk_ms"],
+            "streams": workload["lanes"],
+        }
+    )
     for column, stat in _NVIDIA_STATS:
-        row[column] = _ms(_mean_of([item[stat] for item in measured]))
-    row["throughput_rtfx"] = _mean_of(
-        [item["aggregate_rtfx"]["value"] for item in reductions]
-    )
+        values: list[object] = [item[stat] for item in measured]
+        row[column] = _ms(_mean_of(values))
+        row[f"{column}_std"] = _ms(_std(values))
+    throughput: list[object] = [
+        item["aggregate_rtfx"]["value"] for item in reductions
+    ]
+    row["throughput_rtfx"] = _mean_of(throughput)
+    row["throughput_rtfx_std"] = _std(throughput)
+    row["latency_source"] = latency_source
     row["compat_status"] = ",".join(statuses)
-    row["trials_measured"] = f"{len(measured)}/{len(compat)}"
+    row["trials_measured"] = f"{len(measured)}/{len(blocks)}"
     row["percentile_method"] = method
-    row["comparable"] = (
-        bool(compat)
-        and len(measured) == len(compat)
-        and method == PERCENTILE_METHOD_FLOOR_INDEX
-    )
     pacing = sorted(
         {
             item.get("pacing_fidelity", {}).get("validity", "absent")
@@ -515,6 +598,29 @@ def nvidia_streaming_row(
         }
     )
     row["pacing_validity"] = ",".join(pacing)
+    interims = workload.get("interim_results")
+    offsets = workload.get("enable_word_time_offsets")
+    iterations = workload.get("iterations")
+    row["interim_results"] = interims
+    row["word_time_offsets"] = offsets
+    row["iterations_per_lane"] = iterations
+    gaps: list[str] = []
+    if latency_source not in NVIDIA_COMPARABLE_LATENCY_SOURCES:
+        gaps.append("latency_source")
+    elif not blocks or len(measured) != len(blocks):
+        gaps.append("trials_measured")
+    if method != PERCENTILE_METHOD_FLOOR_INDEX:
+        gaps.append("percentile_method")
+    if pacing != [RTFX_VALIDITY_PACED]:
+        gaps.append("pacing_validity")
+    if interims is not False:
+        gaps.append("interim_results")
+    if offsets is not False:
+        gaps.append("word_time_offsets")
+    if not isinstance(iterations, int) or iterations < _MIN_ITERATIONS_PER_LANE:
+        gaps.append("iterations_per_lane")
+    row["comparable"] = bool(reductions) and not gaps
+    row["not_comparable"] = ",".join(gaps)
     row["trailing_extra_ignored"] = sum(
         item.get("n_trailing_extra_ignored", 0) for item in compat
     )
@@ -522,16 +628,24 @@ def nvidia_streaming_row(
         ("intermediate_avg_ms", "riva_client_compat_intermediate_s"),
         ("final_avg_ms", "riva_client_compat_final_s"),
     ):
-        blocks = [item[key] for item in reductions if key in item]
+        split = [item[key] for item in reductions if key in item]
         row[column] = _ms(
             _mean_of(
                 [
                     block["mean"]
-                    for block in blocks
+                    for block in split
                     if block["availability"] == "measured"
                 ]
             )
         )
+    row["finalization_p50_ms"] = _ms(
+        _mean_of(
+            [
+                (item.get("finalization_s") or {}).get("p50")
+                for item in reductions
+            ]
+        )
+    )
     row.update(_identity_columns(receipt))
     return row
 
@@ -539,11 +653,14 @@ def nvidia_streaming_row(
 def nvidia_offline_row(receipt: dict[str, Any], source: str) -> dict[str, Any]:
     """Project one offline receipt onto NVIDIA's offline row.
 
-    ``streams`` is parallel requests (lanes). Latency columns are the
-    trial mean of ``finalization_s`` in ms: for riva-grpc offline that is
-    the unary request latency. ``compat_status`` names whether every
-    request completed, the condition under which ``riva_asr_client``
-    prints throughput at all.
+    ``streams`` is parallel requests (lanes). Throughput is the trial
+    mean of ``aggregate_rtfx`` (clip audio), with the server's
+    ``audio_processed`` sum beside it and the gap between them. Latency
+    columns are the trial mean of ``finalization_s`` in ms, the unary
+    request latency, and ``latency_source`` marks them asrbench-only:
+    NVIDIA's offline tables have no latency columns. ``compat_status``
+    names whether every request completed, the condition under which
+    ``riva_asr_client`` prints throughput at all.
 
     Args:
         receipt: An offline receipt.
@@ -561,19 +678,34 @@ def nvidia_offline_row(receipt: dict[str, Any], source: str) -> dict[str, Any]:
         if item["counts"]["attempted"] > 0
         and item["counts"]["completed"] == item["counts"]["attempted"]
     ]
-    row: dict[str, Any] = {
-        "source": source,
-        "mode": "offline",
-        "chunk_ms": None,
-        "streams": workload["lanes"],
-    }
-    for column, stat in _NVIDIA_STATS:
-        row[column] = _ms(
-            _mean_of([item["finalization_s"][stat] for item in complete])
-        )
-    row["throughput_rtfx"] = _mean_of(
-        [item["aggregate_rtfx"]["value"] for item in reductions]
+    row: dict[str, Any] = {name: None for name in NVIDIA_TABLE_COLUMNS}
+    row.update(
+        {
+            "source": source,
+            "mode": "offline",
+            "chunk_ms": None,
+            "streams": workload["lanes"],
+        }
     )
+    for column, stat in _NVIDIA_STATS:
+        values: list[object] = [
+            item["finalization_s"][stat] for item in complete
+        ]
+        row[column] = _ms(_mean_of(values))
+        row[f"{column}_std"] = _ms(_std(values))
+    throughput: list[object] = [
+        item["aggregate_rtfx"]["value"] for item in reductions
+    ]
+    row["throughput_rtfx"] = _mean_of(throughput)
+    row["throughput_rtfx_std"] = _std(throughput)
+    server = [item.get("server_audio_rtfx") or {} for item in reductions]
+    row["throughput_rtfx_server"] = _mean_of(
+        [block.get("value") for block in server]
+    )
+    row["throughput_server_gap"] = _mean_of(
+        [block.get("gap_vs_clip") for block in server]
+    )
+    row["latency_source"] = "asrbench_only/finalization_s"
     row["compat_status"] = (
         "all_requests_completed"
         if reductions and len(complete) == len(reductions)
@@ -581,15 +713,20 @@ def nvidia_offline_row(receipt: dict[str, Any], source: str) -> dict[str, Any]:
     )
     row["trials_measured"] = f"{len(complete)}/{len(reductions)}"
     row["percentile_method"] = method
-    row["comparable"] = (
-        bool(reductions)
-        and len(complete) == len(reductions)
-        and method == PERCENTILE_METHOD_FLOOR_INDEX
-    )
+    gaps: list[str] = []
+    if not reductions or len(complete) != len(reductions):
+        gaps.append("requests_failed")
+    if method != PERCENTILE_METHOD_FLOOR_INDEX:
+        gaps.append("percentile_method")
+    if any(block.get("mismatch") is True for block in server):
+        gaps.append("server_audio_mismatch")
+    row["comparable"] = bool(reductions) and not gaps
+    row["not_comparable"] = ",".join(gaps)
     row["pacing_validity"] = RTFX_VALIDITY_NOT_APPLICABLE
-    row["trailing_extra_ignored"] = None
-    row["intermediate_avg_ms"] = None
-    row["final_avg_ms"] = None
+    row["interim_results"] = workload.get("interim_results")
+    row["word_time_offsets"] = workload.get("enable_word_time_offsets")
+    row["iterations_per_lane"] = workload.get("iterations")
+    row["finalization_p50_ms"] = row["p50_ms"]
     row.update(_identity_columns(receipt))
     return row
 
@@ -603,7 +740,12 @@ def nvidia_table_tsv(rows: list[dict[str, Any]]) -> str:
     Returns:
         A comment, a header, and one line per row.
     """
-    lines = ["# " + NVIDIA_STREAMING_ROW_DEFINITION]
+    lines = [
+        "# "
+        + NVIDIA_STREAMING_ROW_DEFINITION
+        + " "
+        + NVIDIA_TRIAL_STD_DEFINITION
+    ]
     if any(row.get("mode") == "offline" for row in rows):
         lines.append("# " + NVIDIA_OFFLINE_ROW_DEFINITION)
     lines.append("\t".join(NVIDIA_TABLE_COLUMNS))

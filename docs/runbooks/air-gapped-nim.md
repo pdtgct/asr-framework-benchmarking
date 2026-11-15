@@ -371,7 +371,7 @@ same call at the start of every session and stores the result on each outcome as
 | `--checkpoint-id` | `modelUrl` without `ngc://` and without `:<tag>` | hard |
 | `--checkpoint-revision` | the `<tag>` from `modelUrl` | hard |
 | `--checkpoint-source` | `ngc` (needs a revision), or `unverified` if you cannot read the tag | hard |
-| `--nim-metadata` | `identity/nim-metadata.json`, or `$NIM_HTTP` to read it live | sets the next four rows; explicit flags win, and it wins over the preset and `ASRBENCH_*` variables. The live read goes through `urllib`, which honours `http_proxy`/`https_proxy` and checks HTTPS against the system CA store only; behind a proxy or a private CA, use the saved file |
+| `--nim-metadata` | `identity/nim-metadata.json`, or `$NIM_HTTP` to read it live | sets the next four rows; explicit flags win, and it wins over the preset and `ASRBENCH_*` variables. The live read goes through `urllib`, which honours `http_proxy`/`https_proxy` and checks HTTPS against the system CAs (or `SSL_CERT_FILE`/`SSL_CERT_DIR`); set `no_proxy` for the NIM host, or use the saved file |
 | `--engine-name` | `nim` | comparison axis, recorded |
 | `--engine-version` | `version` from `/v1/metadata` | recorded |
 | `--nim-profile-id` | `selectedModelProfileId` from `/v1/metadata` | recorded (`identity.recorded.nim`) |
@@ -805,9 +805,9 @@ run twice or on two engines, not for neighbouring stream counts. `--force
 
 `asrbench nvidia-table` prints one row per receipt in NVIDIA's streaming table
 layout (`NVIDIA_STREAMING_ROW_DEFINITION`): stream count, latency avg/p50/p90/
-p95/p99 in milliseconds (each the trial mean of `riva_client_compat_s`), and
+p95/p99 in milliseconds (each a trial mean; `latency_source` says of what), and
 throughput (the trial mean of `aggregate_rtfx`). Extra columns to the right say
-whether the row may be compared.
+whether the row may be compared and why not.
 
 ```bash
 asrbench nvidia-table receipts/$RUN/c160-n*.json --out exports/$RUN/nvidia-layout.tsv
@@ -815,17 +815,23 @@ asrbench nvidia-table receipts/$RUN/c160-n*.json --out exports/$RUN/nvidia-layou
 
 | Column | Meaning |
 |---|---|
-| `compat_status` | Distinct `riva_client_compat_s` availabilities across trials. Must be `measured`. |
-| `trials_measured` | Trials whose compat statistic was measured, out of all trials. Must be `3/3` for a three-trial row. |
-| `comparable` | `true` only when every trial measured the statistic and `percentile_method` is `floor_index`. |
-| `pacing_validity` | Distinct `pacing_fidelity.validity` across trials. `paced` is required; `pacing_disabled` belongs to offline-style runs only. |
+| `latency_source` | What filled the latency columns. `riva_compat` is `riva_client_compat_s`, NVIDIA's `recv[i] - send[i]`. When the server is not one response per chunk, `chunk_coverage/audio_processed` or `chunk_coverage/send_watermark` is `chunk_latency_s`, per-chunk coverage latency (`CHUNK_LATENCY_DEFINITION`); the watermark form is a lower bound. `n/a:final_only` means the server sent finals only, so there is no latency column. |
+| `comparable` | `true` only when `latency_source` is `riva_compat` or `chunk_coverage/audio_processed` on every trial, `percentile_method` is `floor_index`, `pacing_validity` is `paced`, `interim_results` and `word_time_offsets` are `false`, and `iterations_per_lane` is at least 3. |
+| `not_comparable` | Each gate above that failed, comma-separated. Empty when `comparable` is `true`. |
+| `compat_status` | Distinct `riva_client_compat_s` availabilities across trials. `not_applicable` means the cell was not paced. |
+| `trials_measured` | Trials whose latency source was measured, out of all trials. Must be `3/3` for a three-trial row. |
+| `pacing_validity` | Distinct `pacing_fidelity.validity` across trials: `paced` (every chunk within max(5 ms, 5% of chunk) of its due time), `pacing_lagged` (within one chunk), `unpaced` (beyond), or `pacing_disabled`. Only `paced` is comparable. |
+| `interim_results`, `word_time_offsets`, `iterations_per_lane` | The NVIDIA protocol knobs the row was run with. NVIDIA runs interims off, word offsets off, three iterations per stream. |
 | `trailing_extra_ignored` | Sessions whose one trailing extra response was ignored, as NVIDIA's client does. Informational. |
-| `intermediate_avg_ms`, `final_avg_ms` | Trial means of the `is_final` split. Not in NVIDIA's tables; matches the client's other two lists. |
+| `intermediate_avg_ms`, `final_avg_ms` | Trial means of the `is_final` split of `riva_client_compat_s`: NVIDIA's intermediate and final latency by code. Not in NVIDIA's tables. |
+| `finalization_p50_ms` | asrbench's `finalization_s` (last audio sent to final), beside `final_avg_ms` so neither is read as the other. NVIDIA's client drops the trailing final, so its final latency is not this. |
+| `*_std` | Sample standard deviation over trials (`NVIDIA_TRIAL_STD_DEFINITION`). NVIDIA rounds by it. |
+| `throughput_rtfx_server`, `throughput_server_gap` | Offline rows: the server's `audio_processed` sum over the span, NVIDIA's numerator, and its relative gap from the clip-duration throughput. A gap above 0.5% puts `server_audio_mismatch` in `not_comparable`. Offline latency columns are `asrbench_only`. |
 | `engine_version`, `nim_profile_id`, `nim_tags_selector` | Which NIM answered, from the receipt. Match them to the profile NVIDIA's row names. |
 
-Put a row next to NVIDIA's only when `comparable` is `true` and
-`pacing_validity` is `paced`. Anything else means the latency columns are partial
-or empty.
+Put a row next to NVIDIA's only when `comparable` is `true`. Anything else means
+the latency columns are partial, a lower bound, or empty, and `not_comparable`
+says why.
 
 ## 9. Side-by-side comparison template
 

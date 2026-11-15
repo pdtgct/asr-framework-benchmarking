@@ -589,6 +589,9 @@ class RivaGrpcAdapter:
                 )
                 _progress(progress_callback, request.label, "barrier.released")
             start = time.monotonic()
+            # Audio t=0 on the client clock: chunk i is due at start + E_i,
+            # its cumulative audio end, so offset a maps to start + a.
+            outcome.audio_clock_origin_s = start
             scheduled_ms = 0.0
             for chunk in chunks:
                 chunk_ms = len(chunk) / BYTES_PER_SAMPLE / SAMPLE_RATE * 1000
@@ -992,6 +995,7 @@ def _mark_lane_unavailable(
     outcome.chunk_send_times_s = None
     outcome.response_receive_times_s = None
     outcome.response_final_flags = None
+    outcome.audio_clock_origin_s = None
     outcome.timed_out = False
     outcome.error_code = code
     outcome.error_detail = detail

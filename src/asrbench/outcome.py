@@ -203,3 +203,9 @@ class SessionOutcome:
     #: that response carried a result with ``is_final`` true. ``None``
     #: means the adapter did not record it.
     response_final_flags: list[bool] | None = None
+    #: Client-monotonic wall time of audio t=0: the paced schedule's
+    #: origin, so audio offset ``a`` was capturable at origin + ``a``.
+    #: ``None`` means the adapter did not record it; reducers then derive
+    #: one and name the derivation. See
+    #: :data:`asrbench.definitions.AUDIO_CLOCK_ORIGIN_DEFINITION`.
+    audio_clock_origin_s: float | None = None

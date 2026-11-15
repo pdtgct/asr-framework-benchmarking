@@ -19,7 +19,11 @@ from asrbench.adapters.mock import MOCK_E2E_CLOCK
 from asrbench.compare import compare_receipts
 from asrbench.config import ConfigError, resolve
 from asrbench.identity import FixedProbe, GitState, collect_hardware
-from asrbench.outcome import AudioProgressSample, WordTimingSample
+from asrbench.outcome import (
+    AudioProgressSample,
+    SessionOutcome,
+    WordTimingSample,
+)
 from asrbench.reducers import reduce_trial
 from asrbench.runner import AdvancingClock, run_benchmark
 from asrbench.spec import PassPolicy
@@ -264,6 +268,7 @@ def test_audio_processed_monotonicity_gate() -> None:
 def test_word_latency_keeps_a_negative_and_e2e_uses_the_span() -> None:
     outcome = session(audio_duration_s=1.6)
     outcome.first_audio_sent_s = 0.5
+    outcome.audio_clock_origin_s = 0.5
     outcome.final_received_s = 2.5
     timing: WordTimingSample = {
         "end_time_s": 1.0,
@@ -275,6 +280,7 @@ def test_word_latency_keeps_a_negative_and_e2e_uses_the_span() -> None:
     assert words["availability"] == "measured"
     assert words["minimum"] == pytest.approx(-0.3)
     assert words["p50"] == pytest.approx(-0.3)
+    assert words["audio_clock_origin"] == {"schedule_origin": 1}
     e2e = reduction["e2e_rtfx"]
     assert e2e["mean"] == pytest.approx(1.6 / 2.0)
     assert e2e["n_with_measure"] == 1
@@ -343,22 +349,22 @@ def test_riva_client_compat_accepts_chunks_or_chunks_plus_one() -> None:
 
 def test_frontier_lag_uses_the_processed_frontier() -> None:
     outcome = session(label="lag")
-    outcome.first_audio_sent_s = 5.0
+    outcome.audio_clock_origin_s = 5.0
     outcome.audio_progress = _progress([(0.2, 5.1, 0.4)])
     lag = _reduce([outcome])["frontier_lag_s"]
-    # 5.1 - (5.0 + 0.2). The sent duration 0.4 is not the frontier.
+    # 5.1 - (origin 5.0 + 0.2). The sent duration 0.4 is not the frontier.
     assert lag["availability"] == "measured"
     assert lag["minimum"] == pytest.approx(-0.1)
     assert lag["clock"].endswith("response_receive_minus_audio_processed")
 
     behind = session(label="behind")
-    behind.first_audio_sent_s = 0.0
+    behind.audio_clock_origin_s = 0.0
     behind.audio_progress = _progress([(0.2, 1.6, 1.6)])
     lagged = _reduce([behind])["frontier_lag_s"]
     assert lagged["minimum"] == pytest.approx(1.4)
 
     decreased = session(label="drop")
-    decreased.first_audio_sent_s = 0.0
+    decreased.audio_clock_origin_s = 0.0
     decreased.audio_progress = _progress([(1.0, 1.0, 0.2), (0.4, 1.5, 0.8)])
     bad = _reduce([decreased])["frontier_lag_s"]
     assert bad["availability"] == "invalid"
@@ -368,7 +374,7 @@ def test_frontier_lag_uses_the_processed_frontier() -> None:
     assert bad["n_total"] == 1
 
     other = session(label="ok")
-    other.first_audio_sent_s = 0.0
+    other.audio_clock_origin_s = 0.0
     other.audio_progress = _progress([(0.2, 0.3, 0.2)])
     poisoned = _reduce([decreased, other])["frontier_lag_s"]
     assert poisoned["availability"] == "invalid"
@@ -378,7 +384,7 @@ def test_frontier_lag_uses_the_processed_frontier() -> None:
 
     missing = _reduce([session(label="none")])["frontier_lag_s"]
     assert missing["availability"] == "unavailable"
-    assert missing["reason"] == "audio_processed_or_first_audio_absent"
+    assert missing["reason"] == "audio_processed_or_audio_clock_origin_absent"
     assert missing["n_total"] == 1
     assert missing["n_with_measure"] == 0
 
@@ -617,32 +623,44 @@ def test_riva_client_compat_splits_intermediate_and_final() -> None:
     assert split["reason"] == "response_final_flags_absent"
 
 
+def _traced(
+    label: str, sends: list[float], *, origin: float | None, audio_s: float
+) -> SessionOutcome:
+    outcome = session(label=label, audio_duration_s=audio_s)
+    outcome.chunk_ms = 100
+    outcome.chunk_send_times_s = sends
+    outcome.first_audio_sent_s = sends[0]
+    outcome.audio_clock_origin_s = origin
+    return outcome
+
+
 def test_pacing_fidelity_from_the_send_trace() -> None:
-    steady = session(label="steady")
-    steady.chunk_ms = 100
-    steady.chunk_send_times_s = [5.0, 5.1, 5.2, 5.3]
-    late = session(label="late")
-    late.chunk_ms = 100
-    # Chunk 2 is 50 ms late. The last chunk is not scored.
-    late.chunk_send_times_s = [7.0, 7.1, 7.25, 9.9]
-    reduced = _reduce([steady, late, session(label="none")], pacing=True)
+    steady = _traced("steady", [5.0, 5.1, 5.2, 5.3], origin=4.9, audio_s=1.6)
+    reduced = _reduce([steady, session(label="none")], pacing=True)
     block = reduced["pacing_fidelity"]
     assert block["availability"] == "partial"
-    assert block["n_with_measure"] == 2
-    assert block["n_total"] == 3
-    assert block["n_samples"] == 6
-    assert block["max_session_lag_s"] == pytest.approx(0.05)
+    assert block["n_with_measure"] == 1
+    assert block["n_total"] == 2
+    # Every chunk is scored, the last included.
+    assert block["n_samples"] == 4
+    assert block["max_session_lag_s"] == pytest.approx(0.0, abs=1e-9)
     assert block["validity"] == "paced"
+    assert block["tolerance_s"] == pytest.approx(0.005)
     assert reduced["streaming_rtfx"]["validity"] == "paced"
     names = {item["name"] for item in reduced["unavailable"]}
     assert "pacing_fidelity" not in names
 
-    behind = session(label="behind")
-    behind.chunk_ms = 100
-    behind.chunk_send_times_s = [1.0, 1.1, 1.45, 1.5]
+    # 50 ms late in the middle: past max(5 ms, 5 ms), within one chunk.
+    behind = _traced("behind", [1.0, 1.1, 1.25, 1.3], origin=0.9, audio_s=1.6)
     lagged = _reduce([behind], pacing=True)
     assert lagged["pacing_fidelity"]["validity"] == "pacing_lagged"
+    assert lagged["pacing_fidelity"]["max_session_lag_s"] == pytest.approx(0.05)
     assert lagged["streaming_rtfx"]["validity"] == "pacing_lagged"
+
+    # More than one chunk behind is unpaced.
+    far = _traced("far", [1.0, 1.1, 1.35, 1.4], origin=0.9, audio_s=1.6)
+    far_block = _reduce([far], pacing=True)["pacing_fidelity"]
+    assert far_block["validity"] == "unpaced"
 
     unpaced = _reduce([steady], pacing=False)["pacing_fidelity"]
     assert unpaced["availability"] == "not_applicable"
@@ -653,3 +671,57 @@ def test_pacing_fidelity_from_the_send_trace() -> None:
     assert (
         untraced["streaming_rtfx"]["validity"] == "pacing_fidelity_unavailable"
     )
+
+
+def test_pacing_fidelity_sees_a_late_first_chunk_and_the_last_chunk() -> None:
+    # Chunk 0 left 30 ms after it was due. Anchored on the schedule
+    # origin that is visible; anchored on the first send it was not.
+    late = _traced("late", [7.03, 7.1, 7.2, 7.3], origin=6.9, audio_s=1.6)
+    block = _reduce([late], pacing=True)["pacing_fidelity"]
+    assert block["max_session_lag_s"] == pytest.approx(0.03)
+    assert block["validity"] == "pacing_lagged"
+    assert block["audio_clock_origin"] == {"schedule_origin": 1}
+    derived = _traced(
+        "derived", [7.03, 7.1, 7.2, 7.3], origin=None, audio_s=1.6
+    )
+    fallback = _reduce([derived], pacing=True)["pacing_fidelity"]
+    assert fallback["audio_clock_origin"] == {"first_send_minus_first_chunk": 1}
+    # The short last chunk (50 ms of a 350 ms clip) is due at origin +
+    # 0.35. Sent at 1.40 it is 150 ms late: more than a chunk.
+    tail = _traced("tail", [1.0, 1.1, 1.2, 1.4], origin=0.9, audio_s=0.35)
+    block = _reduce([tail], pacing=True)["pacing_fidelity"]
+    assert block["n_samples"] == 4
+    assert block["max_session_lag_s"] == pytest.approx(0.15)
+    assert block["validity"] == "unpaced"
+
+
+def test_pacing_tolerance_scales_with_the_chunk() -> None:
+    big = session(label="big", audio_duration_s=5.0)
+    big.chunk_ms = 1120
+    big.audio_clock_origin_s = 0.0
+    # 50 ms late at 1120 ms chunks is within 5% (56 ms).
+    big.chunk_send_times_s = [1.12 + 0.05, 2.24, 3.36]
+    block = _reduce([big], pacing=True)["pacing_fidelity"]
+    assert block["tolerance_s"] == pytest.approx(0.056)
+    assert block["validity"] == "paced"
+
+
+def test_frontier_lag_is_anchored_on_audio_t0_not_first_send() -> None:
+    # Paced: chunk 0 (160 ms) leaves at origin + 0.16. A server that
+    # reports audio_processed = 0.16 the instant it arrives has zero lag.
+    outcome = session(label="anchor", audio_duration_s=1.6)
+    outcome.audio_clock_origin_s = 10.0
+    outcome.first_audio_sent_s = 10.16
+    outcome.audio_progress = _progress([(0.16, 10.16, 0.16)])
+    lag = _reduce([outcome])["frontier_lag_s"]
+    assert lag["minimum"] == pytest.approx(0.0, abs=1e-9)
+    assert lag["audio_clock_origin"] == {"schedule_origin": 1}
+    # An older outcome with no recorded origin derives the same origin
+    # when paced, instead of reading -chunk_ms.
+    outcome.audio_clock_origin_s = None
+    derived = _reduce([outcome], pacing=True)["frontier_lag_s"]
+    assert derived["minimum"] == pytest.approx(0.0, abs=1e-9)
+    assert derived["audio_clock_origin"] == {"first_send_minus_first_chunk": 1}
+    unpaced = _reduce([outcome], pacing=False)["frontier_lag_s"]
+    assert unpaced["minimum"] == pytest.approx(-0.16)
+    assert unpaced["audio_clock_origin"] == {"first_send": 1}

@@ -126,6 +126,7 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             )
             return
         sequence: list[tuple[str, float]] = []
+        received_s = 0.0
         with self._lock:
             self.streams.append(sequence)
         for request in request_iterator:
@@ -164,6 +165,24 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
                     )
                 elif len(audio_seen) == 2:
                     yield _frontier_response([(0.0, False, "")])
+            if self.mode == "paired-interims" and kind == "audio_content":
+                # A server taking two steps per client chunk that writes
+                # one interim per changed hypothesis: back-to-back pairs,
+                # the bring-up frontend's c1120-on-560 ms pattern.
+                audio_seen = [
+                    item for item in sequence if item[0] == "audio_content"
+                ]
+                yield _response(f"P{len(audio_seen)}A", final=False)
+                yield _response(f"P{len(audio_seen)}B", final=False)
+            if self.mode == "cadence-frontier" and kind == "audio_content":
+                # One interim every second chunk carrying audio_processed:
+                # the audio received so far, as Riva's "so far" frontier.
+                audio_seen = [
+                    item for item in sequence if item[0] == "audio_content"
+                ]
+                received_s += len(request.audio_content) / 2 / 16000
+                if len(audio_seen) % 2 == 0:
+                    yield _frontier_response([(received_s, False, "P")])
             if self.mode == "per-chunk" and kind == "audio_content":
                 # One interim per audio chunk, sent as soon as it arrives.
                 yield _response("P", final=False)
@@ -205,8 +224,10 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
             yield _results_response([("AB", True), ("C", True)])
         elif self.mode == "frontier":
             yield _frontier_response([(1.0, True, "HELLO")])
-        elif self.mode == "per-chunk-final-last":
+        elif self.mode in {"per-chunk-final-last", "paired-interims"}:
             yield _response(self.transcript, final=True)
+        elif self.mode == "cadence-frontier":
+            yield _frontier_response([(received_s, True, self.transcript)])
         elif self.mode == "per-chunk":
             # A trailing final: responses == chunks + 1.
             yield _response(self.transcript, final=True)
