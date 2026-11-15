@@ -192,7 +192,8 @@ def _add_nim_metadata_argument(parser: argparse.ArgumentParser) -> None:
         dest="nim_metadata",
         help="NIM /v1/metadata: a saved JSON file or the NIM HTTP URL; "
         "fills engine name and version, nim_profile_id, and nim_model_url. "
-        "Explicit flags win",
+        "Explicit flags win; metadata wins over the preset and ASRBENCH_* "
+        "variables for those fields",
     )
 
 

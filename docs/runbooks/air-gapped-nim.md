@@ -371,7 +371,7 @@ same call at the start of every session and stores the result on each outcome as
 | `--checkpoint-id` | `modelUrl` without `ngc://` and without `:<tag>` | hard |
 | `--checkpoint-revision` | the `<tag>` from `modelUrl` | hard |
 | `--checkpoint-source` | `ngc` (needs a revision), or `unverified` if you cannot read the tag | hard |
-| `--nim-metadata` | `identity/nim-metadata.json`, or `$NIM_HTTP` to read it live | sets the next four rows; explicit flags win |
+| `--nim-metadata` | `identity/nim-metadata.json`, or `$NIM_HTTP` to read it live | sets the next four rows; explicit flags win, and it wins over the preset and `ASRBENCH_*` variables. The live read goes through `urllib`, which honours `http_proxy`/`https_proxy` and checks HTTPS against the system CA store only; behind a proxy or a private CA, use the saved file |
 | `--engine-name` | `nim` | comparison axis, recorded |
 | `--engine-version` | `version` from `/v1/metadata` | recorded |
 | `--nim-profile-id` | `selectedModelProfileId` from `/v1/metadata` | recorded (`identity.recorded.nim`) |

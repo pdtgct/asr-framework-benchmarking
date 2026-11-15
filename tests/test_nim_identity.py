@@ -192,3 +192,16 @@ def test_bad_metadata_is_a_config_error(
     )
     assert code == 2
     assert "cannot read NIM metadata" in capsys.readouterr().err
+
+
+def test_table_engine_version_falls_back_to_server_version() -> None:
+    from asrbench.reporters import _identity_columns
+
+    receipt = {
+        "resolved_config": {
+            "target": {"engine_version": None, "server_version": "2.19.0"}
+        }
+    }
+    assert _identity_columns(receipt)["engine_version"] == "2.19.0"
+    receipt["resolved_config"]["target"]["engine_version"] = "1.4.0"
+    assert _identity_columns(receipt)["engine_version"] == "1.4.0"

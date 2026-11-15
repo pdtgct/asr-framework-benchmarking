@@ -9,6 +9,7 @@ Standard library only.
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -44,7 +45,13 @@ def load_nim_metadata(source: str) -> dict[str, Any]:
                 url, timeout=NIM_METADATA_TIMEOUT_S
             ) as response:
                 text = response.read().decode("utf-8")
-        except (urllib.error.URLError, OSError, UnicodeDecodeError) as error:
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,
+            OSError,
+            UnicodeDecodeError,
+            ValueError,
+        ) as error:
             raise ConfigError(
                 f"cannot read NIM metadata {url}: {error}"
             ) from None
