@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import bisect
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from asrbench import definitions as d
@@ -19,6 +19,10 @@ from asrbench.outcome import SessionOutcome
 from asrbench.percentile import percentile
 from asrbench.spec import PassPolicy
 from asrbench.wer import score_texts
+
+#: One reference for every session, one per materialized clip file name
+#: (a corpus manifest), or none.
+References = str | Mapping[str, str] | None
 
 _NORM_TEXT = {
     "engine_vs_own_oracle": d.ORACLE_NORMALIZATION_DEFINITION,
@@ -134,7 +138,7 @@ def reduce_trial(
     mode: str,
     pacing: bool,
     lanes: int,
-    reference: str | None,
+    reference: References,
     pass_policy: PassPolicy,
     percentile_method: str,
     warmup_excluded: int,
@@ -338,7 +342,7 @@ def summarize_trials(
     mode: str,
     pacing: bool,
     lanes: int,
-    reference: str | None,
+    reference: References,
     pass_policy: PassPolicy,
     percentile_method: str,
     warmup_excluded: int,
@@ -1693,7 +1697,7 @@ def _wer_block(
 
 def _wer(
     outcomes: list[SessionOutcome],
-    reference: str | None,
+    reference: References,
     policy: str,
     method: str,
 ) -> dict[str, Any]:
@@ -1734,8 +1738,9 @@ def _wer(
         block["_char_edits"] = 0
         return block
     for outcome in outcomes:
+        clip_reference = _reference_for(outcome, reference)
         if outcome.transcript is None:
-            blank = score_texts(reference, "", policy)
+            blank = score_texts(clip_reference, "", policy)
             n_failed += 1
             missing += blank.reference_tokens
             chars_missing += blank.reference_chars
@@ -1751,7 +1756,7 @@ def _wer(
                 )
             )
             continue
-        scored = score_texts(reference, outcome.transcript, policy)
+        scored = score_texts(clip_reference, outcome.transcript, policy)
         substitutions += scored.substitutions
         deletions += scored.deletions
         insertions += scored.insertions
@@ -1775,6 +1780,9 @@ def _wer(
                 missing=0,
             )
         )
+    if not isinstance(reference, str):
+        for outcome, row in zip(outcomes, utterances, strict=True):
+            row["clip_id"] = _clip_id(outcome.clip_name)
     micro_wer = _rate(
         substitutions + deletions + insertions + missing, reference_tokens
     )
@@ -1805,13 +1813,15 @@ def _wer(
         method=method,
         utterances=utterances,
     )
+    if not isinstance(reference, str):
+        block["corpus"] = _corpus_block(utterances, method, len(reference))
     block["_char_edits"] = char_edits
     return block
 
 
 def _pooled_wer(
     reductions: list[dict[str, Any]],
-    reference: str | None,
+    reference: References,
     pass_policy: PassPolicy,
     method: str,
 ) -> dict[str, Any]:
@@ -1873,7 +1883,7 @@ def _pooled_wer(
         availability, reason = "undefined", "reference_word_denominator_is_zero"
     else:
         availability, reason = "measured", None
-    return _wer_block(
+    pooled = _wer_block(
         policy=policy,
         availability=availability,
         reason=reason,
@@ -1893,6 +1903,102 @@ def _pooled_wer(
         method=method,
         utterances=rows,
     )
+    if reference is not None and not isinstance(reference, str):
+        pooled["corpus"] = _corpus_block(rows, method, len(reference))
+    return pooled
+
+
+def _clip_id(clip_name: str) -> str:
+    return clip_name.removesuffix(".wav")
+
+
+def _reference_for(outcome: SessionOutcome, reference: References) -> str:
+    """Return the reference one session is scored against.
+
+    Raises:
+        MeasurementError: A corpus session played a clip the manifest
+            does not name. That is a runner bug, never a zero.
+    """
+    if isinstance(reference, str):
+        return reference
+    if reference is None:
+        raise MeasurementError("no reference to score against")
+    try:
+        return reference[outcome.clip_name]
+    except KeyError as error:
+        raise MeasurementError(
+            f"{outcome.label} played {outcome.clip_name!r}, which the "
+            "manifest does not name"
+        ) from error
+
+
+def _corpus_block(
+    rows: list[dict[str, Any]], method: str, clip_count: int
+) -> dict[str, Any]:
+    """Reduce per-session rows to corpus and per-clip WER.
+
+    Corpus WER pools edits and reference words over every session; it is
+    the published-table number. The per-clip mean is secondary.
+    """
+    per_clip: dict[str, dict[str, int]] = {}
+    for row in rows:
+        clip = per_clip.setdefault(
+            str(row["clip_id"]),
+            {"sessions": 0, "edits": 0, "reference_tokens": 0, "missing": 0},
+        )
+        clip["sessions"] += 1
+        missing = int(row.get("deletions_from_missing_transcript", 0))
+        clip["missing"] += missing
+        clip["edits"] += (
+            int(row["substitutions"])
+            + int(row["deletions"])
+            + int(row["insertions"])
+            + missing
+        )
+        clip["reference_tokens"] += int(row["reference_tokens"])
+    clips = []
+    rates: list[float] = []
+    edits = words = 0
+    for clip_id, item in per_clip.items():
+        rate = _rate(item["edits"], item["reference_tokens"])
+        if rate is not None:
+            rates.append(rate)
+        edits += item["edits"]
+        words += item["reference_tokens"]
+        clips.append(
+            {
+                "clip_id": clip_id,
+                "sessions": item["sessions"],
+                "edits": item["edits"],
+                "reference_tokens": item["reference_tokens"],
+                "deletions_from_missing_transcript": item["missing"],
+                "wer": rate,
+            }
+        )
+    plays = [item["sessions"] for item in per_clip.values()]
+    return {
+        "definition": d.CORPUS_WER_DEFINITION,
+        "reduction": "pooled_errors_over_reference_words",
+        "corpus_wer": _rate(edits, words),
+        "edits": edits,
+        "reference_tokens": words,
+        "clip_count": clip_count,
+        "clips_scored": len(per_clip),
+        "complete": len(per_clip) == clip_count,
+        "plays_per_clip_min": min(plays) if plays else 0,
+        "plays_per_clip_max": max(plays) if plays else 0,
+        "balanced": bool(plays) and len(set(plays)) <= 1,
+        "per_clip_mean_wer": sum(rates) / len(rates) if rates else None,
+        "per_clip_mean_definition": d.PER_CLIP_MEAN_WER_DEFINITION,
+        "per_clip_wer": _rate_distribution(
+            name="per_clip_wer",
+            definition=d.PER_CLIP_MEAN_WER_DEFINITION,
+            method=method,
+            samples=rates,
+            n_total=len(per_clip),
+        ),
+        "clips": clips,
+    }
 
 
 def _rate(edits: int, denominator: int) -> float | None:
@@ -2118,7 +2224,7 @@ def _conjunction(
     counts: dict[str, Any],
     metrics: dict[str, tuple[dict[str, Any], list[float]]],
     wer: dict[str, Any],
-    reference: str | None,
+    reference: References,
     pass_policy: PassPolicy,
     percentile_method: str,
 ) -> dict[str, Any]:
@@ -2264,7 +2370,7 @@ def _sustainability_clause(
 
 
 def _accuracy_clause(
-    wer: dict[str, Any], reference: str | None, pass_policy: PassPolicy
+    wer: dict[str, Any], reference: References, pass_policy: PassPolicy
 ) -> dict[str, Any]:
     if reference is None or wer["availability"] == "no_reference":
         return _clause(
@@ -2318,7 +2424,7 @@ def _goodput(
     outcomes: list[SessionOutcome],
     *,
     wall_span_s: float,
-    reference: str | None,
+    reference: References,
     pass_policy: PassPolicy,
     percentile_method: str,
     utterances: list[dict[str, Any]],
@@ -2369,7 +2475,7 @@ def _goodput(
 def _session_meets(
     outcome: SessionOutcome,
     *,
-    reference: str | None,
+    reference: References,
     pass_policy: PassPolicy,
     percentile_method: str,
     scored: dict[str, Any] | None,

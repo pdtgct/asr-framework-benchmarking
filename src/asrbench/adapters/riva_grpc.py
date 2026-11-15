@@ -57,7 +57,6 @@ from typing import Any
 from asrbench.adapter import SessionAdmissionBarrier, SessionProgressCallback
 from asrbench.audio import (
     BYTES_PER_SAMPLE,
-    SAMPLE_RATE,
     chunk_pcm16,
     read_pcm16,
 )
@@ -182,6 +181,8 @@ class RivaGrpcAdapter:
     """
 
     name = "riva-grpc"
+    #: Rates this adapter declares on the wire; it never resamples.
+    supported_sample_rates = frozenset({8_000, 16_000})
     supported_workload_options = frozenset(
         {
             "language",
@@ -375,9 +376,9 @@ class RivaGrpcAdapter:
         holder: dict[str, Any],
     ) -> None:
         grpc, rasr, rasr_grpc, raudio = _import_riva()
-        pcm = read_pcm16(request.clip_path)
-        chunks = chunk_pcm16(pcm, request.chunk_ms)
-        audio_s = len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE
+        pcm = read_pcm16(request.clip_path, request.sample_rate_hertz)
+        chunks = chunk_pcm16(pcm, request.chunk_ms, request.sample_rate_hertz)
+        audio_s = len(pcm) / BYTES_PER_SAMPLE / request.sample_rate_hertz
         outcome.audio_duration_s = audio_s
         outcome.protocol_extras["adapter"] = self.name
         outcome.protocol_extras["audio_chunks"] = len(chunks)
@@ -594,7 +595,12 @@ class RivaGrpcAdapter:
             outcome.audio_clock_origin_s = start
             scheduled_ms = 0.0
             for chunk in chunks:
-                chunk_ms = len(chunk) / BYTES_PER_SAMPLE / SAMPLE_RATE * 1000
+                chunk_ms = (
+                    len(chunk)
+                    / BYTES_PER_SAMPLE
+                    / request.sample_rate_hertz
+                    * 1000
+                )
                 if request.pace:
                     # Absolute schedule from stream start, as
                     # riva_streaming_asr_client paces: chunk i goes no
@@ -619,7 +625,9 @@ class RivaGrpcAdapter:
                 if outcome.chunk_send_times_s is not None:
                     outcome.chunk_send_times_s.append(now)
                 sent = float(marks["audio_sent_s"] or 0.0)
-                sent += len(chunk) / BYTES_PER_SAMPLE / SAMPLE_RATE
+                sent += (
+                    len(chunk) / BYTES_PER_SAMPLE / request.sample_rate_hertz
+                )
                 marks["audio_sent_s"] = sent
                 yield rasr.StreamingRecognizeRequest(audio_content=chunk)
 
@@ -1114,7 +1122,7 @@ def _recognition_config(
 ) -> Any:
     config = rasr.RecognitionConfig(
         encoding=raudio.AudioEncoding.LINEAR_PCM,
-        sample_rate_hertz=SAMPLE_RATE,
+        sample_rate_hertz=request.sample_rate_hertz,
         language_code=request.language or "",
         max_alternatives=adapter._max_alternatives,
         audio_channel_count=1,
@@ -1141,7 +1149,7 @@ def _recognition_echo(
         ),
         "language_code": request.language,
         "model": request.model,
-        "sample_rate_hertz": SAMPLE_RATE,
+        "sample_rate_hertz": request.sample_rate_hertz,
         "encoding": "LINEAR_PCM",
         "audio_channel_count": 1,
         "max_alternatives": adapter._max_alternatives,

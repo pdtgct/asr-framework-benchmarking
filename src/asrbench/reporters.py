@@ -148,6 +148,20 @@ def console_report(receipt: dict[str, Any]) -> str:
             f"source {lookahead['frames_source']}"
         ),
     ]
+    corpus = wer.get("corpus")
+    if corpus is not None:
+        lines.append(
+            f"corpus_wer={corpus['corpus_wer']} "
+            f"per_clip_mean={corpus['per_clip_mean_wer']} "
+            f"clips={corpus['clips_scored']}/{corpus['clip_count']} "
+            f"complete={corpus['complete']} balanced={corpus['balanced']}"
+        )
+    condition = receipt["dataset"].get("audio_condition")
+    if condition is not None:
+        lines.append(
+            f"audio_condition {condition['name']} "
+            f"sent_sample_rate_hertz={condition['sent_sample_rate_hertz']}"
+        )
     return "\n".join(lines) + "\n"
 
 

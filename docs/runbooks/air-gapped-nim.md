@@ -205,9 +205,59 @@ ffmpeg -i input.any -ac 1 -ar 16000 -sample_fmt s16 -c:a pcm_s16le \
   asrbench-airgap/clips/my-clip.wav
 ```
 
-One asrbench run scores one clip against one reference transcript. Pick clips at
+A single-clip run scores one clip against one reference transcript. Pick clips at
 least a few encoder contexts long. See [`docs/corpus.md`](../corpus.md) for why
-short clips cannot support a streaming claim.
+short clips cannot support a streaming claim. For test-set WER, stage a corpus
+(2.4.1) instead.
+
+#### 2.4.1 Stage a corpus for test-set WER
+
+A manifest run (section 6.2) scores every clip of a test set against the corpus's
+own transcripts. The builders read local files only, so you can build manifests on
+either side. Building on the connected side and carrying `corpora/` is simplest;
+carrying the sources lets the site rebuild and re-verify them. On the connected
+side, install the checkout into the `pack` environment first
+(`python -m pip install ./asrbench`); the corpus builders need no extra.
+
+LibriSpeech `test-clean` (346 MB) and `test-other` (328 MB), the rows NVIDIA's
+accuracy table reports:
+
+```bash
+for split in test-clean test-other; do
+  curl -LO "https://www.openslr.org/resources/12/$split.tar.gz"
+  tar -xzf "$split.tar.gz"                       # LibriSpeech/<split>/...
+  python asrbench/scripts/decode_librispeech.py "LibriSpeech/$split"   # ffmpeg, WAV beside each FLAC
+  asrbench corpus librispeech --root . --split "$split" \
+    --out-dir "asrbench-airgap/corpora/librispeech-$split"
+done
+```
+
+AMI individual headsets (CC BY 4.0). `ami-urls` prints the files to fetch: the
+annotations zip (22 MB) plus one WAV per headset (26–46 MB each). The evaluation
+split is 16 meetings, about 64 headsets and 2.3 GB:
+
+```bash
+mkdir -p ami && cd ami
+asrbench corpus ami-urls --split eval | grep -v '^#' | xargs -n1 curl -fLO --create-dirs
+cd ..
+asrbench corpus ami-segments --split eval --audio-root ami \
+  --annotations ami/ami_public_manual_1.6.2.zip \
+  --out-dir asrbench-airgap/corpora/ami-ihm-eval
+```
+
+`--audio-root` accepts a flat directory of `<M>.Headset-<N>.wav`, as above, or the
+mirror's `<M>/audio/` layout. A 404 on `Headset-3` means that meeting has three
+participants; the builder only opens headsets `meetings.xml` lists.
+
+For the streaming excerpts ported from nemotron-omni-port (five headsets, about
+180 MB), use `asrbench corpus ami-urls` with no split and `ami-excerpts`; see
+[`docs/corpus.md`](../corpus.md) for why their WER is a streaming condition and
+not an accuracy figure.
+
+Each builder prints the manifest path, id, digest, clip count, and total audio.
+Write those into your transfer log; `asrbench corpus verify` must print the same
+digest on site. Derived AMI and LibriSpeech audio inherit CC BY 4.0: a published
+result carries the attribution in `dataset.manifest.attribution`.
 
 ### 2.5 Checksum and pack
 
@@ -222,7 +272,9 @@ sha256sum asrbench-airgap.tgz
 ```
 
 Record the tarball digest in your transfer log. With Python 3.12 wheels and the
-one LibriSpeech clip, the tarball is about 15 MB.
+one LibriSpeech clip, the tarball is about 15 MB. Corpora add roughly their WAV
+size: about 700 MB for both LibriSpeech test splits and 0.9 GB for AMI eval
+segments. Pack `corpora/` as a separate tarball if your transfer has a size limit.
 
 ## 3. Install on the air-gapped host
 
@@ -246,6 +298,8 @@ makes every receipt record `git_dirty: true`.
 mkdir -p work/{clips,presets,tools,receipts,identity}
 cp asrbench-airgap/clips/*.wav work/clips/
 cp asrbench-airgap/tools/*.py work/tools/ 2>/dev/null
+cp -r asrbench-airgap/corpora work/ 2>/dev/null
+for m in work/corpora/*/manifest.json; do asrbench corpus verify "$m"; done
 export PATH="$PWD/.venv/bin:$PATH"
 ```
 
@@ -718,6 +772,44 @@ row reads `compat_status=all_requests_completed` when every request succeeded,
 the only case in which NVIDIA's client prints throughput. Its latency columns are
 per-request latency, from `finalization_s`.
 
+### 6.2 Accuracy over a test set
+
+NVIDIA's accuracy table reports WER over whole test sets (LibriSpeech test-clean
+and test-other, AMI and others) as edits over total reference words. With a
+manifest from section 2.4.1, one receipt reports the same reduction:
+
+```bash
+M=corpora/librispeech-test-clean/manifest.json
+N=$(python -c "import json,sys; print(len(json.load(open('$M'))['clips']))")
+LANES=8
+asrbench run --preset presets/nim-site-streaming.json "${IDENT[@]}" \
+  --manifest "$M" --lanes $LANES --iterations $(( (N + LANES - 1) / LANES )) \
+  --warmup 0 --trials 1 --out "receipts/$RUN/test-clean.json"
+```
+
+The console prints `corpus_wer=... clips=<scored>/<count> complete=True`. Check
+`complete=True` before quoting the number: a short run is recorded, not refused.
+The preset's own clip and reference are superseded by the manifest, and the
+preset must use `normalization_policy: corpus_reference`. Pacing applies, so a
+pass over test-clean (5.4 h) at 8 lanes takes about 40 minutes; add
+`--no-pacing` for an accuracy-only pass that is not a latency measurement.
+
+For 8 kHz, repeat with `--audio-condition telephony_8k` (sends 8 kHz and declares
+it) or `--audio-condition telephony_8k_in_16k` (narrowband content sent at
+16 kHz). The 16 kHz and 8 kHz receipts share the manifest digest and differ in
+workload fingerprint. Many streaming English NIM profiles accept only 16 kHz; if
+the `telephony_8k` run fails at configuration, the refusal is on the receipt and
+`telephony_8k_in_16k` is the comparison you can run. See
+[`docs/corpus.md`](../corpus.md) for the filter.
+
+Differences from the published rows that remain:
+
+- WER normalization: `corpus_reference` folds case, strips punctuation, and maps
+  English cardinals 0–999. NVIDIA and the Open ASR Leaderboard use the
+  leaderboard's English normalizer, which also handles ordinals, currencies, and
+  spelling variants. Expect asrbench to read slightly higher on number-heavy text.
+- AMI references come from the original annotations, not the ESB "cleaned" set.
+
 ## 7. Metric mapping
 
 asrbench's definitions are emitted constants in `asrbench.definitions`. Every
@@ -927,6 +1019,8 @@ as an issue. Where a change has since addressed one, it is named under the gap.
     no manifest of clips and references, so corpus WER takes many receipts and
     hand aggregation.
     Issue: "workload: accept a manifest of clips and reference transcripts for corpus WER"
+    Addressed: `--manifest` with the `asrbench corpus` builders for LibriSpeech
+    and AMI, and the pooled corpus WER block (sections 2.4.1 and 6.2).
 12. **English-only number normalization.** `corpus_reference` normalizes English
     cardinals only. WER for other locales is not comparable to NVIDIA's normalized
     figures.

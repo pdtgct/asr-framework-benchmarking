@@ -186,6 +186,52 @@ CORPUS_NORMALIZATION_DEFINITION = (
     "(en_cardinals_v1, 0 through 999, including the 'and' form), and "
     "collapse whitespace."
 )
+AUDIO_CONDITION_NATIVE = "native"
+AUDIO_CONDITION_TELEPHONY_8K = "telephony_8k"
+AUDIO_CONDITION_TELEPHONY_8K_IN_16K = "telephony_8k_in_16k"
+AUDIO_CONDITION_DEFINITION = (
+    "native sends each clip as staged, 16 kHz PCM16. telephony_8k "
+    "low-passes at 3.8 kHz, decimates to 8 kHz, and sends 8 kHz PCM16 "
+    "with sample_rate_hertz 8000. telephony_8k_in_16k applies the same "
+    "decimation, interpolates back to 16 kHz with the same filter, and "
+    "sends 16 kHz PCM16: narrowband content at the wideband rate, for a "
+    "server that accepts only 16 kHz. The filter is named by "
+    "dataset.audio_condition.resampler. Clip and manifest digests name "
+    "the source audio; the condition and the sent rate are separate "
+    "workload identity, so 8 kHz and 16 kHz receipts of the same clips "
+    "share a source digest and differ in fingerprint."
+)
+CLIP_ASSIGNMENT_ROUND_ROBIN = "round_robin"
+CLIP_ASSIGNMENT_DEFINITION = (
+    "round_robin: with a corpus manifest, the session on lane l at "
+    "iteration i of its phase plays manifest clip (i * lanes + l) mod "
+    "clip_count. Concurrent sessions play different clips, every trial "
+    "replays the same assignment, and every clip is played only when "
+    "lanes * iterations >= clip_count; wer.corpus.complete records it."
+)
+MANIFEST_DIGEST_DEFINITION = (
+    "sha256 over canonical JSON of the manifest schema, its language, and "
+    "per clip in manifest order the clip id, the sha256 of its PCM16 "
+    "payload, and the sha256 of its UTF-8 reference text. Paths, notes, "
+    "and provenance are not covered. Part of the workload fingerprint: a "
+    "changed clip, a changed reference, or a reordered manifest is "
+    "different offered work."
+)
+CORPUS_WER_DEFINITION = (
+    "Corpus WER: total edits (substitutions + alignment deletions + "
+    "insertions + deletions_from_missing_transcript) over total reference "
+    "words, pooled over every measured session of every clip. A long clip "
+    "weighs by its words, as the Open ASR Leaderboard and NVIDIA's "
+    "published accuracy tables reduce a test set. Equal to micro_wer. "
+    "Only a complete run (every clip scored) and a balanced one (every "
+    "clip played equally often) is the test-set number."
+)
+PER_CLIP_MEAN_WER_DEFINITION = (
+    "Secondary. Each clip's WER pooled over its own sessions, then the "
+    "unweighted mean over clips with a defined rate. A one-word clip "
+    "weighs as much as a thousand-word clip, so this is not the published "
+    "corpus number; it shows whether a few clips carry the errors."
+)
 PREFIX_VIOLATION_DEFINITION = (
     "Count of prefix checks that fail, with no normalization. Each "
     "recorded interim is checked against the next interim, and each "

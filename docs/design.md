@@ -145,7 +145,13 @@ minus chunk_ms), scores every chunk against that origin in pacing
 fidelity with a max(5 ms, 5% of chunk) tolerance and an `unpaced` class,
 and marks `riva_client_compat_s` `not_applicable` when the cell is not
 paced, as NVIDIA's client prints latency only under
-`--simulate_realtime`. Semantics 6 accepts a
+`--simulate_realtime`. A corpus run adds
+`workload.manifest` and `workload.audio_condition` to the resolved config,
+`dataset.manifest` (clip set, references, digest) and `dataset.audio_condition`
+to the dataset block, and `wer.corpus` (pooled corpus WER, per-clip rows,
+`complete`, `balanced`) to each WER block; a single-clip native receipt is
+unchanged apart from the two null-default config fields, and its workload
+fingerprint is unchanged. Semantics 6 accepts a
 trailing extra Riva response, qualifies streaming RTFx by pacing
 fidelity, and paces riva-grpc on an absolute schedule; a consumer of
 semantics 5 must re-run. Schema 5 records the

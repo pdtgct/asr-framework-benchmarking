@@ -73,7 +73,7 @@ class SessionRequest:
     endpoint_url: str
     #: Model name offered to the server at session configuration.
     model: str
-    #: Source clip; mono PCM16 at :data:`asrbench.audio.SAMPLE_RATE`.
+    #: Source clip; mono PCM16 at :attr:`sample_rate_hertz`.
     clip_path: Path
     #: Identifies this session among its concurrent peers.
     label: str
@@ -107,6 +107,9 @@ class SessionRequest:
     #: Workload mode, ``streaming`` or ``offline``. Distinct from
     #: :attr:`lifecycle`, which is the realtime lifecycle probe.
     workload_mode: str = "streaming"
+    #: Rate of ``clip_path`` and of the audio on the wire. The adapter
+    #: declares it to the server; it never resamples.
+    sample_rate_hertz: int = 16_000
 
 
 @dataclass

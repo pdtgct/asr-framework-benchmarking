@@ -839,3 +839,25 @@ def test_pacing_is_an_absolute_schedule_from_stream_start(
     assert pacing["validity"] == "pacing_lagged"
     assert pacing["n_samples"] == 6
     assert pacing["audio_clock_origin"] == {"schedule_origin": 1}
+
+
+@pytest.mark.parametrize("mode", ["streaming", "offline"])
+def test_8k_audio_is_declared_at_8k(tmp_path: Path, mode: str) -> None:
+    path = tmp_path / "clip8k.wav"
+    path.write_bytes(pcm16_wav(b"\x00\x00" * 4000, 8000))
+    server = RunningFake(FakeRiva(mode="two-finals"))
+    try:
+        outcome = asyncio.run(
+            _adapter(server.endpoint).run(
+                _request(path, workload_mode=mode, sample_rate_hertz=8000)
+            )
+        )
+    finally:
+        server.stop()
+    if mode == "offline":
+        sent = server.servicer.offline_requests[0].config
+    else:
+        sent = server.servicer.configs[0].config
+    assert sent.sample_rate_hertz == 8000
+    assert outcome.audio_duration_s == 0.5
+    assert outcome.terminal_status == "completed"

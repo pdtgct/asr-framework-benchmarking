@@ -25,10 +25,13 @@ from typing import Any
 
 from asrbench.canonical import fingerprint, join_components, sha256_text
 from asrbench.definitions import (
+    AUDIO_CONDITION_NATIVE,
+    AUDIO_CONDITION_TELEPHONY_8K,
     COMPARISON_AXIS,
     GPU_IDENTITY_CLIENT_PROBE,
     GPU_IDENTITY_SERVER_DECLARED,
 )
+from asrbench.resample import NARROWBAND_RATE, RESAMPLER
 from asrbench.spec import (
     PopulationEntry,
     ResolvedConfig,
@@ -154,6 +157,13 @@ def word_offsets_sent(config: ResolvedConfig) -> bool:
     )
 
 
+def sent_sample_rate(workload: WorkloadSpec) -> int:
+    """Return the rate the adapter declares and sends for this workload."""
+    if workload.audio_condition == AUDIO_CONDITION_TELEPHONY_8K:
+        return NARROWBAND_RATE
+    return workload.clip.sample_rate
+
+
 def workload_material(
     workload: WorkloadSpec,
     *,
@@ -201,7 +211,7 @@ def workload_material(
         if blank_lanes:
             entry["lanes"] = None
         population.append(entry)
-    return {
+    material: dict[str, Any] = {
         "att_context_right": right,
         "cadence_ms": cadence,
         "chunk_ms": workload.chunk_ms,
@@ -234,6 +244,26 @@ def workload_material(
         "trials": workload.trials,
         "warmup": workload.warmup,
     }
+    if workload.audio_condition != AUDIO_CONDITION_NATIVE:
+        # Absent for native audio so existing fingerprints do not move.
+        material["audio_condition"] = {
+            "name": workload.audio_condition,
+            "resampler": RESAMPLER,
+            "sent_sample_rate_hertz": sent_sample_rate(workload),
+        }
+    manifest = workload.manifest
+    if manifest.digest is not None:
+        # Present only for a corpus workload, so a single-clip workload
+        # hashes exactly as it did before manifests existed. The path is
+        # local and left out, as clip.path is.
+        material["manifest"] = {
+            "assignment": manifest.assignment,
+            "clip_count": manifest.clip_count,
+            "digest": manifest.digest,
+            "id": manifest.id,
+            "language": manifest.language,
+        }
+    return material
 
 
 def workload_fingerprint(config: ResolvedConfig) -> str:

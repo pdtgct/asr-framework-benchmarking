@@ -35,7 +35,6 @@ from urllib.parse import urlsplit
 from asrbench.adapter import SessionAdmissionBarrier, SessionProgressCallback
 from asrbench.audio import (
     BYTES_PER_SAMPLE,
-    SAMPLE_RATE,
     chunk_pcm16,
     read_pcm16,
 )
@@ -181,6 +180,8 @@ class NimRealtimeAdapter:
     """
 
     name = "nim-realtime"
+    #: Rates this adapter declares on the wire; it never resamples.
+    supported_sample_rates = frozenset({8_000, 16_000})
     supported_workload_options = frozenset(
         {
             "language",
@@ -315,9 +316,11 @@ class NimRealtimeAdapter:
         holder: dict[str, Any],
     ) -> None:
         aiohttp = _import_aiohttp()
-        pcm = read_pcm16(request.clip_path)
-        chunks = chunk_pcm16(pcm, request.chunk_ms)
-        outcome.audio_duration_s = len(pcm) / BYTES_PER_SAMPLE / SAMPLE_RATE
+        pcm = read_pcm16(request.clip_path, request.sample_rate_hertz)
+        chunks = chunk_pcm16(pcm, request.chunk_ms, request.sample_rate_hertz)
+        outcome.audio_duration_s = (
+            len(pcm) / BYTES_PER_SAMPLE / request.sample_rate_hertz
+        )
         outcome.protocol_extras["adapter"] = self.name
         outcome.protocol_extras["audio_chunks"] = len(chunks)
         outcome.protocol_extras["recognition_request"] = _recognition_echo(
@@ -910,7 +913,7 @@ def _session_body(
             "prompt": "",
         },
         "input_audio_params": {
-            "sample_rate_hz": SAMPLE_RATE,
+            "sample_rate_hz": request.sample_rate_hertz,
             "num_channels": 1,
         },
         "recognition_config": recognition,
@@ -930,7 +933,7 @@ def _recognition_echo(
         "language": request.language,
         "model": request.model,
         "input_audio_format": "pcm16",
-        "sample_rate_hz": SAMPLE_RATE,
+        "sample_rate_hz": request.sample_rate_hertz,
         "max_alternatives": adapter._max_alternatives,
         "enable_automatic_punctuation": request.punctuation,
         "enable_word_time_offsets": adapter._word_offsets,

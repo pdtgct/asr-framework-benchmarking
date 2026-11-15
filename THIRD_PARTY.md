@@ -44,6 +44,14 @@ This project is itself Apache-2.0, which is the same licence, chosen for that
 reason: an adapter written against this interface can move upstream into vLLM or
 vLLM-Omni without a licence conversation, and vice versa.
 
+### nemotron-omni-port — same copyright holder
+
+The AMI excerpt survey and cutter (`asrbench.corpora.ami`), the built-in recipe
+`ami-ihm-excerpts-v1` (offsets and per-excerpt WAV sha256s), and the LibriSpeech
+decode step are ported from the author's own nemotron-omni-port project and are
+contributed here under this repository's Apache-2.0 licence by the same copyright
+holder. The recipe contains offsets and digests only, no corpus audio or text.
+
 ### NVIDIA Riva / Speech NIM — public documentation and clients
 
 - Benchmark methodology:

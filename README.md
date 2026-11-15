@@ -114,6 +114,12 @@ measured rather than assumed:
 Corpus contents are pinned by digest in [`datasets.lock`](datasets.lock). Recipes are
 committed; audio is not.
 
+For test-set WER, `asrbench corpus` builds a digest-pinned manifest of clips and
+their corpus transcripts from locally staged LibriSpeech or AMI files, and
+`asrbench run --manifest` scores every clip against its own reference in one
+receipt, at 16 kHz or 8 kHz (`--audio-condition`). See
+[`docs/corpus.md`](docs/corpus.md#manifests-corpus-wer-over-a-test-set).
+
 ## Installing
 
 Requires Python 3.10 or newer.
