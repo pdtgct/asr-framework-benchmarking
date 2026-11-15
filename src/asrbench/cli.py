@@ -1,6 +1,9 @@
 """The ``asrbench`` command.
 
-``run`` writes one receipt and prints the console projection. ``compare``
+``run`` writes one receipt and prints the console projection. ``sweep``
+runs one ``run`` per stream count and writes an NVIDIA-layout table; a
+failed cell is a result, so the sweep continues and still exits 0.
+``compare``
 refuses when the comparison key does not match unless ``--force`` and
 ``--reason`` are both present. The reason is copied into the output.
 """
@@ -60,6 +63,26 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--from-receipt", type=Path, dest="from_receipt")
     add_override_arguments(run_parser)
 
+    sweep_parser = sub.add_parser(
+        "sweep",
+        help="run one receipt per stream count in performance_streams",
+    )
+    sweep_parser.add_argument("--preset", type=Path)
+    sweep_parser.add_argument("--from-receipt", type=Path, dest="from_receipt")
+    sweep_parser.add_argument(
+        "--streams",
+        type=_stream_list,
+        help="comma-separated stream counts; default "
+        "workload.performance_streams",
+    )
+    sweep_parser.add_argument("--out-dir", type=Path, required=True)
+    sweep_parser.add_argument(
+        "--prefix",
+        default="",
+        help="receipt name prefix; default c<chunk_ms>",
+    )
+    add_override_arguments(sweep_parser)
+
     compare_parser = sub.add_parser("compare", help="compare two receipts")
     compare_parser.add_argument("left", type=Path)
     compare_parser.add_argument("right", type=Path)
@@ -116,6 +139,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _run(args)
     if args.command == "compare":
         return _compare(args)
+    if args.command == "sweep":
+        return _sweep(args)
     if args.command == "index":
         write_index(args.directory, args.out)
         return 0
@@ -155,6 +180,119 @@ def _run(args: argparse.Namespace) -> int:
             perf_table_tsv(receipt), encoding="utf-8"
         )
     sys.stdout.write(console_report(receipt))
+    return 0
+
+
+def _stream_list(text: str) -> tuple[int, ...]:
+    try:
+        counts = tuple(int(item) for item in text.split(",") if item.strip())
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "--streams is a comma-separated list of integers"
+        ) from None
+    if not counts or any(count < 1 for count in counts):
+        raise argparse.ArgumentTypeError(
+            "--streams needs at least one count, each >= 1"
+        )
+    if len(set(counts)) != len(counts):
+        raise argparse.ArgumentTypeError(
+            "--streams repeats a count; each would overwrite the last receipt"
+        )
+    return counts
+
+
+def _sweep(args: argparse.Namespace) -> int:
+    """Run one cell per stream count, one receipt each.
+
+    Each count is resolved exactly as ``asrbench run --lanes N`` would
+    be, so ``iterations_per_stream`` and a single-entry population follow
+    the lane count. Counts run in order, one after another. A failed
+    cell is a result and does not stop the sweep.
+    """
+    import os
+
+    overrides = overrides_from_args(args)
+    for path, flag in (
+        (("workload", "lanes"), "--lanes"),
+        (("run", "output_path"), "--out"),
+    ):
+        if path in overrides:
+            raise ConfigError(
+                f"sweep sets {flag} per stream count; use --streams and "
+                "--out-dir"
+            )
+    env = dict(os.environ)
+    first = resolve(
+        preset_path=args.preset,
+        from_receipt=args.from_receipt,
+        env=env,
+        overrides=overrides,
+    )
+    streams = args.streams or first.workload.performance_streams
+    if not streams:
+        raise ConfigError(
+            "no stream counts: set workload.performance_streams in the "
+            "preset or pass --streams"
+        )
+    if len(set(streams)) != len(streams):
+        raise ConfigError(
+            "stream counts repeat; each would overwrite the last receipt"
+        )
+    default_prefix = (
+        "offline"
+        if first.workload.mode == "offline"
+        else f"c{first.workload.chunk_ms}"
+    )
+    prefix = args.prefix or default_prefix
+    # Resolve every count before the first run, so a config error surfaces
+    # before a long sweep has used any server time.
+    cells = []
+    for count in streams:
+        destination = args.out_dir / f"{prefix}-n{count}.json"
+        cells.append(
+            (
+                count,
+                destination,
+                resolve(
+                    preset_path=args.preset,
+                    from_receipt=args.from_receipt,
+                    env=env,
+                    overrides={
+                        **overrides,
+                        ("workload", "lanes"): count,
+                        ("run", "output_path"): str(destination),
+                    },
+                ),
+            )
+        )
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for count, destination, config in cells:
+        print(f"sweep streams={count} -> {destination}", file=sys.stderr)
+        for item in config.reproduction_overrides:
+            print(
+                f"reproduction {item.path}: {item.receipt} -> {item.resolved}",
+                file=sys.stderr,
+            )
+        receipt = asyncio.run(run_benchmark(config, env=env))
+        _write_json(destination, receipt)
+        if config.run.emit_tsv:
+            destination.with_suffix(".tsv").write_text(
+                perf_table_tsv(receipt), encoding="utf-8"
+            )
+        destination.with_suffix(".console.txt").write_text(
+            console_report(receipt), encoding="utf-8"
+        )
+        written.append(destination)
+    rows = [
+        nvidia_streaming_row(load_json_object(path), path.name)
+        for path in written
+    ]
+    table = nvidia_table_tsv(rows)
+    (args.out_dir / f"{prefix}-nvidia-layout.tsv").write_text(
+        table, encoding="utf-8"
+    )
+    sys.stdout.write(table)
     return 0
 
 
