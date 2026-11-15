@@ -305,6 +305,7 @@ with its parameters. Save this as `work/tools/nim_asr_config.py`:
 
 ```python
 """Print every ASR model a Riva or NIM server reports, as JSON."""
+
 import argparse
 import json
 
@@ -315,7 +316,9 @@ from riva.client.proto import riva_asr_pb2_grpc as rasr_grpc
 p = argparse.ArgumentParser()
 p.add_argument("--server", default="localhost:50051")
 p.add_argument("--use-ssl", action="store_true")
-p.add_argument("--ssl-root-cert", default=None, help="PEM CA bundle for a private CA")
+p.add_argument(
+    "--ssl-root-cert", default=None, help="PEM CA bundle for a private CA"
+)
 p.add_argument("--model", default="", help="limit to one model_name")
 a = p.parse_args()
 if a.use_ssl:
@@ -720,6 +723,7 @@ value, which is how NVIDIA averages its three trials. Latency is
 riva_client_compat_s (response i receive minus chunk i send). Throughput
 is the per-trial aggregate_rtfx (offered audio over trial wall span).
 """
+
 import json
 import sys
 
@@ -735,8 +739,10 @@ def fmt(value, scale=1.0):
     return "n/a" if value is None else f"{value * scale:.5g}"
 
 
-print("receipt\tchunk_ms\tstreams\tavg_ms\tp50_ms\tp90_ms\tp95_ms\tp99_ms"
-      "\tthroughput_rtfx\tpercentile_method\tcompat_status\ttrials")
+print(
+    "receipt\tchunk_ms\tstreams\tavg_ms\tp50_ms\tp90_ms\tp95_ms\tp99_ms"
+    "\tthroughput_rtfx\tpercentile_method\tcompat_status\ttrials"
+)
 for path in sys.argv[1:]:
     receipt = json.load(open(path))
     workload = receipt["resolved_config"]["workload"]
@@ -747,10 +753,13 @@ for path in sys.argv[1:]:
     ok = [c for c in compat if c["availability"] == "measured"]
     latency = [mean([c[s] for c in ok]) for s in STATS]
     rtfx = mean([r["aggregate_rtfx"]["value"] for r in reductions])
-    print("\t".join([path, str(workload["chunk_ms"]), str(workload["lanes"])]
-                    + [fmt(v, 1000.0) for v in latency]
-                    + [fmt(rtfx), method, ",".join(status),
-                       f"{len(ok)}/{len(compat)}"]))
+    print(
+        "\t".join(
+            [path, str(workload["chunk_ms"]), str(workload["lanes"])]
+            + [fmt(v, 1000.0) for v in latency]
+            + [fmt(rtfx), method, ",".join(status), f"{len(ok)}/{len(compat)}"]
+        )
+    )
 ```
 
 Run it over a sweep:
