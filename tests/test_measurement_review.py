@@ -261,3 +261,16 @@ def test_unpaced_chunk_latency_is_not_applicable() -> None:
     assert chunk["availability"] == "not_applicable"
     assert chunk["reason"] == "pacing_disabled"
     assert chunk["n_samples"] == 0
+
+
+def test_all_sessions_without_responses_say_so() -> None:
+    silent = session(label="timed-out", audio_duration_s=0.3)
+    silent.chunk_ms = 100
+    silent.chunk_send_times_s = [1.1, 1.2]
+    silent.response_receive_times_s = []
+    chunk = _reduce([silent])["chunk_latency_s"]
+    assert chunk["availability"] == "unavailable"
+    assert chunk["reason"] == "sessions_without_responses"
+    unpaced = _reduce([_trusted_session()], pacing=False)["chunk_latency_s"]
+    assert unpaced["n_with_measure"] == 0
+    assert unpaced["coverage_source"] is None

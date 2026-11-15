@@ -645,8 +645,9 @@ CHUNK_LATENCY_DEFINITION = (
     "about half the clip. A chunk no response covered is counted, not "
     "sampled. A session that sent chunks and got no response is counted "
     "as no_responses, its chunks as uncovered, and is not a coverage "
-    "source. Unpaced, it is not_applicable (pacing_disabled), as "
-    "riva_client_compat_s. n_responses, n_bursts (consecutive responses under "
+    "source. Unpaced, chunk_latency_s is not_applicable "
+    "(pacing_disabled), as riva_client_compat_s is. n_responses, "
+    "n_bursts (consecutive responses under "
     "CHUNK_LATENCY_BURST_GAP_S apart), and n_text_repeats (consecutive "
     "identical interim texts) are diagnostics. Not finalization_s."
 )

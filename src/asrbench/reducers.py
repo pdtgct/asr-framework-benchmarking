@@ -1212,7 +1212,11 @@ def _chunk_latency(
         samples = []
     elif measured == 0:
         availability = "unavailable"
-        reason = d.CHUNK_LATENCY_UNAVAILABLE_REASON
+        reason = (
+            d.CHUNK_LATENCY_NO_RESPONSES_REASON
+            if by_source["no_responses"]
+            else d.CHUNK_LATENCY_UNAVAILABLE_REASON
+        )
     elif not samples:
         availability = "no_samples"
         reason = None
@@ -1232,8 +1236,13 @@ def _chunk_latency(
             if by_source["final_only"]
             else d.CHUNK_LATENCY_UNAVAILABLE_REASON
         )
-    if by_source["audio_processed"] and by_source["send_watermark"]:
-        source: str | None = "mixed"
+    not_applicable = availability == "not_applicable"
+    if not_applicable:
+        with_measure = 0
+    if not_applicable:
+        source: str | None = None
+    elif by_source["audio_processed"] and by_source["send_watermark"]:
+        source = "mixed"
     elif by_source["audio_processed"]:
         source = "audio_processed"
     elif by_source["send_watermark"]:
