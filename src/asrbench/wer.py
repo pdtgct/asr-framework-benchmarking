@@ -13,6 +13,7 @@ import unicodedata
 from dataclasses import dataclass
 
 from asrbench.definitions import (
+    CORPUS_NORMALIZER_EN_CARDINALS,
     NORMALIZATION_CORPUS_REFERENCE,
     NORMALIZATION_ENGINE_VS_OWN_ORACLE,
 )
@@ -281,7 +282,14 @@ def _rate(edits: int, denominator: int) -> float | None:
     return edits / denominator
 
 
-def score_texts(reference: str, hypothesis: str, policy: str) -> EditScore:
+def score_texts(
+    reference: str,
+    hypothesis: str,
+    policy: str,
+    *,
+    normalizer: str = CORPUS_NORMALIZER_EN_CARDINALS,
+    language: str | None = None,
+) -> EditScore:
     """Score one pair under ``policy``.
 
     Args:
@@ -290,13 +298,26 @@ def score_texts(reference: str, hypothesis: str, policy: str) -> EditScore:
             hypothesis and is aligned. A missing transcript is not
             passed here.
         policy: Named normalization policy.
+        normalizer: Corpus normalizer under ``corpus_reference``; ignored
+            by ``engine_vs_own_oracle``.
+        language: Workload language tag, for the multilingual normalizer.
 
     Returns:
         Edits, denominators, and rates. A rate is ``None`` when its
         denominator is zero and any edit remains.
     """
-    ref_tokens = normalize(reference, policy)
-    hyp_tokens = normalize(hypothesis, policy)
+    if (
+        policy == NORMALIZATION_CORPUS_REFERENCE
+        and normalizer != CORPUS_NORMALIZER_EN_CARDINALS
+    ):
+        from asrbench.normalizers import open_asr_pair
+
+        ref_tokens, hyp_tokens = open_asr_pair(
+            normalizer, language, reference, hypothesis
+        )
+    else:
+        ref_tokens = normalize(reference, policy)
+        hyp_tokens = normalize(hypothesis, policy)
     substitutions, deletions, insertions = edit_counts(ref_tokens, hyp_tokens)
     ref_chars = list(" ".join(ref_tokens))
     hyp_chars = list(" ".join(hyp_tokens))

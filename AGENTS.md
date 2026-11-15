@@ -21,6 +21,8 @@ silently is not.
 ```
 src/asrbench/            the framework — stdlib only
 src/asrbench/adapters/   transport adapters — the only place a client library lives
+src/asrbench/normalizers/_vendor/  vendored Open ASR normalizers (wer-multilingual
+                         extra); byte-for-byte, excluded from ruff and mypy
 tests/                   default tier: no GPU, no server, no network
 docs/                    corpus policy, methodology, generated schema reference
 datasets.lock            audio pinned by digest; recipes committed, audio never

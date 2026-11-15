@@ -32,6 +32,10 @@ dependencies = []
 # library for a protocol you are not measuring.
 websocket = ["aiohttp>=3.10"]
 riva = ["nvidia-riva-client>=2.26.0", "grpcio>=1.62"]
+# Not a transport: the vendored Open ASR Leaderboard text normalizers
+# (pass_policy.corpus_normalizer open_asr_*). regex is Apache-2.0 / CNRI;
+# num2words is LGPL-2.1 and is imported, never modified or vendored.
+wer-multilingual = ["regex>=2024.4.16", "num2words>=0.5.13"]
 dev = [
     "pytest>=8",
     "mypy>=1.13",
@@ -53,6 +57,8 @@ packages = ["src/asrbench"]
 [tool.ruff]
 line-length = 80
 target-version = "py310"
+# Third-party code kept byte-for-byte; see its headers and THIRD_PARTY.md.
+extend-exclude = ["src/asrbench/normalizers/_vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "D", "UP", "B", "SIM"]
@@ -70,6 +76,8 @@ convention = "google"
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+# Vendored, untyped, imported only through importlib; see THIRD_PARTY.md.
+exclude = ["^src/asrbench/normalizers/_vendor/"]
 
 [[tool.mypy.overrides]]
 module = ["grpc", "grpc.*", "riva", "riva.*"]

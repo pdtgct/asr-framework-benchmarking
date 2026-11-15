@@ -148,13 +148,23 @@ Use a throwaway virtual environment with a recent pip.
 python3 -m venv pack && . pack/bin/activate
 python -m pip install --upgrade pip
 python -m pip wheel --no-deps -w asrbench-airgap/wheelhouse ./asrbench
+python -m pip wheel --no-deps -w asrbench-airgap/wheelhouse "docopt==0.6.2"
+ASRBENCH_WHEEL=$(ls "$PWD"/asrbench-airgap/wheelhouse/asrbench-*.whl)
 python -m pip download --dest asrbench-airgap/wheelhouse \
   --find-links asrbench-airgap/wheelhouse \
   --only-binary=:all: --implementation cp --python-version "$PYVER" \
   --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 \
   --platform manylinux_2_28_x86_64 \
-  "asrbench[riva]" hatchling editables pip pytest
+  "asrbench[riva,wer-multilingual] @ file://$ASRBENCH_WHEEL" \
+  hatchling editables pip pytest
 ```
+
+Name the local wheel by path (`asrbench[...] @ file://...`), not as a bare
+`asrbench[...]`. An unrelated project called `asrbench` is published on PyPI
+with a higher version number, and a bare requirement resolves to it, along with
+its dependencies. `docopt`, which `num2words` needs, is published only as a
+source archive. The second line builds its pure-Python wheel so that
+`--only-binary=:all:` can resolve it.
 
 What this pulls:
 
@@ -167,8 +177,14 @@ What this pulls:
   no index.
 - `pytest` is optional. It lets you run the default test tier on site as a
   self-check.
-- Add `"asrbench[riva,websocket]"` instead if you also want the `nim-realtime`
-  WebSocket transport (adds `aiohttp`).
+- Add `"asrbench[riva,websocket,wer-multilingual]"` instead if you also want
+  the `nim-realtime` WebSocket transport (adds `aiohttp`).
+- `wer-multilingual` pulls `regex`, `num2words`, and `docopt` (pure Python plus
+  one `regex` manylinux wheel, about 1 MB together). They are only needed for
+  `--corpus-normalizer open_asr_english_v1` or `open_asr_multilingual_v1`
+  (section 6.2), the leaderboard normalizers NVIDIA's accuracy figures use and
+  the only ones that score a non-English locale. Leave the extra out and those
+  two normalizers refuse with the install line; everything else works.
 
 ### 2.4 Prepare audio
 
@@ -287,8 +303,9 @@ git -C asrbench rev-parse HEAD          # must match asrbench-airgap/src/COMMIT
 
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --no-index --find-links asrbench-airgap/wheelhouse --upgrade pip
-.venv/bin/python -m pip install --no-index --find-links asrbench-airgap/wheelhouse -e "./asrbench[riva]"
+.venv/bin/python -m pip install --no-index --find-links asrbench-airgap/wheelhouse -e "./asrbench[riva,wer-multilingual]"
 .venv/bin/python -c "import grpc, riva.client.proto.riva_asr_pb2; print('riva ok', grpc.__version__)"
+.venv/bin/python -c "import regex, num2words; print('wer-multilingual ok')"
 ```
 
 Keep your site files outside the checkout. Any untracked file inside `asrbench/`
@@ -804,10 +821,24 @@ the `telephony_8k` run fails at configuration, the refusal is on the receipt and
 
 Differences from the published rows that remain:
 
-- WER normalization: `corpus_reference` folds case, strips punctuation, and maps
-  English cardinals 0–999. NVIDIA and the Open ASR Leaderboard use the
-  leaderboard's English normalizer, which also handles ordinals, currencies, and
-  spelling variants. Expect asrbench to read slightly higher on number-heavy text.
+- WER normalization: the default `en_cardinals_v1` folds case, strips
+  punctuation, and maps English cardinals 0–999. To match NVIDIA and the Open
+  ASR Leaderboard, add `--corpus-normalizer open_asr_english_v1` (English) or
+  `open_asr_multilingual_v1` (any locale; required for non-English). These are
+  the leaderboard's own normalizers, vendored. The remaining gap is the
+  leaderboard's `kaldialign` compound merge, which asrbench does not replicate
+  (see [`docs/corpus.md`](../corpus.md#normalization-by-locale)).
+
+For a non-English locale, for example a multilingual Nemotron model:
+
+```bash
+asrbench run --preset presets/nim-site-streaming.json "${IDENT[@]}" \
+  --language de-DE --corpus-normalizer open_asr_multilingual_v1 \
+  --manifest corpora/<german-set>/manifest.json --lanes 8 --iterations <ceil(N/8)> \
+  --warmup 0 --trials 1 --out "receipts/$RUN/de-DE.json"
+```
+
+The manifest's language must share the workload language's primary subtag.
 - AMI references come from the original annotations, not the ESB "cleaned" set.
 
 ## 7. Metric mapping
@@ -1025,6 +1056,10 @@ as an issue. Where a change has since addressed one, it is named under the gap.
     cardinals only. WER for other locales is not comparable to NVIDIA's normalized
     figures.
     Issue: "wer: locale-aware corpus_reference normalization for non-English models"
+    Addressed: `--corpus-normalizer open_asr_english_v1 | open_asr_multilingual_v1`,
+    the vendored leaderboard normalizers, in the `wer-multilingual` extra
+    (sections 2.3 and 6.2). Chinese and Armenian use the basic multilingual
+    path, and the kaldialign compound merge is not replicated.
 13. **No high-concurrency client characterization.** NVIDIA's tables reach thousands
     of streams with a C++ client. asrbench's Python asyncio client has not been
     measured at that scale.

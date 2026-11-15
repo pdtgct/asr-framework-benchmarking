@@ -44,6 +44,32 @@ This project is itself Apache-2.0, which is the same licence, chosen for that
 reason: an adapter written against this interface can move upstream into vLLM or
 vLLM-Omni without a licence conversation, and vice versa.
 
+### Open ASR Leaderboard normalizers — Apache License 2.0
+
+<https://github.com/huggingface/open_asr_leaderboard>, commit
+`c21a412f2dd7cbe3af658d69fbf3d0dd536a264e`. Copyright 2022 The OpenAI team and
+The HuggingFace Team; `normalizer.py` states that most of its code comes from the
+OpenAI Whisper repository (MIT).
+
+**What is vendored:** `normalizer/normalizer.py` and
+`normalizer/english_abbreviations.py` verbatim, and an excerpt of
+`normalizer/data_utils.py` (`FILLER_WORDS`, `MultilingualNormalizer`) and
+`normalizer/eval_utils.py` (`CER_LANGUAGES`, `normalize_compound_pairs`), under
+`src/asrbench/normalizers/_vendor/open_asr/`. Each file keeps a header naming its
+source, commit, and licence; the excerpt states its modifications (imports
+changed; the Armenian and Chinese language normalizers are omitted).
+
+**Obligation:** Apache-2.0 §4 — retain the notices, state changes, and carry the
+licence. The headers, this entry, and `NOTICE` satisfy it.
+
+### regex and num2words — optional dependencies, not vendored
+
+The `wer-multilingual` extra installs `regex` (Apache-2.0 and CNRI-Python) and
+`num2words` (LGPL-2.1, with its dependency `docopt`, MIT). asrbench imports them
+unmodified and distributes none of their code, so the LGPL's obligations attach to
+whoever redistributes `num2words` itself, for example in an air-gapped wheelhouse:
+ship its wheel unmodified, which carries its licence.
+
 ### nemotron-omni-port — same copyright holder
 
 The AMI excerpt survey and cutter (`asrbench.corpora.ami`), the built-in recipe

@@ -193,7 +193,8 @@ Precision is recorded under the NVIDIA names and is not a key.
 `channel_options` — keepalive and maximum message size — are warn-only,
 as are `target.model`, `transport_options`, batch size, `max_num_seqs`,
 CUDA, torch, driver, and client location. Hard software identity is the
-normalization policy, the percentile method, `SCHEMA_VERSION`, and
+normalization policy, the corpus normalizer when it is not the default
+`en_cardinals_v1`, the percentile method, `SCHEMA_VERSION`, and
 `MEASUREMENT_SEMANTICS_VERSION`. The adapter is not part of it. A
 non-mock transport requires a checkpoint id. A source other than
 `unverified` also requires a revision.

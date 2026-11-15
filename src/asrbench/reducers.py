@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from asrbench import definitions as d
+from asrbench.normalizers import provenance as normalizer_provenance
 from asrbench.outcome import SessionOutcome
 from asrbench.percentile import percentile
 from asrbench.spec import PassPolicy
@@ -144,6 +145,7 @@ def reduce_trial(
     warmup_excluded: int,
     span_pooling: str = "measured_cell",
     wer: dict[str, Any] | None = None,
+    language: str | None = None,
 ) -> dict[str, Any]:
     """Reduce one trial's measured outcomes.
 
@@ -160,6 +162,7 @@ def reduce_trial(
         span_pooling: ``measured_cell`` or ``sum_of_trial_spans``.
         wer: Precomputed WER block. The pooled reduction passes the
             concatenation of trial rows so utterances are not scored twice.
+        language: Workload language tag, for the corpus normalizer.
 
     Returns:
         A JSON-ish reduction. Unavailable metrics are present and null,
@@ -203,6 +206,12 @@ def reduce_trial(
             reference,
             pass_policy.normalization_policy,
             percentile_method,
+            normalizer=pass_policy.corpus_normalizer,
+            language=language,
+        )
+    if pass_policy.normalization_policy == d.NORMALIZATION_CORPUS_REFERENCE:
+        wer["normalizer"] = normalizer_provenance(
+            pass_policy.corpus_normalizer, language
         )
     attempted, successful = _audio(outcomes)
     e2e, _e2e_samples = _measure(
@@ -346,6 +355,7 @@ def summarize_trials(
     pass_policy: PassPolicy,
     percentile_method: str,
     warmup_excluded: int,
+    language: str | None = None,
 ) -> dict[str, Any]:
     """Summarize trials without dropping one that lacks a measure.
 
@@ -365,6 +375,7 @@ def summarize_trials(
         pass_policy: Conjunction policy.
         percentile_method: Named percentile policy.
         warmup_excluded: Warmup sessions across all trials.
+        language: Workload language tag, for the corpus normalizer.
 
     Returns:
         The receipt ``summary`` object.
@@ -399,6 +410,7 @@ def summarize_trials(
         warmup_excluded=warmup_excluded,
         span_pooling="sum_of_trial_spans",
         wer=_pooled_wer(reductions, reference, pass_policy, percentile_method),
+        language=language,
     )
     return {
         "n_trials": len(reductions),
@@ -1700,6 +1712,9 @@ def _wer(
     reference: References,
     policy: str,
     method: str,
+    *,
+    normalizer: str = d.DEFAULT_CORPUS_NORMALIZER,
+    language: str | None = None,
 ) -> dict[str, Any]:
     utterances: list[dict[str, Any]] = []
     substitutions = deletions = insertions = 0
@@ -1740,7 +1755,13 @@ def _wer(
     for outcome in outcomes:
         clip_reference = _reference_for(outcome, reference)
         if outcome.transcript is None:
-            blank = score_texts(clip_reference, "", policy)
+            blank = score_texts(
+                clip_reference,
+                "",
+                policy,
+                normalizer=normalizer,
+                language=language,
+            )
             n_failed += 1
             missing += blank.reference_tokens
             chars_missing += blank.reference_chars
@@ -1756,7 +1777,13 @@ def _wer(
                 )
             )
             continue
-        scored = score_texts(clip_reference, outcome.transcript, policy)
+        scored = score_texts(
+            clip_reference,
+            outcome.transcript,
+            policy,
+            normalizer=normalizer,
+            language=language,
+        )
         substitutions += scored.substitutions
         deletions += scored.deletions
         insertions += scored.insertions

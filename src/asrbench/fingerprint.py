@@ -28,6 +28,7 @@ from asrbench.definitions import (
     AUDIO_CONDITION_NATIVE,
     AUDIO_CONDITION_TELEPHONY_8K,
     COMPARISON_AXIS,
+    DEFAULT_CORPUS_NORMALIZER,
     GPU_IDENTITY_CLIENT_PROBE,
     GPU_IDENTITY_SERVER_DECLARED,
 )
@@ -298,19 +299,24 @@ def observation_material(run: RunSpec) -> dict[str, Any]:
         file and does not change the observation.
     """
     policy = run.pass_policy
+    passed: dict[str, Any] = {
+        "accuracy_tolerance": policy.accuracy_tolerance,
+        "admission_fraction_min": policy.admission_fraction_min,
+        "first_partial_presence_min": policy.first_partial_presence_min,
+        "latency_metric": policy.latency_metric,
+        "latency_percentile": policy.latency_percentile,
+        "latency_slo_s": policy.latency_slo_s,
+        "normalization_policy": policy.normalization_policy,
+        "sustainability_min": policy.sustainability_min,
+        "sustainability_policy": policy.sustainability_policy,
+    }
+    # Added after receipts shipped; present only when not the default so
+    # an existing observation fingerprint is unchanged.
+    if policy.corpus_normalizer != DEFAULT_CORPUS_NORMALIZER:
+        passed["corpus_normalizer"] = policy.corpus_normalizer
     return {
         "lookahead_identity_policy": run.lookahead_identity_policy,
-        "pass_policy": {
-            "accuracy_tolerance": policy.accuracy_tolerance,
-            "admission_fraction_min": policy.admission_fraction_min,
-            "first_partial_presence_min": policy.first_partial_presence_min,
-            "latency_metric": policy.latency_metric,
-            "latency_percentile": policy.latency_percentile,
-            "latency_slo_s": policy.latency_slo_s,
-            "normalization_policy": policy.normalization_policy,
-            "sustainability_min": policy.sustainability_min,
-            "sustainability_policy": policy.sustainability_policy,
-        },
+        "pass_policy": passed,
         "percentile_method": run.percentile_method,
         "profiler": run.profiler,
         "verbosity": run.verbosity,
@@ -381,17 +387,27 @@ def _recorded_block(target: TargetSpec, adapter: str) -> dict[str, Any]:
 
 
 def _software_block(
-    versions: Mapping[str, Any], policy: str, method: str
+    versions: Mapping[str, Any],
+    policy: str,
+    method: str,
+    normalizer: str = DEFAULT_CORPUS_NORMALIZER,
 ) -> dict[str, Any]:
-    """Hard software identity. The adapter is recorded, not hashed."""
+    """Hard software identity. The adapter is recorded, not hashed.
+
+    ``corpus_normalizer`` appears only when it is not the default, so a
+    receipt scored before it existed keeps its comparison key.
+    """
     semantics = versions["measurement_semantics_version"]
-    return {
+    block: dict[str, Any] = {
         "measurement_semantics_version": semantics,
         "normalization_policy": policy,
         "package": "asrbench",
         "percentile_method": method,
         "schema_version": versions["schema_version"],
     }
+    if normalizer != DEFAULT_CORPUS_NORMALIZER:
+        block["corpus_normalizer"] = normalizer
+    return block
 
 
 def _hardware_block(
@@ -502,7 +518,12 @@ def identity_blocks(
     method = config.run.percentile_method
     return {
         "target": _target_block(config.target),
-        "software": _software_block(versions, policy, method),
+        "software": _software_block(
+            versions,
+            policy,
+            method,
+            config.run.pass_policy.corpus_normalizer,
+        ),
         "hardware": _hard_hardware(config.target, probe),
         "warn": _warn_block(config, probe, versions),
         "recorded": _recorded_block(config.target, str(versions["adapter"])),

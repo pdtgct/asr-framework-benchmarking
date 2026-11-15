@@ -158,6 +158,7 @@ def build_receipt(
             pass_policy=config.run.pass_policy,
             percentile_method=config.run.percentile_method,
             warmup_excluded=len(warmup),
+            language=config.workload.language,
         )
         rendered_trials.append(
             {
@@ -182,6 +183,7 @@ def build_receipt(
         warmup_excluded=sum(
             item["warmup_excluded"] for item in rendered_trials
         ),
+        language=config.workload.language,
     )
     clip = config.workload.clip
     attempted = sum(item.audio_duration_s for item in measured)

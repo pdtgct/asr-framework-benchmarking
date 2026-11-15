@@ -312,6 +312,47 @@ or resample internally. Run `telephony_8k` once as a smoke test; if the server
 refuses it, the failure is on the receipt, and `telephony_8k_in_16k` is the fallback
 that still measures narrowband content.
 
+## Normalization by locale
+
+WER is comparable only within one named normalization policy, and under
+`corpus_reference` only within one named **corpus normalizer**
+(`--corpus-normalizer`, `pass_policy.corpus_normalizer`):
+
+| Normalizer | Languages | What it is | Needs |
+|---|---|---|---|
+| `en_cardinals_v1` (default) | English | case-fold, strip tags and punctuation, English cardinals 0–999 | nothing |
+| `open_asr_english_v1` | English | the Open ASR Leaderboard `EnglishTextNormalizer` (Whisper-derived: fillers, spelling variants, numbers, currency, ordinals) | `asrbench[wer-multilingual]` |
+| `open_asr_multilingual_v1` | any | the leaderboard's scorer dispatch: English → `EnglishTextNormalizer`; otherwise `MultilingualNormalizer(remove_diacritics=False)` with `lang` = the workload language's primary subtag (digits to words via num2words), then `normalize_compound_pairs` | `asrbench[wer-multilingual]` |
+
+The leaderboard code is vendored verbatim from
+`huggingface/open_asr_leaderboard` at commit `c21a412` under
+`src/asrbench/normalizers/_vendor/` (Apache-2.0; see `THIRD_PARTY.md`), so the
+normalized text matches what NVIDIA's model cards and the leaderboard score.
+Choose `open_asr_*` when you want a number to sit beside a published one, and
+`open_asr_multilingual_v1` for any non-English locale, such as the 40 locales of
+`nvidia/nemotron-3.5-asr-streaming-0.6b`: the English-only normalizers refuse a
+non-English workload language rather than mis-normalize it.
+
+What is not identical, and recorded in `wer.normalizer.parity`:
+
+- The leaderboard aligns with `kaldialign` `merge_compounds=True`, which forgives a
+  split-versus-joined compound in the alignment itself. asrbench keeps its own
+  stdlib aligner; for non-English, `normalize_compound_pairs` (vendored) handles
+  the same case before alignment. Expect equal or slightly higher WER on English
+  compounds (`white paper` vs `whitepaper`).
+- The Chinese (OpenCC traditional→simplified) and Armenian normalizers are not
+  vendored; `zh` and `hy` use the basic multilingual path
+  (`parity: basic_multilingual_fallback`). The leaderboard scores `zh` with CER
+  (`leaderboard_metric: cer`); read `micro_cer` for those runs.
+- The default `en_cardinals_v1` is unchanged, and a receipt that does not name
+  another normalizer keeps its fingerprints and comparison key. Naming one adds
+  it to the observation fingerprint and the hard software identity.
+
+The extra is an optional install, so the core stays stdlib-only: `regex`
+(Apache-2.0) and `num2words` (LGPL-2.1, imported unmodified, never vendored). A
+run that names an `open_asr_*` normalizer without the extra exits 2 with the
+install line.
+
 ## Constructed fixtures
 
 Natural audio cannot land on a threshold boundary, so threshold-exact endpointing

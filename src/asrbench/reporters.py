@@ -148,6 +148,13 @@ def console_report(receipt: dict[str, Any]) -> str:
             f"source {lookahead['frames_source']}"
         ),
     ]
+    normalizer = wer.get("normalizer")
+    if normalizer is not None:
+        lines.append(
+            f"wer normalizer={normalizer['name']} "
+            f"language={normalizer['language']} "
+            f"parity={normalizer['parity']}"
+        )
     corpus = wer.get("corpus")
     if corpus is not None:
         lines.append(

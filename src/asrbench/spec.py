@@ -17,6 +17,7 @@ from asrbench.definitions import (
     AUDIO_CONDITION_NATIVE,
     CHECKPOINT_SOURCE_UNVERIFIED,
     CLIP_ASSIGNMENT_ROUND_ROBIN,
+    DEFAULT_CORPUS_NORMALIZER,
     DEFAULT_LOOKAHEAD_IDENTITY_POLICY,
     DEFAULT_NORMALIZATION_POLICY,
     DEFAULT_PERCENTILE_METHOD,
@@ -109,6 +110,9 @@ class PassPolicy:
     sustainability_min: float = 1.0
     accuracy_tolerance: float = 0.0
     normalization_policy: str = DEFAULT_NORMALIZATION_POLICY
+    #: Text normalizer under ``corpus_reference``; see
+    #: ``CORPUS_NORMALIZER_DEFINITION``.
+    corpus_normalizer: str = DEFAULT_CORPUS_NORMALIZER
 
 
 @dataclass(frozen=True)
