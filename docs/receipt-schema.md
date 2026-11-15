@@ -31,6 +31,9 @@ and does not refuse:
 - `identity.recorded.engine.version`
 - `identity.recorded.engine.transport`
 - `identity.recorded.server_version`
+- `identity.recorded.nim.profile_id`
+- `identity.recorded.nim.model_url`
+- `identity.recorded.nim.tags_selector`
 - `identity.recorded.precision`
 - `identity.recorded.tf32`
 
@@ -281,6 +284,9 @@ object is named once and then cited by path.
     - `checkpoint_source`: string
     - `engine_name`: null
     - `engine_version`: null
+    - `nim_profile_id`: null
+    - `nim_model_url`: null
+    - `nim_tags_selector`: null
     - `precision`: null
     - `tf32`: null
     - `batch_size`: null
@@ -367,6 +373,10 @@ object is named once and then cited by path.
       - `name`: null
       - `transport`: string
       - `version`: null
+    - `nim`: object
+      - `model_url`: null
+      - `profile_id`: null
+      - `tags_selector`: null
     - `precision`: null
     - `server_version`: null
     - `tf32`: null

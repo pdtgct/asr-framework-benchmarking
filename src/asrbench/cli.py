@@ -27,6 +27,7 @@ from asrbench.config import (
     overrides_from_args,
     resolve,
 )
+from asrbench.nim import load_nim_metadata, nim_overrides
 from asrbench.reducers import MeasurementError
 from asrbench.reporters import (
     NotHomogeneousError,
@@ -61,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser = sub.add_parser("run", help="run a preset or a receipt")
     run_parser.add_argument("--preset", type=Path)
     run_parser.add_argument("--from-receipt", type=Path, dest="from_receipt")
+    _add_nim_metadata_argument(run_parser)
     add_override_arguments(run_parser)
 
     sweep_parser = sub.add_parser(
@@ -81,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="receipt name prefix; default c<chunk_ms>",
     )
+    _add_nim_metadata_argument(sweep_parser)
     add_override_arguments(sweep_parser)
 
     compare_parser = sub.add_parser("compare", help="compare two receipts")
@@ -163,7 +166,7 @@ def _run(args: argparse.Namespace) -> int:
         preset_path=args.preset,
         from_receipt=args.from_receipt,
         env=env,
-        overrides=overrides_from_args(args),
+        overrides=_overrides(args),
     )
     if config.run.output_path is None:
         raise ConfigError("--out is required")
@@ -181,6 +184,25 @@ def _run(args: argparse.Namespace) -> int:
         )
     sys.stdout.write(console_report(receipt))
     return 0
+
+
+def _add_nim_metadata_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--nim-metadata",
+        dest="nim_metadata",
+        help="NIM /v1/metadata: a saved JSON file or the NIM HTTP URL; "
+        "fills engine name and version, nim_profile_id, and nim_model_url. "
+        "Explicit flags win",
+    )
+
+
+def _overrides(args: argparse.Namespace) -> dict[tuple[str, ...], Any]:
+    """Flags the user passed, over values read from ``--nim-metadata``."""
+    found: dict[tuple[str, ...], Any] = {}
+    if args.nim_metadata:
+        found.update(nim_overrides(load_nim_metadata(args.nim_metadata)))
+    found.update(overrides_from_args(args))
+    return found
 
 
 def _stream_list(text: str) -> tuple[int, ...]:
@@ -211,7 +233,7 @@ def _sweep(args: argparse.Namespace) -> int:
     """
     import os
 
-    overrides = overrides_from_args(args)
+    overrides = _overrides(args)
     for path, flag in (
         (("workload", "lanes"), "--lanes"),
         (("run", "output_path"), "--out"),
