@@ -132,7 +132,20 @@ measured `pacing_fidelity` block (it leaves the `unavailable` list), and
 records `response_final_flags` on each outcome. It also records NIM
 identity (`target.nim_profile_id`, `nim_model_url`, `nim_tags_selector`)
 under `identity.recorded.nim`, beside the key and not hashed; a schema 6
-receipt written before those fields reads them as null. Semantics 6 accepts a
+receipt written before those fields reads them as null. Schema 6 also
+adds, from the measurement review, `chunk_latency_s` (per-chunk coverage
+latency, `CHUNK_LATENCY_DEFINITION`, with its `coverage_source`),
+`server_audio_rtfx` for offline cells (`SERVER_AUDIO_RTFX_DEFINITION`),
+`audio_clock_origin_s` on each outcome (`AUDIO_CLOCK_ORIGIN_DEFINITION`),
+an `audio_clock_origin` source count on frontier lag, word latency, and
+pacing fidelity, and `tolerance_s` on pacing fidelity. Semantics 6 also
+anchors frontier lag and word latency on audio t=0 rather than
+first-audio-sent (which under pacing is one chunk later and read
+minus chunk_ms), scores every chunk against that origin in pacing
+fidelity with a max(5 ms, 5% of chunk) tolerance and an `unpaced` class,
+and marks `riva_client_compat_s` `not_applicable` when the cell is not
+paced, as NVIDIA's client prints latency only under
+`--simulate_realtime`. Semantics 6 accepts a
 trailing extra Riva response, qualifies streaming RTFx by pacing
 fidelity, and paces riva-grpc on an absolute schedule; a consumer of
 semantics 5 must re-run. Schema 5 records the

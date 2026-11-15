@@ -67,7 +67,10 @@ and [`receipt-schema.md`](receipt-schema.md) quote the spelling.
 | Riva compat, intermediate and final | `RIVA_CLIENT_COMPAT_SPLIT_DEFINITION` |
 | Pacing fidelity | `PACING_FIDELITY_DEFINITION`, `PACING_FIDELITY_TOLERANCE_DEFINITION` |
 | riva-grpc pacing schedule | `RIVA_PACING_SCHEDULE_DEFINITION` |
-| NVIDIA table row | `NVIDIA_STREAMING_ROW_DEFINITION` |
+| Audio clock origin (frontier lag, word latency, pacing fidelity) | `AUDIO_CLOCK_ORIGIN_DEFINITION` |
+| Per-chunk coverage latency | `CHUNK_LATENCY_DEFINITION`, `CHUNK_LATENCY_FINAL_FLAGS_INFERRED` |
+| Offline server-audio RTFx | `SERVER_AUDIO_RTFX_DEFINITION` |
+| NVIDIA table row | `NVIDIA_STREAMING_ROW_DEFINITION`, `NVIDIA_OFFLINE_ROW_DEFINITION`, `NVIDIA_TRIAL_STD_DEFINITION` |
 
 Percentile tables name the method. `numpy_linear` is the default.
 `floor_index` is `PERCENTILE_FLOOR_INDEX_DEFINITION`, for a table placed

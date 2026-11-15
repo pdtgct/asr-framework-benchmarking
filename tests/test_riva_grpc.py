@@ -755,7 +755,12 @@ def test_trailing_extra_response_is_paired_like_the_riva_client(
     assert chunks == 5
     assert len(outcome.response_receive_times_s or []) == chunks + 1
     assert outcome.response_final_flags == [False] * chunks + [True]
-    reduced = _reduce_one(outcome, pacing=False)
+    # riva_streaming_asr_client prints latency only when paced.
+    unpaced = _reduce_one(outcome, pacing=False)["riva_client_compat_s"]
+    assert isinstance(unpaced, dict)
+    assert unpaced["availability"] == "not_applicable"
+    assert unpaced["reason"] == "pacing_disabled"
+    reduced = _reduce_one(outcome, pacing=True)
     compat = reduced["riva_client_compat_s"]
     assert isinstance(compat, dict)
     assert compat["availability"] == "measured"
@@ -779,7 +784,7 @@ def test_one_response_per_chunk_splits_the_last_as_final(
     finally:
         server.stop()
     assert len(outcome.response_receive_times_s or []) == 5
-    reduced = _reduce_one(outcome, pacing=False)
+    reduced = _reduce_one(outcome, pacing=True)
     compat = reduced["riva_client_compat_s"]
     final = reduced["riva_client_compat_final_s"]
     assert isinstance(compat, dict) and isinstance(final, dict)
@@ -822,8 +827,15 @@ def test_pacing_is_an_absolute_schedule_from_stream_start(
     assert sends[-1] - sends[0] >= 0.45
     # Each requested sleep is shorter than a chunk once a wake-up ran late.
     assert any(delay < 0.09 for delay in slept[1:])
+    # The schedule origin is recorded: chunk 0 is due one chunk after it.
+    origin = outcome.audio_clock_origin_s
+    assert origin is not None
+    assert sends[0] - origin >= 0.1 - 0.005
     pacing = _reduce_one(outcome, pacing=True)["pacing_fidelity"]
     assert isinstance(pacing, dict)
     assert pacing["availability"] == "measured"
-    assert pacing["validity"] == "paced"
-    assert pacing["n_samples"] == 5
+    # Every wake-up is 30 ms late, chunk 0 included: past the 5 ms
+    # tolerance, within one chunk. The last chunk is scored too.
+    assert pacing["validity"] == "pacing_lagged"
+    assert pacing["n_samples"] == 6
+    assert pacing["audio_clock_origin"] == {"schedule_origin": 1}
