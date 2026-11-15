@@ -173,12 +173,14 @@ class FakeRiva(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):  # type: ignore
     ) -> None:
         """Name a status after the RPC is established.
 
-        ``abort`` before any read is sometimes reported to the client as
-        ``INTERNAL`` by this grpc build. Consuming one request, then
-        ``set_code``, keeps the status the test asked for.
+        ``abort`` before any read, or returning while the client is still
+        half-closing its request stream, is sometimes reported to the
+        client as ``INTERNAL`` ("Internal error from Core") by this grpc
+        build. Draining the request stream, then ``set_code``, keeps the
+        status the test asked for.
         """
         for _request in request_iterator:
-            break
+            pass
         context.set_code(code)
         context.set_details(details)
 
