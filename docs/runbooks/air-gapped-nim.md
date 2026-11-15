@@ -399,15 +399,27 @@ The `riva-grpc` transport takes two settings that must agree:
 
 TLS with verification off is refused, because grpcio always verifies the peer.
 
-For a private site CA, point gRPC at the CA bundle with the gRPC core environment
-variable. It replaces the default trust roots for the process:
+For a private site CA, mutual TLS, or a certificate that names a different host,
+set these `riva-grpc` transport options in the preset. All need `use_ssl: true`:
 
-```bash
-export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/pki/site-ca.pem
+| Transport option | Meaning |
+|---|---|
+| `ssl_root_cert` | PEM CA bundle that replaces the default trust roots |
+| `ssl_client_cert`, `ssl_client_key` | PEM client certificate and key for mutual TLS; set both or neither |
+| `ssl_target_name_override` | Name the server certificate is checked against, when it is not the host in `--endpoint-url` |
+
+```json
+"transport_options": {
+  "use_ssl": true,
+  "ssl_root_cert": "/etc/pki/site-ca.pem",
+  "ssl_client_cert": "/etc/pki/asrbench-client.pem",
+  "ssl_client_key": "/etc/pki/asrbench-client.key",
+  "ssl_target_name_override": "nim.site.internal"
+}
 ```
 
-The server certificate must name the host you put in `--endpoint-url`. There is
-no option yet for a target-name override or a client certificate (mutual TLS).
+The receipt records the paths, not the file contents. The gRPC core environment
+variable `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` still works for the CA, process-wide.
 
 On-prem NIMs usually take no token. If a gateway in front of the NIM wants a
 bearer token, put the token in an environment variable and name the variable, not
@@ -635,9 +647,12 @@ Things that differ from NVIDIA even with these settings:
   delays no longer accumulate. `pacing_fidelity` on each trial reports how late
   the client actually sent each chunk; it must read `paced` before a row is
   compared.
-- asrbench opens one gRPC channel per session. The Riva client shares one channel
-  across streams. Connection setup is outside the latency clocks but inside the
-  trial wall span.
+- By default asrbench opens one gRPC channel per session. The Riva client shares
+  one channel across streams. Set `transport_options.share_channel: true` to do
+  the same: one channel per run, reused by every lane. Each outcome records
+  `protocol_extras.channel` (`shared` or `per_session`). Connection setup is
+  outside the latency clocks but inside the trial wall span, so use the shared
+  channel for rows at high stream counts.
 - At high stream counts (hundreds and up) the Python client may become the
   bottleneck. Watch the client host's CPU and treat a rising `e2e_rtfx` shortfall
   as a client limit until shown otherwise.
@@ -863,10 +878,12 @@ as an issue. Where a change has since addressed one, it is named under the gap.
 8. **One gRPC channel per session.** The Riva client shares a channel across
    streams. Connection cost differs at high stream counts.
    Issue: "riva-grpc: option to share one channel across lanes like the Riva C++ client"
+   Addressed: `transport_options.share_channel` (section 6).
 9. **TLS options are minimal.** No CA bundle option (only the
    `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` environment variable), no client
    certificate for mutual TLS, and no target-name override.
    Issue: "riva-grpc: ssl_root_cert, client cert and key, and ssl_target_name_override transport options"
+   Addressed: those four transport options (section 4.4).
 10. **NIM identity is manual.** Version, image, profile ID, tags selector, and GPU
     are typed as flags or kept in side files. There is no receipt field for the
     profile ID or the tags selector.

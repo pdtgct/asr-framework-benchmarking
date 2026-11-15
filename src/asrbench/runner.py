@@ -357,6 +357,9 @@ async def run_benchmark(
                 "warmup_outcomes": warmup,
             }
         )
+    closer = getattr(chosen, "aclose", None)
+    if callable(closer):
+        await closer()
     finish_marker = finished_at if finished_at is not None else utc_timestamp()
     from asrbench import __version__
     from asrbench.config import secret_records

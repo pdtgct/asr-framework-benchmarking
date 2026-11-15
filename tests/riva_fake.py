@@ -277,13 +277,32 @@ def _results_response(parts: list[tuple[str, bool]]) -> Any:
 class RunningFake:
     """One grpc.server bound to 127.0.0.1 on an ephemeral port."""
 
-    def __init__(self, servicer: FakeRiva) -> None:
+    def __init__(
+        self,
+        servicer: FakeRiva,
+        *,
+        tls: tuple[bytes, bytes] | None = None,
+        client_ca: bytes | None = None,
+    ) -> None:
+        """Bind plaintext, or TLS with ``(key, cert)`` PEM.
+
+        ``client_ca`` turns on mutual TLS: the server then requires a
+        client certificate signed by that CA.
+        """
         self.servicer = servicer
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
         riva_asr_pb2_grpc.add_RivaSpeechRecognitionServicer_to_server(
             servicer, self.server
         )
-        port = self.server.add_insecure_port("127.0.0.1:0")
+        if tls is None:
+            port = self.server.add_insecure_port("127.0.0.1:0")
+        else:
+            credentials = grpc.ssl_server_credentials(
+                [tls],
+                root_certificates=client_ca,
+                require_client_auth=client_ca is not None,
+            )
+            port = self.server.add_secure_port("127.0.0.1:0", credentials)
         self.endpoint = f"127.0.0.1:{port}"
         self.server.start()
 
