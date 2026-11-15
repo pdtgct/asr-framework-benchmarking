@@ -371,8 +371,12 @@ same call at the start of every session and stores the result on each outcome as
 | `--checkpoint-id` | `modelUrl` without `ngc://` and without `:<tag>` | hard |
 | `--checkpoint-revision` | the `<tag>` from `modelUrl` | hard |
 | `--checkpoint-source` | `ngc` (needs a revision), or `unverified` if you cannot read the tag | hard |
+| `--nim-metadata` | `identity/nim-metadata.json`, or `$NIM_HTTP` to read it live | sets the next four rows; explicit flags win, and it wins over the preset and `ASRBENCH_*` variables. The live read goes through `urllib`, which honours `http_proxy`/`https_proxy` and checks HTTPS against the system CA store only; behind a proxy or a private CA, use the saved file |
 | `--engine-name` | `nim` | comparison axis, recorded |
 | `--engine-version` | `version` from `/v1/metadata` | recorded |
+| `--nim-profile-id` | `selectedModelProfileId` from `/v1/metadata` | recorded (`identity.recorded.nim`) |
+| `--nim-model-url` | every `modelInfo[].modelUrl`, comma-joined | recorded (`identity.recorded.nim`) |
+| `--nim-tags-selector` | `NIM_TAGS_SELECTOR` from `nim-env.txt` | recorded (`identity.recorded.nim`) |
 | `--server-version` | image reference from `nim-image.txt` | recorded |
 | `--server-gpu-name`, `--server-gpu-count`, `--server-gpu-memory-mib` | `nim-gpu.txt` on the NIM host | hard hardware identity |
 | `--server-driver-version` | `nim-gpu.txt` | warn-only |
@@ -385,8 +389,13 @@ same call at the start of every session and stores the result on each outcome as
 Set the server GPU fields. Without them asrbench falls back to `nvidia-smi` on the
 client machine, which is usually not the GPU serving the NIM.
 
-There is no receipt field for the NIM profile ID or `NIM_TAGS_SELECTOR`. Keep the
-`work/identity/` files next to the receipts. See [Gaps](#10-gaps).
+The NIM profile ID, model URL, and `NIM_TAGS_SELECTOR` are recorded on the receipt
+under `identity.recorded.nim` (receipt schema `asrbench-receipt/6`). They sit beside
+the comparison key like the engine version: a mismatch shows in `asrbench compare`
+and does not refuse. `asrbench nvidia-table` prints the engine version, profile ID,
+and tags selector on each row. Still keep the `work/identity/` files next to the
+receipts; the image digest, profile list, and GPU output are evidence the receipt
+does not hold.
 
 ### 4.4 TLS and authentication
 
@@ -570,8 +579,8 @@ IDENT=(
   --checkpoint-id "nim/nvidia/<model>"
   --checkpoint-revision "<tag>"
   --checkpoint-source ngc
-  --engine-name nim
-  --engine-version "<version from /v1/metadata>"
+  --nim-metadata identity/nim-metadata.json
+  --nim-tags-selector "<NIM_TAGS_SELECTOR from nim-env.txt>"
   --server-version "<image reference>"
   --server-gpu-name "<GPU name>"
   --server-gpu-count 1
@@ -812,6 +821,7 @@ asrbench nvidia-table receipts/$RUN/c160-n*.json --out exports/$RUN/nvidia-layou
 | `pacing_validity` | Distinct `pacing_fidelity.validity` across trials. `paced` is required; `pacing_disabled` belongs to offline-style runs only. |
 | `trailing_extra_ignored` | Sessions whose one trailing extra response was ignored, as NVIDIA's client does. Informational. |
 | `intermediate_avg_ms`, `final_avg_ms` | Trial means of the `is_final` split. Not in NVIDIA's tables; matches the client's other two lists. |
+| `engine_version`, `nim_profile_id`, `nim_tags_selector` | Which NIM answered, from the receipt. Match them to the profile NVIDIA's row names. |
 
 Put a row next to NVIDIA's only when `comparable` is `true` and
 `pacing_validity` is `paced`. Anything else means the latency columns are partial
@@ -904,6 +914,9 @@ as an issue. Where a change has since addressed one, it is named under the gap.
     are typed as flags or kept in side files. There is no receipt field for the
     profile ID or the tags selector.
     Issue: "identity: record NIM /v1/metadata (version, profile id, model URL) and NIM_TAGS_SELECTOR on the receipt"
+    Addressed: `--nim-metadata` and the `nim_*` target fields, recorded under
+    `identity.recorded.nim` (sections 4.3 and 5.4). Image digest and GPU are
+    still typed or kept in side files.
 11. **One clip per run.** NVIDIA's accuracy table uses full test sets. asrbench has
     no manifest of clips and references, so corpus WER takes many receipts and
     hand aggregation.

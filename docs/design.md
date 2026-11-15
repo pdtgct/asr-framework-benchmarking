@@ -129,7 +129,10 @@ The receipt is JSON, authoritative, and one per run. Schema
 `asrbench-receipt/6` and measurement semantics `6`. Schema 6 adds the
 Riva compat intermediate/final split, `n_trailing_extra_ignored`, and a
 measured `pacing_fidelity` block (it leaves the `unavailable` list), and
-records `response_final_flags` on each outcome. Semantics 6 accepts a
+records `response_final_flags` on each outcome. It also records NIM
+identity (`target.nim_profile_id`, `nim_model_url`, `nim_tags_selector`)
+under `identity.recorded.nim`, beside the key and not hashed; a schema 6
+receipt written before those fields reads them as null. Semantics 6 accepts a
 trailing extra Riva response, qualifies streaming RTFx by pacing
 fidelity, and paces riva-grpc on an absolute schedule; a consumer of
 semantics 5 must re-run. Schema 5 records the

@@ -239,6 +239,19 @@ def _bindings() -> tuple[Binding, ...]:
             "engine version or image digest; recorded, not the hard key",
         ),
         (
+            ("target", "nim_profile_id"),
+            "NIM selectedModelProfileId from /v1/metadata; recorded only",
+        ),
+        (
+            ("target", "nim_model_url"),
+            "NIM modelInfo[].modelUrl from /v1/metadata, comma-joined; "
+            "recorded only",
+        ),
+        (
+            ("target", "nim_tags_selector"),
+            "NIM_TAGS_SELECTOR the container ran with; recorded only",
+        ),
+        (
             ("target", "precision"),
             "NVIDIA precision names joined with +; recorded only",
         ),
@@ -751,6 +764,14 @@ def _set_path(
     return apply_preset(config, _nest(path, value))
 
 
+#: Fields added after a receipt schema shipped, recorded only, defaulting
+#: to null. A complete ``resolved_config`` written before them may omit
+#: them; they read as null, which is what that receipt meant.
+_ADDED_WITH_NULL_DEFAULT = frozenset(
+    {"nim_profile_id", "nim_model_url", "nim_tags_selector"}
+)
+
+
 def _merge(
     instance: Any,
     payload: Mapping[str, Any],
@@ -761,7 +782,7 @@ def _merge(
     known = {item.name: item for item in fields(instance)}
     _unknown(payload, set(known), where)
     if complete:
-        missing = sorted(set(known) - set(payload))
+        missing = sorted(set(known) - set(payload) - _ADDED_WITH_NULL_DEFAULT)
         if missing:
             raise ConfigError(f"{where} missing fields: {', '.join(missing)}")
     updates: dict[str, Any] = {}
@@ -1027,6 +1048,9 @@ def _validate_checkpoint(target: TargetSpec) -> None:
         )
     _reject_blank("engine_name", target.engine_name)
     _reject_blank("engine_version", target.engine_version)
+    _reject_blank("nim_profile_id", target.nim_profile_id)
+    _reject_blank("nim_model_url", target.nim_model_url)
+    _reject_blank("nim_tags_selector", target.nim_tags_selector)
     _reject_blank("cuda_version", target.cuda_version)
     _reject_blank("torch_version", target.torch_version)
     _validate_precision(target.precision)

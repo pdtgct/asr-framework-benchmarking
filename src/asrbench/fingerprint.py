@@ -45,6 +45,9 @@ RECORDED_COMPARISON_FIELDS: tuple[str, ...] = (
     "identity.recorded.engine.version",
     "identity.recorded.engine.transport",
     "identity.recorded.server_version",
+    "identity.recorded.nim.profile_id",
+    "identity.recorded.nim.model_url",
+    "identity.recorded.nim.tags_selector",
     "identity.recorded.precision",
     "identity.recorded.tf32",
 )
@@ -335,6 +338,11 @@ def _recorded_block(target: TargetSpec, adapter: str) -> dict[str, Any]:
             "name": target.engine_name,
             "transport": target.transport,
             "version": _engine_version(target),
+        },
+        "nim": {
+            "model_url": target.nim_model_url,
+            "profile_id": target.nim_profile_id,
+            "tags_selector": target.nim_tags_selector,
         },
         "precision": target.precision,
         "server_version": target.server_version,

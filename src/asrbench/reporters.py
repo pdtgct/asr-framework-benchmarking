@@ -437,7 +437,28 @@ NVIDIA_TABLE_COLUMNS = (
     "trailing_extra_ignored",
     "intermediate_avg_ms",
     "final_avg_ms",
+    "engine_version",
+    "nim_profile_id",
+    "nim_tags_selector",
 )
+
+
+def _identity_columns(receipt: dict[str, Any]) -> dict[str, Any]:
+    """Which server answered: engine version and NIM profile and selector.
+
+    Read from ``resolved_config.target``; a receipt written before the
+    NIM fields existed reads null. The engine version falls back to the
+    declared server version, as the recorded identity does.
+    """
+    target = receipt["resolved_config"].get("target") or {}
+    engine_version = target.get("engine_version")
+    if engine_version is None:
+        engine_version = target.get("server_version")
+    return {
+        "engine_version": engine_version,
+        "nim_profile_id": target.get("nim_profile_id"),
+        "nim_tags_selector": target.get("nim_tags_selector"),
+    }
 
 
 def nvidia_streaming_row(
@@ -511,6 +532,7 @@ def nvidia_streaming_row(
                 ]
             )
         )
+    row.update(_identity_columns(receipt))
     return row
 
 
@@ -568,6 +590,7 @@ def nvidia_offline_row(receipt: dict[str, Any], source: str) -> dict[str, Any]:
     row["trailing_extra_ignored"] = None
     row["intermediate_avg_ms"] = None
     row["final_avg_ms"] = None
+    row.update(_identity_columns(receipt))
     return row
 
 

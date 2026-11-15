@@ -243,15 +243,34 @@ def _integrity(view: dict[str, Any]) -> list[FieldDifference]:
         ("hardware_identity", "stored_hardware", "hardware"),
         ("recorded_identity", "stored_recorded", "recorded"),
     ):
+        fresh = view[fresh_name]
+        if component == "recorded_identity":
+            fresh = _without_unrecorded_nim(view[stored_name], fresh)
         found.extend(
             _leaf_diffs(
                 component,
                 view[stored_name],
-                view[fresh_name],
+                fresh,
                 prefix="stored_vs_recomputed",
             )
         )
     return found
+
+
+def _without_unrecorded_nim(
+    stored: dict[str, Any], fresh: dict[str, Any]
+) -> dict[str, Any]:
+    """Drop an all-null ``nim`` block a receipt written before it lacks.
+
+    A receipt from before ``identity.recorded.nim`` existed has no such
+    key. Recomputing it yields all nulls, which is the same statement.
+    """
+    nim = fresh.get("nim")
+    if "nim" in stored or not isinstance(nim, dict):
+        return fresh
+    if any(value is not None for value in nim.values()):
+        return fresh
+    return {key: value for key, value in fresh.items() if key != "nim"}
 
 
 def _blocks(
@@ -342,12 +361,17 @@ def _recorded_rows(
         "comparison_axis",
         "engine",
         "server_version",
+        "nim",
         "precision",
         "tf32",
     )
+    # ``nim`` is absent from receipts written before it was recorded.
     return [
         FieldDifference(
-            "recorded", field, left["recorded"][field], right["recorded"][field]
+            "recorded",
+            field,
+            left["recorded"].get(field),
+            right["recorded"].get(field),
         )
         for field in fields
     ]

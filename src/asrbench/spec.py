@@ -184,6 +184,11 @@ class TargetSpec:
     #: Serving stack on the comparison axis. Not the hard key.
     engine_name: str | None = None
     engine_version: str | None = None
+    #: NIM identity from ``/v1/metadata`` and the container environment.
+    #: Recorded beside the comparison key, not hashed.
+    nim_profile_id: str | None = None
+    nim_model_url: str | None = None
+    nim_tags_selector: str | None = None
     #: NVIDIA precision names, joined with ``+`` when mixed. Record only.
     precision: str | None = None
     tf32: bool | None = None

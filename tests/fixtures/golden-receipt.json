@@ -194,6 +194,9 @@
       "checkpoint_source": "unverified",
       "engine_name": null,
       "engine_version": null,
+      "nim_profile_id": null,
+      "nim_model_url": null,
+      "nim_tags_selector": null,
       "precision": null,
       "tf32": null,
       "batch_size": null,
@@ -289,6 +292,11 @@
         "name": null,
         "transport": "mock",
         "version": null
+      },
+      "nim": {
+        "model_url": null,
+        "profile_id": null,
+        "tags_selector": null
       },
       "precision": null,
       "server_version": null,
